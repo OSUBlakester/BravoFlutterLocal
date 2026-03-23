@@ -44,3 +44,17 @@ app.*.map.json
 /android/app/profile
 /android/app/release
 build.nosync/
+
+# Local backup bundles
+backups/*.bundle
+
+# Stray duplicate/generated temp files
+.flutter-plugins-dependencies [0-9]*
+build [0-9]*
+ios/Flutter/Generated *.xcconfig
+ios/Flutter/flutter_export_environment *.sh
+ios/Podfile *.lock
+
+# Generated build reports/caches accidentally created under source folders
+android/build/
+lib/services/build/

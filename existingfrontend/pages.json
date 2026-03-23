@@ -1,0 +1,1284 @@
+[
+    {
+        "name": "home",
+        "buttons": [
+            {
+                "row": 0,
+                "col": 0,
+                "text": "Greetings",
+                "speechPhrase": "",
+                "targetPage": "greetings",
+                "LLMQuery": "",
+                "queryType": "",
+                "hidden": false
+            },
+            {
+                "row": 0,
+                "col": 1,
+                "text": "GoingOn",
+                "speechPhrase": "I want to ask something",
+                "targetPage": "goingon",
+                "LLMQuery": "",
+                "queryType": "",
+                "hidden": false
+            },
+            {
+                "row": 0,
+                "col": 2,
+                "text": "Describe",
+                "speechPhrase": "Here's what I think",
+                "targetPage": "describe",
+                "LLMQuery": "",
+                "queryType": "",
+                "hidden": false
+            },
+            {
+                "row": 0,
+                "col": 3,
+                "text": "Current Events",
+                "speechPhrase": "I want to talk about something recent",
+                "targetPage": "currentevents",
+                "LLMQuery": "",
+                "queryType": "",
+                "hidden": false
+            },
+            {
+                "row": 0,
+                "col": 4,
+                "text": "About Me",
+                "speechPhrase": "I want to tell you something about me",
+                "targetPage": "aboutme",
+                "LLMQuery": "Based on the details provided in the context, generate #LLMOptions different statements about the user.  The statements should be in first person, as if the user was telling someone about the user.  Statements can include information like age, family, disability and favorites.  The statements should also be conversational, not just presenting a fact.",
+                "queryType": "options",
+                "hidden": false
+            },
+            {
+                "row": 1,
+                "col": 0,
+                "text": "Help",
+                "speechPhrase": "I need some help",
+                "targetPage": "",
+                "LLMQuery": "Refer to the user info for most common physical issues and needs that can impact Brady. Also include general physical issues that could be impacting someone with a similar condition to Brady. Create up to #LLMOptions different statements that Brady would announce if one of these physical issues was making Brady uncomfortable or needing something addressed.  Each statement should be formed as if they are coming from Brady and letting someone close by that the user is physically uncomfortable or needing something.  If there is a simple resolution for the issue, include it in the phrase with politely, including words like Please and Thank You, asking for the resolution.",
+                "queryType": "options",
+                "hidden": false
+            },
+            {
+                "row": 1,
+                "col": 1,
+                "text": "Questions",
+                "speechPhrase": "I have a question",
+                "targetPage": "Questions",
+                "LLMQuery": "",
+                "queryType": "",
+                "hidden": false
+            },
+            {
+                "row": 1,
+                "col": 2,
+                "text": "Talker",
+                "speechPhrase": "",
+                "targetPage": "talker",
+                "LLMQuery": "",
+                "queryType": "",
+                "hidden": false
+            },
+            {
+                "row": 1,
+                "col": 4,
+                "text": "Comments",
+                "speechPhrase": "",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": "",
+                "hidden": false
+            },
+            {
+                "row": 1,
+                "col": 3,
+                "text": "Thread",
+                "speechPhrase": "I want to start a conversation thread",
+                "targetPage": "!threads",
+                "LLMQuery": "",
+                "queryType": "",
+                "hidden": false
+            }
+        ]
+    },
+    {
+        "name": "currentevents",
+        "pageType": "category",
+        "pageDiv": "currentEvents",
+        "buttons": [
+            {
+                "row": 0,
+                "col": 0,
+                "text": "Home",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 1,
+                "text": "Sports",
+                "speechPhrase": "",
+                "targetPage": "SportsOptions",
+                "LLMQuery": "",
+                "queryType": "currentevents"
+            },
+            {
+                "row": 0,
+                "col": 2,
+                "text": "Entertainment",
+                "speechPhrase": "",
+                "targetPage": "EntertainmentOptions",
+                "LLMQuery": "",
+                "queryType": "currentevents"
+            }
+        ]
+    },
+    {
+        "name": "help",
+        "pageType": "category",
+        "pageDiv": "Help",
+        "buttons": [
+            {
+                "row": 0,
+                "col": 0,
+                "text": "Home",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 1,
+                "text": "Bugging",
+                "speechPhrase": "Something is bugging me",
+                "targetPage": "bugging",
+                "LLMQuery": "Refer to the user info for most common physical issues and needs that can impact Brady. Also include general physical issues that could be impacting someone with a similar condition to Brady. Create up to #LLMOptions different statements that Brady would announce if one of these physical issues was making Brady uncomfortable or needing something addressed.  Each statement should be formed as if they are coming from Brady and letting someone close by that the user is physically uncomfortable or needing something.  If there is a simple resolution for the issue, include it in the phrase with politely, including words like Please and Thank You, asking for the resolution.  ",
+                "queryType": "options"
+            },
+            {
+                "row": 0,
+                "col": 2,
+                "text": "Tech Issue",
+                "speechPhrase": "Something is up with my technology.  Give me a minute and I will tell you what is going on",
+                "targetPage": "home",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 3,
+                "text": "GeneralHelp",
+                "speechPhrase": "I need help with something.  Please ask me yes or no question for me to tell you.",
+                "targetPage": "home",
+                "LLMQuery": "",
+                "queryType": ""
+            }
+        ]
+    },
+    {
+        "name": "greetings",
+        "buttons": [
+            {
+                "row": 0,
+                "col": 0,
+                "text": "home",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": "",
+                "queryType": "",
+                "hidden": false
+            },
+            {
+                "row": 0,
+                "col": 1,
+                "text": "Generic Greetings",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": "Generate #LLMOptions generic but expressive greetings, goodbyes or conversation starters.  Each item should be a single sentence and have varying levels of energy, creativity and engagement.  The greetings, goodbye or conversation starter should be in first person from the user.",
+                "queryType": "options",
+                "hidden": false
+            },
+            {
+                "row": 0,
+                "col": 2,
+                "text": "Current Location",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": "Using the 'People Present' values from context, generate #LLMOptions expressive greetings.  Each item should be a single sentence and be very energetic and engaging.  The greetings should be in first person from the user, as if the user was speaking to someone in the room or a general greeting.  If there is information about one of the People Present in the user data, use that information to craft a more personal greeting.",
+                "queryType": "options",
+                "hidden": false
+            },
+            {
+                "row": 0,
+                "col": 3,
+                "text": "Monday Speech Group",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": "Abby, Linnea, Megan, and Kara are currently in the room with the user for Speech Group.  Speech Group Therapy usually includes: talking about recent activities, discussing seasonal events and holidays, playing games or general fun discussions. Generate #LLMOptions greetings, goodbyes or conversation starters.  Each item should be a single sentence and have varying levels of energy, creativity, engagement and length.  The greetings should be in first person from the user, as if the user was speaking to someone in the room or a general greeting.  If there is information about one of the People Present in the user data, use that information to craft a more personal greeting.",
+                "queryType": "options",
+                "hidden": true
+            },
+            {
+                "row": 0,
+                "col": 4,
+                "text": "Tuesday Speech Group",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": "Alex, Hannah, Max, Brooke and Kara are currently in the room with the user for Speech Group Therapy.  Alex, Max and Hannah are friends and Brooke and Kara are the Speech Therapists. Speech Group Therapy usually includes: talking about recent activities, discussing seasonal events and holidays, playing games or general fun discussions. Generate #LLMOptions greetings, goodbyes or conversation starters.  Each item should be a single sentence and have varying levels of energy, creativity, engagement and length.  The greetings should be in first person from the user, as if the user was speaking to someone in the room or a general greeting.  If there is information about one of the People Present in the user data, use that information to craft a more personal greeting.  When using the user diary data, consider the current date to determine which events are recent, which events are in the past and which events are in the future.",
+                "queryType": "options",
+                "hidden": true
+            },
+            {
+                "row": 0,
+                "col": 5,
+                "text": "Jokes",
+                "speechPhrase": "I have a joke for you",
+                "targetPage": "home",
+                "LLMQuery": "Generate #LLMOptions random, unique jokes or one-liners in the style of a random, popular comedian. Each joke should include both the question and punchline together in the format 'Question? Punchline!' with just a question mark between them. Do NOT split questions and punchlines into separate options.",
+                "queryType": "options",
+                "hidden": false
+            },
+            {
+                "row": 0,
+                "col": 6,
+                "text": "Would you rather",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": "Generate #LLMOptions creative and fun would-you-rather type questions that could be used to start a conversation.  The more obscure comparison, the better.  Begin each option with Would you rather...",
+                "queryType": "options",
+                "hidden": false
+            },
+            {
+                "row": 0,
+                "col": 7,
+                "text": "Did you know",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": "Generate #LLMOptions random, creative and possibly obscure trivia facts that can be used start a conversation.  You can user some of the user context select most of the trivia topics, but do not limit the topics on just the user's context.  The funnier that trivia fact, the better.\n Begin each result with Did you know",
+                "queryType": "options",
+                "hidden": false
+            },
+            {
+                "row": 0,
+                "col": 8,
+                "text": "Affirmations",
+                "speechPhrase": "I have an affirmation to share",
+                "targetPage": "home",
+                "LLMQuery": "Generate #LLMOptions positive affirmations for the user to share with everyone around",
+                "queryType": "options",
+                "hidden": false
+            }
+        ]
+    },
+    {
+        "name": "aboutme",
+        "pageType": "category",
+        "pageDiv": "aboutme",
+        "buttons": [
+            {
+                "row": 0,
+                "col": 0,
+                "text": "Home",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": ""
+            },
+            {
+                "row": 0,
+                "col": 1,
+                "text": "Age",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": "How old is Brady? Format the answer in a first person, as if Brady was responding to the question 'How old are you?'",
+                "queryType": "options"
+            },
+            {
+                "row": 0,
+                "col": 2,
+                "text": "Family",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": "Tell about Brady's family?  Be very concise. Format the answer in a first person, as if Brady was responding to the question 'Tell me something about your family'",
+                "queryType": "options"
+            },
+            {
+                "row": 0,
+                "col": 3,
+                "text": "About Me",
+                "speechPhrase": "About Me",
+                "targetPage": "home",
+                "LLMQuery": "Tell something about Brady.  Be very concise.  Format the answer in a first person, as if Brady was responding to the question 'Tell me something about yourself'",
+                "queryType": "options"
+            }
+        ],
+        "currentPageName": "aboutme"
+    },
+    {
+        "name": "describe",
+        "buttons": [
+            {
+                "row": 0,
+                "col": 0,
+                "text": "home",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": "",
+                "queryType": "",
+                "hidden": false
+            },
+            {
+                "row": 0,
+                "col": 1,
+                "text": "Positive",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": "Provide up to #LLMOptions creative, with different levels of intensity,  and descriptive words or short phrases to describe something positive, as if someone was very excited",
+                "queryType": "options",
+                "hidden": false
+            },
+            {
+                "row": 0,
+                "col": 2,
+                "text": "Negative",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": "Provide up to #LLMOptions different creative, with different levels of intensity, words or short phrases to describe something negative",
+                "queryType": "options",
+                "hidden": false
+            },
+            {
+                "row": 0,
+                "col": 3,
+                "text": "Positive - Explicit",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": "Provide up to #LLMOptions creative, with different levels of intensity,  and descriptive words or short phrases to describe something positive, as if someone was very excited.  Prioritize options that include profanity",
+                "queryType": "options",
+                "hidden": false
+            },
+            {
+                "row": 0,
+                "col": 4,
+                "text": "Negative - Explicit",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": "Provide up to #LLMOptions creative, with different levels of intensity, descriptive words or short phrases to describe something negative, as if someone was extremely excited.  Prioritize options that include profanity.  Replace any profanity with another random word that starts with the same letter.",
+                "queryType": "options",
+                "hidden": false
+            },
+            {
+                "row": 0,
+                "col": 5,
+                "text": "Strange",
+                "speechPhrase": "",
+                "targetPage": "",
+                "LLMQuery": "Provide up to #LLMOptions creative, with different levels of intensity,  and descriptive words or short phrases to describe something the user just heard or saw that was strange, odd or weird, as if someone was very excited.",
+                "queryType": "options",
+                "hidden": false
+            },
+            {
+                "row": 0,
+                "col": 6,
+                "text": "Funny",
+                "speechPhrase": "",
+                "targetPage": "",
+                "LLMQuery": "Provide up to #LLMOptions creative, with different levels of intensity, and descriptive words or short phrases to describe something the user just heard or saw that was funny as if someone was very excited.",
+                "queryType": "options",
+                "hidden": false
+            },
+            {
+                "row": 0,
+                "col": 7,
+                "text": "Scary",
+                "speechPhrase": "",
+                "targetPage": "",
+                "LLMQuery": "Provide up to #LLMOptions creative, with different levels of intensity, and descriptive words or short phrases the user could use to describe something the user just heard or saw that was scary, as if someone was very excited.",
+                "queryType": "options",
+                "hidden": false
+            },
+            {
+                "row": 0,
+                "col": 8,
+                "text": "Sad",
+                "speechPhrase": "",
+                "targetPage": "",
+                "LLMQuery": "Provide up to #LLMOptions creative, with different levels of intensity, and descriptive words or short phrases the user could use to describe something the user just heard or saw that was sad.",
+                "queryType": "options",
+                "hidden": false
+            },
+            {
+                "row": 0,
+                "col": 9,
+                "text": "Beautiful",
+                "speechPhrase": "",
+                "targetPage": "",
+                "LLMQuery": "Provide up to #LLMOptions creative, with different levels of intensity, and descriptive words or short phrases the user could use to describe something the user just heard or saw that was beautiful, as if someone was very excited.",
+                "queryType": "options",
+                "hidden": false
+            }
+        ]
+    },
+    {
+        "name": "talker",
+        "pageType": "category",
+        "pageDiv": "",
+        "buttons": [
+            {
+                "row": 0,
+                "col": 0,
+                "text": "Home",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 1,
+                "text": "New Talker",
+                "speechPhrase": "Please be patient.  This is a new talker and I am still finding my way around.",
+                "targetPage": "home",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 2,
+                "text": "Not in Talker",
+                "speechPhrase": "Something is not in my talker.  Please let my Mom or Dad know they need to add it",
+                "targetPage": "home",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 3,
+                "text": "Yes or No",
+                "speechPhrase": "Please ask me a Yes or No Question",
+                "targetPage": "home",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 4,
+                "text": "New Name",
+                "speechPhrase": "Any ideas on a name for my new talker?",
+                "targetPage": "home",
+                "LLMQuery": "",
+                "queryType": ""
+            }
+        ],
+        "currentPageName": "talker"
+    },
+    {
+        "name": "Questions",
+        "buttons": [
+            {
+                "row": 0,
+                "col": 0,
+                "text": "Home",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 1,
+                "text": "What",
+                "speechPhrase": "",
+                "targetPage": "",
+                "LLMQuery": "Generate #LLMOptions generic, basic questions, starting with what, for the user to ask someone nearby.  Include questions with different levels of inquiry, from simple to very simple. As simple as What is That?  Phrase each question as if it was asked by the user. All options must begin with What...",
+                "queryType": "options"
+            },
+            {
+                "row": 0,
+                "col": 2,
+                "text": "Who",
+                "speechPhrase": "",
+                "targetPage": "",
+                "LLMQuery": "Generate #LLMOptions generic, basic questions, starting with what, for the user to ask someone nearby.  Include questions with different levels of inquiry, from simple to very simple. As simple as What is That?  Phrase each question as if it was asked by the user. All options must begin with Who...",
+                "queryType": "options"
+            },
+            {
+                "row": 0,
+                "col": 3,
+                "text": "Where",
+                "speechPhrase": "",
+                "targetPage": "",
+                "LLMQuery": "Generate #LLMOptions generic, basic questions, starting with what, for the user to ask someone nearby.  Include questions with different levels of inquiry, from simple to very simple. As simple as What is That?  Phrase each question as if it was asked by the user. All options must begin with Where...",
+                "queryType": "options"
+            },
+            {
+                "row": 0,
+                "col": 4,
+                "text": "When",
+                "speechPhrase": "",
+                "targetPage": "",
+                "LLMQuery": "Generate #LLMOptions generic, basic questions, starting with what, for the user to ask someone nearby.  Include questions with different levels of inquiry, from simple to very simple. As simple as What is That?  Phrase each question as if it was asked by the user. All options must begin with When...",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 5,
+                "text": "How",
+                "speechPhrase": "",
+                "targetPage": "",
+                "LLMQuery": "Generate #LLMOptions generic, basic questions, starting with what, for the user to ask someone nearby.  Include questions with different levels of inquiry, from simple to very simple. As simple as What is That?  Phrase each question as if it was asked by the user. All options must begin with How...",
+                "queryType": "options"
+            },
+            {
+                "row": 0,
+                "col": 6,
+                "text": "Why",
+                "speechPhrase": "",
+                "targetPage": "",
+                "LLMQuery": "Generate #LLMOptions generic, basic questions, starting with what, for the user to ask someone nearby.  Include questions with different levels of inquiry, from simple to very simple. As simple as What is That?  Phrase each question as if it was asked by the user. All options must begin with Why...",
+                "queryType": "options"
+            }
+        ]
+    },
+    {
+        "name": "Comments",
+        "pageType": "home",
+        "pageDiv": "",
+        "buttons": [
+            {
+                "row": 0,
+                "col": 0,
+                "text": "Home",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 1,
+                "text": "Mine",
+                "speechPhrase": "",
+                "targetPage": "mine",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 2,
+                "text": "Opinion",
+                "speechPhrase": "here's what I think",
+                "targetPage": "opinion",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 3,
+                "text": "New",
+                "speechPhrase": "I want to tell you what I think",
+                "targetPage": "new",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 4,
+                "text": "Friends",
+                "speechPhrase": "",
+                "targetPage": "friends",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 5,
+                "text": "Slang",
+                "speechPhrase": "",
+                "targetPage": "slang",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 6,
+                "text": "Broncos",
+                "speechPhrase": "no matter what, I will always be a Broncos fan",
+                "targetPage": "broncos",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 7,
+                "text": "Changes",
+                "speechPhrase": "I want to talk about changes that are going on",
+                "targetPage": "changes",
+                "LLMQuery": "",
+                "queryType": ""
+            }
+        ]
+    },
+    {
+        "name": "mine",
+        "pageType": "home",
+        "pageDiv": "",
+        "buttons": [
+            {
+                "row": 0,
+                "col": 0,
+                "text": "Go Back",
+                "speechPhrase": "",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 1,
+                "text": "Good",
+                "speechPhrase": "Sweet!",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 2,
+                "text": "Got This",
+                "speechPhrase": "Don't worrry, I've got this!",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 3,
+                "text": "Annoying",
+                "speechPhrase": "I would rather not!",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 4,
+                "text": "Done",
+                "speechPhrase": "I am so done with this!",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 5,
+                "text": "Told You",
+                "speechPhrase": "I told you so!",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 6,
+                "text": "Saying",
+                "speechPhrase": "Just Saying!",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 7,
+                "text": "Help",
+                "speechPhrase": "Can someone please help me do ti?",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 8,
+                "text": "Course",
+                "speechPhrase": "Of course!",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 1,
+                "col": 0,
+                "text": "Sure",
+                "speechPhrase": "For Sure!",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 2,
+                "col": 0,
+                "text": "Home",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": "",
+                "queryType": ""
+            }
+        ]
+    },
+    {
+        "name": "goingon",
+        "buttons": [
+            {
+                "row": 0,
+                "col": 0,
+                "text": "Home",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 1,
+                "text": "My Recent Activities",
+                "speechPhrase": "",
+                "targetPage": "",
+                "LLMQuery": "Using the user diary and the current date, generate #LLMOptions  statements based on the most recent activities.  Each statement should be phrased conversationally as if they are coming from the user and telling someone nearby what the user has done recently.",
+                "queryType": "options"
+            },
+            {
+                "row": 0,
+                "col": 2,
+                "text": "My Upcoming Plans",
+                "speechPhrase": "",
+                "targetPage": "",
+                "LLMQuery": "Based on the user diary, generate #LLMOptions statements based on any upcoming planned activities. Each statement should be phrased conversationally as if they are coming from the user and telling someone nearby what the user has done recently.",
+                "queryType": "options"
+            },
+            {
+                "row": 0,
+                "col": 3,
+                "text": "You lately",
+                "speechPhrase": "What have you been up to recently?",
+                "targetPage": "",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 4,
+                "text": "Any Plans?",
+                "speechPhrase": "Do you have any fun plans coming up?",
+                "targetPage": "",
+                "LLMQuery": "",
+                "queryType": ""
+            }
+        ]
+    },
+    {
+        "name": "opinion",
+        "pageType": "home",
+        "pageDiv": "",
+        "buttons": [
+            {
+                "row": 0,
+                "col": 0,
+                "text": "Unbelieveable",
+                "speechPhrase": "That is unbelieveable!",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 1,
+                "text": "Wow",
+                "speechPhrase": "Wow!",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 2,
+                "text": "Horrendous",
+                "speechPhrase": "That is horrendous!",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 3,
+                "text": "Strange",
+                "speechPhrase": "How strange is that?",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 4,
+                "text": "Upsetting",
+                "speechPhrase": "That is really upsetting, don't you think?",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 5,
+                "text": "Best",
+                "speechPhrase": "That is the best ever!",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 6,
+                "text": "Up to",
+                "speechPhrase": "What have you been up to?",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 2,
+                "col": 0,
+                "text": "Home",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": "",
+                "queryType": ""
+            }
+        ]
+    },
+    {
+        "name": "new",
+        "pageType": "home",
+        "pageDiv": "",
+        "buttons": [
+            {
+                "row": 0,
+                "col": 0,
+                "text": "Go Back",
+                "speechPhrase": "Nevermind",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 1,
+                "text": "Got This",
+                "speechPhrase": "Don't worry, I've got this!",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 2,
+                "text": "Jazzed",
+                "speechPhrase": "I am really jazzed!",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 3,
+                "text": "No words",
+                "speechPhrase": "I don't have the words in my talker",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 4,
+                "text": "Done",
+                "speechPhrase": "I am so done with that",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 5,
+                "text": "Try",
+                "speechPhrase": "I am up for trying again",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 6,
+                "text": "Chaotic",
+                "speechPhrase": "It is way too chaotic for me!",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 7,
+                "text": "Comfortable",
+                "speechPhrase": "I am not very comfortable, you know",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 8,
+                "text": "Annoyed",
+                "speechPhrase": "I am really annoyed",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 2,
+                "col": 0,
+                "text": "Home",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": "",
+                "queryType": ""
+            }
+        ]
+    },
+    {
+        "name": "friends",
+        "pageType": "home",
+        "pageDiv": "",
+        "buttons": [
+            {
+                "row": 0,
+                "col": 0,
+                "text": "Go Back",
+                "speechPhrase": "",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 1,
+                "text": "Sup",
+                "speechPhrase": "Sup?",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 2,
+                "text": "Same",
+                "speechPhrase": "Same",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 3,
+                "text": "For Real",
+                "speechPhrase": "For Real?",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 4,
+                "text": "Nailed It",
+                "speechPhrase": "Nailed It",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 2,
+                "col": 0,
+                "text": "Home",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": "",
+                "queryType": ""
+            }
+        ]
+    },
+    {
+        "name": "slang",
+        "pageType": "home",
+        "pageDiv": "",
+        "buttons": [
+            {
+                "row": 0,
+                "col": 0,
+                "text": "Go Back",
+                "speechPhrase": "",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 2,
+                "col": 0,
+                "text": "Home",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": "",
+                "queryType": ""
+            }
+        ]
+    },
+    {
+        "name": "broncos",
+        "pageType": "home",
+        "pageDiv": "",
+        "buttons": [
+            {
+                "row": 0,
+                "col": 0,
+                "text": "Go Back",
+                "speechPhrase": "",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 1,
+                "text": "Favorite",
+                "speechPhrase": "The Broncos will always be my favorite team.  Who is yours?",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 2,
+                "text": "Q B",
+                "speechPhrase": "Bo Nix is having a great season. Don't you think?",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 3,
+                "text": "McLaughlin",
+                "speechPhrase": "I think McLaughlin is my new favorite Bronco.  What do you think of him?",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 4,
+                "text": "Season",
+                "speechPhrase": "What are you predictions for the Broncos this season?",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 5,
+                "text": "Playoffs",
+                "speechPhrase": "I wonder if there is any chance of the Broncos making the playoffs this season",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 6,
+                "text": "Simmons",
+                "speechPhrase": "I am cheering for Justin Simmons to have an awesome season with the Falcons",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 7,
+                "text": "Miles",
+                "speechPhrase": "I had fun meeting Miles, the Broncos mascot",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 2,
+                "col": 0,
+                "text": "Home",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": "",
+                "queryType": ""
+            }
+        ]
+    },
+    {
+        "name": "changes",
+        "pageType": "home",
+        "pageDiv": "",
+        "buttons": [
+            {
+                "row": 0,
+                "col": 0,
+                "text": "Go Back",
+                "speechPhrase": "",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 1,
+                "text": "Yes No",
+                "speechPhrase": "Please ask me yes or no questions about the changes",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 2,
+                "text": "Advance",
+                "speechPhrase": "I want to know what changes are happening before they happen",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 3,
+                "text": "Upset",
+                "speechPhrase": "I'm upset when I don't know about changes",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 4,
+                "text": "Ask about changes",
+                "speechPhrase": "Please ask me if I want to talk about the changes, okay?",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 5,
+                "text": "Not Sure",
+                "speechPhrase": "I am not sure",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 6,
+                "text": "Think good",
+                "speechPhrase": "I think it will be good",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 7,
+                "text": "Hope good",
+                "speechPhrase": "I hope it will be good",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 8,
+                "text": "Sweet",
+                "speechPhrase": "It is sweet",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 0,
+                "col": 9,
+                "text": "Fine",
+                "speechPhrase": "It is fine",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 1,
+                "col": 0,
+                "text": "Bad",
+                "speechPhrase": "I think that change is bad",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 1,
+                "col": 1,
+                "text": "The worst",
+                "speechPhrase": "The worst!",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 1,
+                "col": 2,
+                "text": "Chaotic",
+                "speechPhrase": "The changes have been really chaotic for me",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 1,
+                "col": 3,
+                "text": "You know",
+                "speechPhrase": "What do you know about it?",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 1,
+                "col": 4,
+                "text": "You think",
+                "speechPhrase": "What do you think about it?",
+                "targetPage": "Comments",
+                "LLMQuery": "",
+                "queryType": ""
+            },
+            {
+                "row": 2,
+                "col": 0,
+                "text": "Home",
+                "speechPhrase": "",
+                "targetPage": "home",
+                "LLMQuery": "",
+                "queryType": ""
+            }
+        ]
+    }
+]

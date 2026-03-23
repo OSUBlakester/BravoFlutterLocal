@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Navigation</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <style>
+        /* Custom base styles */
+        body {
+            font-family: 'Inter', sans-serif; /* Consistent font */
+        }
+        /* Shared button styling */
+        .nav-button-base {
+             @apply w-full flex items-center justify-center text-center font-bold py-3 px-4 rounded-lg shadow-md transition duration-300 ease-in-out transform hover:-translate-y-1 focus:outline-none focus:ring-2 focus:ring-offset-2;
+        }
+        /* Specific styling for navigation buttons */
+        .nav-button {
+            @apply nav-button-base bg-blue-600 hover:bg-blue-700 text-white focus:ring-blue-500;
+        }
+        /* Specific styling for the back button */
+        .back-button {
+             @apply nav-button-base bg-gray-500 hover:bg-gray-600 text-white focus:ring-gray-400;
+        }
+        /* Ensure icons have consistent spacing */
+        .nav-button i, .back-button i {
+            @apply mr-2; /* Margin to the right of the icon */
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen flex flex-col items-center justify-center p-4">
+
+    <div class="bg-white p-6 sm:p-8 rounded-xl shadow-lg w-full max-w-2xl"> <h1 class="text-3xl font-bold text-center text-gray-800 mb-8">Admin Pages</h1>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4 mb-10">
+
+            <a href="admin.html" class="nav-button">
+                <i class="fas fa-tools"></i> General
+            </a>
+
+            <a href="audio_admin.html" class="nav-button">
+                <i class="fas fa-volume-up"></i> Audio
+            </a>
+
+            <a href="user_current_admin.html" class="nav-button">
+                <i class="fas fa-map-marker-alt"></i> Current State
+            </a>
+
+            <a href="user_diary_admin.html" class="nav-button">
+                <i class="fas fa-book"></i> Diary
+            </a>
+
+            <a href="favorites_admin.html" class="nav-button">
+                <i class="fas fa-newspaper"></i> Legacy Favorites
+            </a>
+
+            <a href="favorites_admin.html" class="nav-button">
+                <i class="fas fa-star"></i> Favorites Topics
+            </a>
+
+            <a href="user_info_admin.html" class="nav-button">
+                <i class="fas fa-user-cog"></i> User Info
+            </a>
+
+            <a href="help_admin.html" class="nav-button">
+                <i class="fas fa-question-circle"></i> Help Content
+            </a>
+
+            <a href="avatar_admin.html" class="nav-button">
+                <i class="fas fa-user-circle"></i> Avatar Admin
+            </a>
+
+            <button onclick="repairBravoImages()" class="nav-button bg-orange-600 hover:bg-orange-700">
+                <i class="fas fa-tools"></i> Repair Images
+            </button>
+        </div> <div class="flex justify-center">
+            <a href="gridpage.html?page=home" class="back-button w-full sm:w-auto"> <i class="fas fa-arrow-left"></i> Go Back to Main Page
+            </a>
+        </div>
+    </div>
+
+<script>
+async function repairBravoImages() {
+    const button = document.querySelector('button[onclick="repairBravoImages()"]');
+    const originalText = button.innerHTML;
+    
+    // Show loading state
+    button.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Repairing...';
+    button.disabled = true;
+    
+    try {
+        // Get authentication token
+        const user = firebase.auth().currentUser;
+        if (!user) {
+            alert('Please log in first');
+            return;
+        }
+        
+        const idToken = await user.getIdToken();
+        
+        // Call the repair endpoint
+        const response = await fetch('/api/admin/repair-bravo-images', {
+            method: 'POST',
+            headers: {
+                'Authorization': `Bearer ${idToken}`,
+                'Content-Type': 'application/json',
+                'X-User-ID': 'system' // Admin operation
+            }
+        });
+        
+        const result = await response.json();
+        
+        if (response.ok && result.success) {
+            alert(`✅ Repair completed successfully!\n\n${result.message}\n\nDetails:\n- Total checked: ${result.total_checked}\n- Repaired: ${result.repaired_count}\n- Failed: ${result.failed_count || 0}`);
+        } else {
+            throw new Error(result.detail || result.message || 'Repair failed');
+        }
+        
+    } catch (error) {
+        console.error('Repair error:', error);
+        alert(`❌ Repair failed: ${error.message}`);
+    } finally {
+        // Restore button state
+        button.innerHTML = originalText;
+        button.disabled = false;
+    }
+}
+</script>
+
+<!-- Firebase SDK -->
+<script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-app.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.1/firebase-auth.js"></script>
+<script>
+// Initialize Firebase (you may need to adjust this based on your config)
+const firebaseConfig = {
+    // This will be loaded from your server's config endpoint
+};
+
+fetch('/api/frontend-config')
+    .then(response => response.json())
+    .then(config => {
+        firebase.initializeApp(config);
+    })
+    .catch(error => {
+        console.error('Failed to load Firebase config:', error);
+    });
+</script>
+
+</body>
+</html>

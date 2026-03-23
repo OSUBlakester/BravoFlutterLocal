@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mood Images Setup - Bravo AAC Admin</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .status-panel {
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .mood-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        .mood-card {
+            background: white;
+            border-radius: 8px;
+            padding: 15px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            text-align: center;
+        }
+        .mood-image {
+            width: 80px;
+            height: 80px;
+            object-fit: cover;
+            border-radius: 8px;
+            margin: 10px 0;
+            border: 2px solid #ddd;
+        }
+        .mood-name {
+            font-weight: bold;
+            margin: 10px 0 5px 0;
+            color: #333;
+        }
+        .mood-filename {
+            font-size: 12px;
+            color: #666;
+            font-family: monospace;
+        }
+        .setup-button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px;
+        }
+        .setup-button:hover {
+            background: #45a049;
+        }
+        .setup-button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .progress-bar {
+            width: 100%;
+            height: 20px;
+            background-color: #f0f0f0;
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4CAF50, #45a049);
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        .log-output {
+            background: #1e1e1e;
+            color: #00ff00;
+            font-family: monospace;
+            padding: 15px;
+            border-radius: 6px;
+            height: 200px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            margin: 15px 0;
+        }
+        .success { color: #4CAF50; }
+        .error { color: #f44336; }
+        .warning { color: #ff9800; }
+        .info { color: #2196F3; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>🎭 Mood Images Setup</h1>
+        <p>Upload mascot images to create the mood_images Firestore collection</p>
+    </div>
+
+    <div class="status-panel">
+        <h3>Setup Status</h3>
+        <div id="auth-status">Checking authentication...</div>
+        <button id="setup-btn" class="setup-button" onclick="startSetup()" disabled>
+            Start Mood Images Setup
+        </button>
+        
+        <div id="progress-container" style="display: none;">
+            <div class="progress-bar">
+                <div id="progress-fill" class="progress-fill"></div>
+            </div>
+            <div id="progress-text">Ready to start...</div>
+        </div>
+        
+        <div id="log-output" class="log-output" style="display: none;"></div>
+    </div>
+
+    <div class="mood-grid" id="mood-grid">
+        <!-- Mood cards will be populated by JavaScript -->
+    </div>
+
+    <script>
+        // Mood image mappings
+        const MOOD_IMAGE_MAPPING = {
+            "Happy": "happy.png",
+            "Sad": "sad.png", 
+            "Excited": "excited.png",
+            "Calm": "peaceful.png",
+            "Angry": "angry.png",
+            "Silly": "silly.png",
+            "Tired": "tired.png",
+            "Bored": "bored.png",
+            "Anxious": "anxious.png",
+            "Confused": "confused.png",
+            "Surprised": "surprised.png",
+            "Proud": "proud.png",
+            "Worried": "worried.png",
+            "Cranky": "cranky.png",
+            "Peaceful": "peaceful.png",
+            "Playful": "playful.png",
+            "Frustrated": "frustrated.png",
+            "Curious": "curious.png",
+            "Grateful": "grateful.png",
+            "Lonely": "lonely.png",
+            "Content": "happy.png", // Using happy as fallback
+            "Scared": "scared.png",
+            "Nervous": "nervous.png"
+        };
+
+        let setupInProgress = false;
+
+        // Initialize page
+        document.addEventListener('DOMContentLoaded', function() {
+            checkAuthStatus();
+            displayMoodCards();
+        });
+
+        function log(message, type = 'info') {
+            const logOutput = document.getElementById('log-output');
+            const timestamp = new Date().toLocaleTimeString();
+            const logLine = `[${timestamp}] ${message}\n`;
+            
+            logOutput.style.display = 'block';
+            logOutput.textContent += logLine;
+            logOutput.scrollTop = logOutput.scrollHeight;
+            
+            console.log(message);
+        }
+
+        async function checkAuthStatus() {
+            const statusDiv = document.getElementById('auth-status');
+            const setupBtn = document.getElementById('setup-btn');
+            
+            try {
+                // Check if we can access the admin API
+                const response = await fetch('/api/imagecreator/images?limit=1', {
+                    method: 'GET',
+                    credentials: 'include'
+                });
+                
+                if (response.ok) {
+                    statusDiv.innerHTML = '<span class="success">✅ Authentication verified - Admin access available</span>';
+                    setupBtn.disabled = false;
+                } else if (response.status === 401) {
+                    statusDiv.innerHTML = '<span class="error">❌ Not authenticated - Please log in as admin first</span>';
+                } else if (response.status === 403) {
+                    statusDiv.innerHTML = '<span class="error">❌ Access denied - Admin privileges required</span>';
+                } else {
+                    statusDiv.innerHTML = '<span class="warning">⚠️ Cannot verify admin access - Check server connection</span>';
+                }
+            } catch (error) {
+                statusDiv.innerHTML = '<span class="error">❌ Connection error - Check if server is running</span>';
+                console.error('Auth check failed:', error);
+            }
+        }
+
+        function displayMoodCards() {
+            const grid = document.getElementById('mood-grid');
+            grid.innerHTML = '';
+            
+            Object.entries(MOOD_IMAGE_MAPPING).forEach(([moodName, filename]) => {
+                const card = document.createElement('div');
+                card.className = 'mood-card';
+                
+                card.innerHTML = `
+                    <div class="mood-name">${moodName}</div>
+                    <img src="../mood_images/${filename}" alt="${moodName}" class="mood-image" 
+                         onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+                    <div style="display: none; color: #f44336;">Image not found</div>
+                    <div class="mood-filename">${filename}</div>
+                `;
+                
+                grid.appendChild(card);
+            });
+        }
+
+        async function startSetup() {
+            if (setupInProgress) return;
+            
+            setupInProgress = true;
+            const setupBtn = document.getElementById('setup-btn');
+            const progressContainer = document.getElementById('progress-container');
+            const progressFill = document.getElementById('progress-fill');
+            const progressText = document.getElementById('progress-text');
+            
+            setupBtn.disabled = true;
+            setupBtn.textContent = 'Setup in Progress...';
+            progressContainer.style.display = 'block';
+            
+            log('🚀 Starting mood images setup...', 'info');
+            
+            const moods = Object.entries(MOOD_IMAGE_MAPPING);
+            let completed = 0;
+            let successful = 0;
+            
+            for (const [moodName, filename] of moods) {
+                try {
+                    log(`📸 Processing ${moodName} -> ${filename}`, 'info');
+                    
+                    // Check if image file exists by trying to fetch it
+                    const imageResponse = await fetch(`../mood_images/${filename}`);
+                    if (!imageResponse.ok) {
+                        log(`⚠️ Image file not found: ${filename}`, 'warning');
+                        completed++;
+                        continue;
+                    }
+                    
+                    // Get the image as blob
+                    const imageBlob = await imageResponse.blob();
+                    
+                    // Create form data for upload
+                    const formData = new FormData();
+                    formData.append('image', imageBlob, filename);
+                    formData.append('mood_name', moodName);
+                    formData.append('collection', 'mood_images');
+                    
+                    // Upload and create Firestore document
+                    const uploadResponse = await fetch('/api/mood/upload-image', {
+                        method: 'POST',
+                        credentials: 'include',
+                        body: formData
+                    });
+                    
+                    if (uploadResponse.ok) {
+                        const result = await uploadResponse.json();
+                        log(`✅ ${moodName}: Uploaded and created Firestore document`, 'success');
+                        successful++;
+                    } else {
+                        const error = await uploadResponse.text();
+                        log(`❌ ${moodName}: Upload failed - ${error}`, 'error');
+                    }
+                    
+                } catch (error) {
+                    log(`❌ ${moodName}: Error - ${error.message}`, 'error');
+                }
+                
+                completed++;
+                const progress = (completed / moods.length) * 100;
+                progressFill.style.width = progress + '%';
+                progressText.textContent = `${completed}/${moods.length} processed (${successful} successful)`;
+            }
+            
+            log(`\n🎉 Setup complete! ${successful}/${moods.length} moods processed successfully.`, 'success');
+            
+            setupBtn.textContent = 'Setup Complete';
+            setupInProgress = false;
+            
+            if (successful === moods.length) {
+                log('✅ All mood images uploaded successfully!', 'success');
+                setupBtn.style.background = '#4CAF50';
+            } else {
+                log(`⚠️ ${moods.length - successful} moods had issues. Check the log above.`, 'warning');
+                setupBtn.disabled = false;
+                setupBtn.textContent = 'Retry Setup';
+                setupBtn.style.background = '#ff9800';
+            }
+        }
+    </script>
+</body>
+</html>

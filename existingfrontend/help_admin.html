@@ -1,0 +1,456 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Help Content Admin - Bravo AAC</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/quill@1.3.6/dist/quill.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/quill@1.3.6/dist/quill.snow.css" rel="stylesheet">
+    <script src="/static/interactive-guide.js"></script>
+    <script src="/static/help-admin-guide.js"></script>
+</head>
+<body class="bg-gray-50">
+    <!-- Navigation Bar -->
+    <nav class="bg-blue-600 text-white p-4">
+        <div class="max-w-7xl mx-auto flex justify-between items-center">
+            <h1 class="text-xl font-bold">Help Content Administration</h1>
+            <div class="flex items-center gap-4">
+                <span id="admin-email" class="text-blue-100"></span>
+                <a href="admin.html" class="bg-blue-700 px-3 py-2 rounded hover:bg-blue-800">Back to Admin</a>
+                <button id="logout-btn" class="bg-red-600 px-3 py-2 rounded hover:bg-red-700">Logout</button>
+            </div>
+        </div>
+    </nav>
+
+    <div class="max-w-7xl mx-auto p-6">
+        <!-- Action Buttons -->
+        <div class="flex justify-between items-center mb-6">
+            <h2 class="text-2xl font-bold text-gray-800">Manage Help Content</h2>
+            <div class="flex gap-3">
+                <button id="create-general-btn" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">
+                    <i class="fas fa-plus mr-2"></i>Create General Help
+                </button>
+                <button id="create-page-btn" class="bg-blue-600 text-white px-4 py-2 rounded hover:bg-blue-700">
+                    <i class="fas fa-file-alt mr-2"></i>Create Page-Specific Help
+                </button>
+            </div>
+        </div>
+
+        <!-- Help Content Sections -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <!-- General Help Content -->
+            <div class="bg-white rounded-lg shadow-lg p-6">
+                <h3 class="text-lg font-semibold mb-4 text-gray-800">
+                    <i class="fas fa-info-circle mr-2 text-blue-600"></i>General Help Content
+                </h3>
+                <div id="general-help-list" class="space-y-3">
+                    <!-- General help items will be loaded here -->
+                </div>
+            </div>
+
+            <!-- Page-Specific Help Content -->
+            <div class="bg-white rounded-lg shadow-lg p-6">
+                <h3 class="text-lg font-semibold mb-4 text-gray-800">
+                    <i class="fas fa-file-alt mr-2 text-green-600"></i>Page-Specific Help Content
+                </h3>
+                <div id="page-help-list" class="space-y-3">
+                    <!-- Page-specific help items will be loaded here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Create/Edit Help Content Modal -->
+    <div id="help-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-4xl max-h-[90vh] mx-4 flex flex-col">
+            <div class="p-6 border-b">
+                <div class="flex justify-between items-center">
+                    <h3 id="modal-title" class="text-xl font-bold text-gray-800">Create Help Content</h3>
+                    <button id="modal-close" class="text-gray-500 hover:text-red-500 text-2xl">&times;</button>
+                </div>
+            </div>
+            
+            <div class="p-6 flex-1 overflow-y-auto">
+                <form id="help-form" class="space-y-4">
+                    <input type="hidden" id="help-id" name="help_id">
+                    
+                    <div>
+                        <label for="help-title" class="block text-sm font-medium text-gray-700 mb-2">Title</label>
+                        <input type="text" id="help-title" name="title" required 
+                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    
+                    <div class="flex items-center gap-4">
+                        <label class="flex items-center">
+                            <input type="checkbox" id="page-specific" name="page_specific" class="mr-2">
+                            <span class="text-sm font-medium text-gray-700">Page-Specific Help</span>
+                        </label>
+                    </div>
+                    
+                    <div id="target-page-section" class="hidden">
+                        <label for="target-page" class="block text-sm font-medium text-gray-700 mb-2">Target Page</label>
+                        <select id="target-page" name="target_page" 
+                                class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                            <option value="">Select a page...</option>
+                            <option value="home">Home</option>
+                            <option value="greetings">Greetings</option>
+                            <option value="goingon">Going On</option>
+                            <option value="describe">Describe</option>
+                            <option value="questions">Questions</option>
+                            <option value="favorites">Favorites</option>
+                            <option value="freestyle">Freestyle</option>
+                            <option value="threads">Threads</option>
+                            <option value="admin">Admin Pages</option>
+                        </select>
+                    </div>
+                    
+                    <div>
+                        <label for="help-content" class="block text-sm font-medium text-gray-700 mb-2">Content</label>
+                        <div id="editor-container" style="height: 300px;"></div>
+                        <input type="hidden" id="help-content" name="content">
+                    </div>
+                </form>
+            </div>
+            
+            <div class="p-6 border-t flex justify-end gap-3">
+                <button id="modal-cancel" class="px-4 py-2 text-gray-600 bg-gray-200 rounded hover:bg-gray-300">Cancel</button>
+                <button id="modal-save" class="px-4 py-2 text-white bg-blue-600 rounded hover:bg-blue-700">Save Help Content</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Firebase Configuration -->
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.22.1/firebase-app.js';
+        import { getAuth, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/9.22.1/firebase-auth.js';
+
+        let firebaseConfig = {};
+        let auth;
+        let currentUser = null;
+        let quillEditor;
+
+        // Initialize Firebase
+        async function initializeFirebase() {
+            try {
+                const response = await fetch('/api/frontend-config');
+                const configData = await response.json();
+                firebaseConfig = configData.firebase_config || configData;
+                
+                const app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                
+                // Initialize Quill editor
+                initializeQuillEditor();
+                
+                // Set up auth state listener
+                onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        currentUser = user;
+                        document.getElementById('admin-email').textContent = user.email;
+                        
+                        // Check if user is admin
+                        if (user.email !== 'admin@talkwithbravo.com') {
+                            alert('Access denied. Admin privileges required.');
+                            window.location.href = 'auth.html';
+                            return;
+                        }
+                        
+                        // Load help content
+                        loadHelpContent();
+                    } else {
+                        window.location.href = 'auth.html';
+                    }
+                });
+                
+            } catch (error) {
+                console.error('Firebase initialization failed:', error);
+                alert('Failed to initialize. Please try again.');
+            }
+        }
+
+        function initializeQuillEditor() {
+            quillEditor = new Quill('#editor-container', {
+                theme: 'snow',
+                modules: {
+                    toolbar: [
+                        [{ 'header': [1, 2, 3, false] }],
+                        ['bold', 'italic', 'underline', 'strike'],
+                        [{ 'list': 'ordered'}, { 'list': 'bullet' }],
+                        ['link', 'code-block'],
+                        ['clean']
+                    ]
+                }
+            });
+        }
+
+        async function makeAuthenticatedRequest(url, options = {}) {
+            if (!currentUser) {
+                throw new Error('User not authenticated');
+            }
+            
+            const token = await currentUser.getIdToken();
+            const headers = {
+                'Authorization': `Bearer ${token}`,
+                'Content-Type': 'application/json',
+                ...options.headers
+            };
+            
+            return fetch(url, { ...options, headers });
+        }
+
+        async function loadHelpContent() {
+            try {
+                const response = await makeAuthenticatedRequest('/api/help/content');
+                const data = await response.json();
+                
+                displayGeneralHelp(data.content);
+                
+                // Load page-specific help
+                const pages = ['home', 'greetings', 'goingon', 'describe', 'questions', 'favorites', 'freestyle', 'threads', 'admin'];
+                const pageSpecificHelp = {};
+                
+                for (const page of pages) {
+                    try {
+                        const pageResponse = await makeAuthenticatedRequest(`/api/help/content?page=${page}`);
+                        const pageData = await pageResponse.json();
+                        if (pageData.content && pageData.content.length > 0) {
+                            pageSpecificHelp[page] = pageData.content;
+                        }
+                    } catch (error) {
+                        console.warn(`Failed to load help for page ${page}:`, error);
+                    }
+                }
+                
+                displayPageSpecificHelp(pageSpecificHelp);
+                
+            } catch (error) {
+                console.error('Failed to load help content:', error);
+                alert('Failed to load help content. Please refresh the page.');
+            }
+        }
+
+        function displayGeneralHelp(helpItems) {
+            const container = document.getElementById('general-help-list');
+            container.innerHTML = '';
+            
+            if (!helpItems || helpItems.length === 0) {
+                container.innerHTML = '<p class="text-gray-500 italic">No general help content found.</p>';
+                return;
+            }
+            
+            helpItems.forEach(item => {
+                const div = document.createElement('div');
+                div.className = 'border border-gray-200 rounded-lg p-4 hover:bg-gray-50';
+                div.innerHTML = `
+                    <div class="flex justify-between items-start">
+                        <div class="flex-1">
+                            <h4 class="font-semibold text-gray-800">${escapeHtml(item.title)}</h4>
+                            <p class="text-sm text-gray-600 mt-1">Created: ${formatDate(item.created_at)}</p>
+                            ${item.updated_at && item.updated_at !== item.created_at ? 
+                                `<p class="text-sm text-gray-600">Updated: ${formatDate(item.updated_at)}</p>` : ''
+                            }
+                        </div>
+                        <div class="flex gap-2 ml-4">
+                            <button onclick="editHelpContent('${item.id}', '${escapeHtml(item.title)}', \`${escapeHtml(item.content)}\`, false, '')" 
+                                    class="text-blue-600 hover:text-blue-800">
+                                <i class="fas fa-edit"></i>
+                            </button>
+                            <button onclick="deleteHelpContent('${item.id}', '${escapeHtml(item.title)}')" 
+                                    class="text-red-600 hover:text-red-800">
+                                <i class="fas fa-trash"></i>
+                            </button>
+                        </div>
+                    </div>
+                `;
+                container.appendChild(div);
+            });
+        }
+
+        function displayPageSpecificHelp(pageHelpData) {
+            const container = document.getElementById('page-help-list');
+            container.innerHTML = '';
+            
+            if (!pageHelpData || Object.keys(pageHelpData).length === 0) {
+                container.innerHTML = '<p class="text-gray-500 italic">No page-specific help content found.</p>';
+                return;
+            }
+            
+            Object.entries(pageHelpData).forEach(([page, helpItems]) => {
+                helpItems.forEach(item => {
+                    const div = document.createElement('div');
+                    div.className = 'border border-gray-200 rounded-lg p-4 hover:bg-gray-50';
+                    div.innerHTML = `
+                        <div class="flex justify-between items-start">
+                            <div class="flex-1">
+                                <div class="flex items-center gap-2 mb-2">
+                                    <span class="bg-green-100 text-green-800 text-xs px-2 py-1 rounded">${page}</span>
+                                </div>
+                                <h4 class="font-semibold text-gray-800">${escapeHtml(item.title)}</h4>
+                                <p class="text-sm text-gray-600 mt-1">Created: ${formatDate(item.created_at)}</p>
+                                ${item.updated_at && item.updated_at !== item.created_at ? 
+                                    `<p class="text-sm text-gray-600">Updated: ${formatDate(item.updated_at)}</p>` : ''
+                                }
+                            </div>
+                            <div class="flex gap-2 ml-4">
+                                <button onclick="editHelpContent('${item.id}', '${escapeHtml(item.title)}', \`${escapeHtml(item.content)}\`, true, '${page}')" 
+                                        class="text-blue-600 hover:text-blue-800">
+                                    <i class="fas fa-edit"></i>
+                                </button>
+                                <button onclick="deleteHelpContent('${item.id}', '${escapeHtml(item.title)}')" 
+                                        class="text-red-600 hover:text-red-800">
+                                    <i class="fas fa-trash"></i>
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                    container.appendChild(div);
+                });
+            });
+        }
+
+        // Modal functions
+        window.showCreateModal = function(isPageSpecific = false) {
+            document.getElementById('modal-title').textContent = 'Create Help Content';
+            document.getElementById('help-form').reset();
+            document.getElementById('help-id').value = '';
+            
+            document.getElementById('page-specific').checked = isPageSpecific;
+            togglePageSpecificSection();
+            
+            quillEditor.setContents([]);
+            document.getElementById('help-modal').classList.remove('hidden');
+        };
+
+        window.editHelpContent = function(id, title, content, isPageSpecific, targetPage) {
+            document.getElementById('modal-title').textContent = 'Edit Help Content';
+            document.getElementById('help-id').value = id;
+            document.getElementById('help-title').value = title;
+            document.getElementById('page-specific').checked = isPageSpecific;
+            document.getElementById('target-page').value = targetPage || '';
+            
+            togglePageSpecificSection();
+            
+            // Set content in Quill editor
+            quillEditor.clipboard.dangerouslyPasteHTML(content);
+            
+            document.getElementById('help-modal').classList.remove('hidden');
+        };
+
+        window.deleteHelpContent = async function(id, title) {
+            if (!confirm(`Are you sure you want to delete "${title}"?`)) {
+                return;
+            }
+            
+            try {
+                const response = await makeAuthenticatedRequest(`/api/help/content/${id}`, {
+                    method: 'DELETE'
+                });
+                
+                if (response.ok) {
+                    alert('Help content deleted successfully!');
+                    loadHelpContent();
+                } else {
+                    const error = await response.text();
+                    alert(`Failed to delete help content: ${error}`);
+                }
+            } catch (error) {
+                console.error('Delete error:', error);
+                alert('Failed to delete help content. Please try again.');
+            }
+        };
+
+        function togglePageSpecificSection() {
+            const checkbox = document.getElementById('page-specific');
+            const section = document.getElementById('target-page-section');
+            
+            if (checkbox.checked) {
+                section.classList.remove('hidden');
+            } else {
+                section.classList.add('hidden');
+                document.getElementById('target-page').value = '';
+            }
+        }
+
+        async function saveHelpContent() {
+            const form = document.getElementById('help-form');
+            const formData = new FormData(form);
+            
+            // Get content from Quill editor
+            const content = quillEditor.root.innerHTML;
+            
+            const helpData = {
+                title: formData.get('title'),
+                content: content,
+                page_specific: document.getElementById('page-specific').checked,
+                target_page: formData.get('target_page') || null
+            };
+            
+            const helpId = document.getElementById('help-id').value;
+            
+            try {
+                let response;
+                if (helpId) {
+                    // Update existing
+                    helpData.help_id = helpId;
+                    response = await makeAuthenticatedRequest('/api/help/content', {
+                        method: 'PUT',
+                        body: JSON.stringify(helpData)
+                    });
+                } else {
+                    // Create new
+                    response = await makeAuthenticatedRequest('/api/help/content', {
+                        method: 'POST',
+                        body: JSON.stringify(helpData)
+                    });
+                }
+                
+                if (response.ok) {
+                    alert('Help content saved successfully!');
+                    closeModal();
+                    loadHelpContent();
+                } else {
+                    const error = await response.text();
+                    alert(`Failed to save help content: ${error}`);
+                }
+            } catch (error) {
+                console.error('Save error:', error);
+                alert('Failed to save help content. Please try again.');
+            }
+        }
+
+        function closeModal() {
+            document.getElementById('help-modal').classList.add('hidden');
+        }
+
+        // Utility functions
+        function escapeHtml(text) {
+            const div = document.createElement('div');
+            div.textContent = text;
+            return div.innerHTML;
+        }
+
+        function formatDate(isoString) {
+            if (!isoString) return 'Unknown';
+            return new Date(isoString).toLocaleDateString();
+        }
+
+        // Event listeners
+        document.getElementById('create-general-btn').addEventListener('click', () => showCreateModal(false));
+        document.getElementById('create-page-btn').addEventListener('click', () => showCreateModal(true));
+        document.getElementById('page-specific').addEventListener('change', togglePageSpecificSection);
+        document.getElementById('modal-close').addEventListener('click', closeModal);
+        document.getElementById('modal-cancel').addEventListener('click', closeModal);
+        document.getElementById('modal-save').addEventListener('click', saveHelpContent);
+        
+        document.getElementById('logout-btn').addEventListener('click', async () => {
+            await signOut(auth);
+            window.location.href = 'auth.html';
+        });
+
+        // Initialize the app
+        initializeFirebase();
+    </script>
+</body>
+</html>

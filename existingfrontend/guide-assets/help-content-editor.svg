@@ -1,0 +1,30 @@
+<!-- Placeholder SVG for help content editor demo -->
+<svg width="500" height="350" xmlns="http://www.w3.org/2000/svg">
+  <rect width="500" height="350" fill="#ffffff" stroke="#e5e7eb" stroke-width="2"/>
+  
+  <!-- Header -->
+  <rect x="10" y="10" width="480" height="40" fill="#3b82f6"/>
+  <text x="250" y="35" text-anchor="middle" fill="white" font-family="Arial" font-size="16" font-weight="bold">Help Content Editor</text>
+  
+  <!-- Toolbar -->
+  <rect x="20" y="60" width="460" height="30" fill="#f3f4f6"/>
+  <circle cx="35" cy="75" r="8" fill="#6b7280"/>
+  <text x="35" y="79" text-anchor="middle" fill="white" font-family="Arial" font-size="10" font-weight="bold">B</text>
+  <circle cx="55" cy="75" r="8" fill="#6b7280"/>
+  <text x="55" y="79" text-anchor="middle" fill="white" font-family="Arial" font-size="10" font-style="italic">I</text>
+  <circle cx="75" cy="75" r="8" fill="#6b7280"/>
+  <text x="75" y="79" text-anchor="middle" fill="white" font-family="Arial" font-size="10" text-decoration="underline">U</text>
+  
+  <!-- Content Area -->
+  <rect x="20" y="100" width="460" height="200" fill="#ffffff" stroke="#d1d5db"/>
+  <text x="30" y="120" fill="#374151" font-family="Arial" font-size="14" font-weight="bold">Getting Started with Admin Tools</text>
+  <text x="30" y="140" fill="#6b7280" font-family="Arial" font-size="12">Welcome to the comprehensive admin interface...</text>
+  <text x="30" y="160" fill="#6b7280" font-family="Arial" font-size="12">This guide will help you navigate through:</text>
+  <text x="30" y="180" fill="#6b7280" font-family="Arial" font-size="12">• User management features</text>
+  <text x="30" y="200" fill="#6b7280" font-family="Arial" font-size="12">• Content creation tools</text>
+  <text x="30" y="220" fill="#6b7280" font-family="Arial" font-size="12">• System configuration options</text>
+  
+  <!-- Save Button -->
+  <rect x="380" y="310" width="100" height="30" fill="#10b981" rx="4"/>
+  <text x="430" y="330" text-anchor="middle" fill="white" font-family="Arial" font-size="12" font-weight="bold">Save Content</text>
+</svg>

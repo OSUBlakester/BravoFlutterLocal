@@ -1,0 +1,315 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Modular Avatar Creator - Professional Quality</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        .gradient-bg {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        
+        .component-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+            gap: 12px;
+        }
+        
+        .component-item {
+            aspect-ratio: 1;
+            border-radius: 12px;
+            border: 2px solid transparent;
+            background: white;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .component-item:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+        }
+        
+        .component-item.selected {
+            border-color: #3b82f6;
+            background: #eff6ff;
+        }
+        
+        .avatar-preview {
+            background: radial-gradient(circle, #f0f9ff 0%, #e0f2fe 100%);
+            border-radius: 20px;
+            padding: 20px;
+            box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+        }
+        
+        .color-palette {
+            display: grid;
+            grid-template-columns: repeat(8, 1fr);
+            gap: 8px;
+        }
+        
+        .color-option {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            cursor: pointer;
+            border: 2px solid transparent;
+            transition: all 0.2s ease;
+        }
+        
+        .color-option:hover {
+            transform: scale(1.1);
+        }
+        
+        .color-option.selected {
+            border-color: #374151;
+            transform: scale(1.15);
+        }
+        
+        .section-header {
+            background: linear-gradient(90deg, #3b82f6, #8b5cf6);
+            background-clip: text;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            font-weight: 700;
+        }
+        
+        .mood-selector {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 8px;
+        }
+        
+        .mood-option {
+            padding: 8px;
+            border-radius: 8px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            border: 2px solid transparent;
+        }
+        
+        .mood-option:hover {
+            background: #f3f4f6;
+        }
+        
+        .mood-option.selected {
+            background: #3b82f6;
+            color: white;
+            border-color: #2563eb;
+        }
+    </style>
+</head>
+<body class="gradient-bg min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <!-- Header -->
+        <div class="text-center mb-8">
+            <h1 class="text-4xl font-bold text-white mb-4">
+                <i class="fas fa-user-astronaut mr-3"></i>
+                Modular Avatar Creator
+            </h1>
+            <p class="text-white/80 text-lg">Build sophisticated avatars with professional building blocks</p>
+        </div>
+
+        <div class="grid lg:grid-cols-3 gap-8">
+            <!-- Avatar Preview -->
+            <div class="lg:col-span-1">
+                <div class="avatar-preview sticky top-8">
+                    <div class="text-center mb-4">
+                        <h2 class="text-xl font-semibold text-gray-800">Preview</h2>
+                    </div>
+                    
+                    <div id="avatar-preview" class="w-full h-80 flex items-center justify-center">
+                        <!-- Avatar SVG will be rendered here -->
+                        <svg id="avatar-svg" width="300" height="300" viewBox="0 0 300 300" xmlns="http://www.w3.org/2000/svg">
+                            <!-- Base head -->
+                            <g id="base-layer">
+                                <circle cx="150" cy="130" r="80" fill="#fdd8b5" stroke="#d4a574" stroke-width="2"/>
+                            </g>
+                            <!-- Component layers will be added dynamically -->
+                        </svg>
+                    </div>
+                    
+                    <!-- Quick Actions -->
+                    <div class="mt-6 space-y-3">
+                        <button id="randomize-btn" class="w-full bg-purple-600 hover:bg-purple-700 text-white py-2 px-4 rounded-lg transition-colors flex items-center justify-center">
+                            <i class="fas fa-random mr-2"></i>
+                            Randomize
+                        </button>
+                        <button id="save-btn" class="w-full bg-green-600 hover:bg-green-700 text-white py-2 px-4 rounded-lg transition-colors flex items-center justify-center">
+                            <i class="fas fa-download mr-2"></i>
+                            Save Avatar
+                        </button>
+                        <button id="emotions-btn" class="w-full bg-blue-600 hover:bg-blue-700 text-white py-2 px-4 rounded-lg transition-colors flex items-center justify-center">
+                            <i class="fas fa-smile mr-2"></i>
+                            Emotions
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Component Panels -->
+            <div class="lg:col-span-2 space-y-6">
+                
+                <!-- Face Components -->
+                <div class="bg-white/95 backdrop-blur-sm rounded-2xl p-6">
+                    <h3 class="section-header text-xl mb-4">
+                        <i class="fas fa-user mr-2"></i>
+                        Face Structure
+                    </h3>
+                    
+                    <div class="grid md:grid-cols-2 gap-6">
+                        <!-- Face Shape -->
+                        <div>
+                            <h4 class="font-semibold mb-3 text-gray-700">Face Shape</h4>
+                            <div class="component-grid" id="face-shape-grid">
+                                <!-- Face shapes will be populated by JavaScript -->
+                            </div>
+                        </div>
+                        
+                        <!-- Skin Tone -->
+                        <div>
+                            <h4 class="font-semibold mb-3 text-gray-700">Skin Tone</h4>
+                            <div class="color-palette" id="skin-tone-palette">
+                                <!-- Skin tones will be populated by JavaScript -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Hair Components -->
+                <div class="bg-white/95 backdrop-blur-sm rounded-2xl p-6">
+                    <h3 class="section-header text-xl mb-4">
+                        <i class="fas fa-cut mr-2"></i>
+                        Hair & Style
+                    </h3>
+                    
+                    <div class="grid md:grid-cols-2 gap-6">
+                        <!-- Hair Style -->
+                        <div>
+                            <h4 class="font-semibold mb-3 text-gray-700">Hair Style</h4>
+                            <div class="component-grid" id="hair-style-grid">
+                                <!-- Hair styles will be populated by JavaScript -->
+                            </div>
+                        </div>
+                        
+                        <!-- Hair Color -->
+                        <div>
+                            <h4 class="font-semibold mb-3 text-gray-700">Hair Color</h4>
+                            <div class="color-palette" id="hair-color-palette">
+                                <!-- Hair colors will be populated by JavaScript -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Facial Features -->
+                <div class="bg-white/95 backdrop-blur-sm rounded-2xl p-6">
+                    <h3 class="section-header text-xl mb-4">
+                        <i class="fas fa-eye mr-2"></i>
+                        Facial Features
+                    </h3>
+                    
+                    <div class="grid md:grid-cols-3 gap-6">
+                        <!-- Eyes -->
+                        <div>
+                            <h4 class="font-semibold mb-3 text-gray-700">Eyes</h4>
+                            <div class="component-grid" id="eyes-grid">
+                                <!-- Eye styles will be populated by JavaScript -->
+                            </div>
+                        </div>
+                        
+                        <!-- Nose -->
+                        <div>
+                            <h4 class="font-semibold mb-3 text-gray-700">Nose</h4>
+                            <div class="component-grid" id="nose-grid">
+                                <!-- Nose styles will be populated by JavaScript -->
+                            </div>
+                        </div>
+                        
+                        <!-- Mouth -->
+                        <div>
+                            <h4 class="font-semibold mb-3 text-gray-700">Mouth</h4>
+                            <div class="component-grid" id="mouth-grid">
+                                <!-- Mouth styles will be populated by JavaScript -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Accessories -->
+                <div class="bg-white/95 backdrop-blur-sm rounded-2xl p-6">
+                    <h3 class="section-header text-xl mb-4">
+                        <i class="fas fa-glasses mr-2"></i>
+                        Accessories & Details
+                    </h3>
+                    
+                    <div class="grid md:grid-cols-3 gap-6">
+                        <!-- Glasses -->
+                        <div>
+                            <h4 class="font-semibold mb-3 text-gray-700">Glasses</h4>
+                            <div class="component-grid" id="glasses-grid">
+                                <!-- Glasses will be populated by JavaScript -->
+                            </div>
+                        </div>
+                        
+                        <!-- Accessories -->
+                        <div>
+                            <h4 class="font-semibold mb-3 text-gray-700">Accessories</h4>
+                            <div class="component-grid" id="accessories-grid">
+                                <!-- Accessories will be populated by JavaScript -->
+                            </div>
+                        </div>
+                        
+                        <!-- Clothing -->
+                        <div>
+                            <h4 class="font-semibold mb-3 text-gray-700">Clothing</h4>
+                            <div class="component-grid" id="clothing-grid">
+                                <!-- Clothing will be populated by JavaScript -->
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Emotion Controls -->
+                <div id="emotion-panel" class="bg-white/95 backdrop-blur-sm rounded-2xl p-6" style="display: none;">
+                    <h3 class="section-header text-xl mb-4">
+                        <i class="fas fa-theater-masks mr-2"></i>
+                        Emotional Expressions
+                    </h3>
+                    
+                    <div class="mood-selector">
+                        <!-- Emotion options will be populated by JavaScript -->
+                    </div>
+                </div>
+
+            </div>
+        </div>
+
+        <!-- Collections Modal -->
+        <div id="collections-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4" style="display: none;">
+            <div class="bg-white rounded-2xl max-w-4xl w-full max-h-[80vh] overflow-y-auto">
+                <div class="p-6">
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="text-2xl font-bold">Avatar Collections</h3>
+                        <button id="close-modal" class="text-gray-500 hover:text-gray-700">
+                            <i class="fas fa-times text-xl"></i>
+                        </button>
+                    </div>
+                    <div id="collections-grid" class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        <!-- Collections will be populated here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/modular-avatar-creator.js"></script>
+</body>
+</html>

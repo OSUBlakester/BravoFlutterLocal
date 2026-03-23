@@ -1,0 +1,1273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tap Interface Admin - Fixed</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background-color: #f5f5f5;
+            color: #333;
+        }
+
+        .header {
+            background-color: #2c3e50;
+            color: white;
+            padding: 1rem 2rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header h1 {
+            margin: 0;
+            font-size: 1.5rem;
+        }
+
+        .header .subtitle {
+            font-size: 0.9rem;
+            opacity: 0.8;
+            margin-top: 0.25rem;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        .changes-indicator {
+            padding: 0.5rem 1rem;
+            border-radius: 4px;
+            font-size: 0.9rem;
+            display: none;
+        }
+
+        .changes-indicator.unsaved {
+            background-color: #f39c12;
+            color: white;
+            display: block;
+        }
+
+        .btn {
+            padding: 0.75rem 1.5rem;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            text-decoration: none;
+            display: inline-block;
+            transition: all 0.2s;
+        }
+
+        .btn:hover {
+            transform: translateY(-1px);
+        }
+
+        .btn-primary {
+            background-color: #3498db;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background-color: #2980b9;
+        }
+
+        .btn-success {
+            background-color: #27ae60;
+            color: white;
+        }
+
+        .btn-success:hover {
+            background-color: #229954;
+        }
+
+        .btn-secondary {
+            background-color: #95a5a6;
+            color: white;
+        }
+
+        .btn-secondary:hover {
+            background-color: #7f8c8d;
+        }
+
+        .btn-danger {
+            background-color: #e74c3c;
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background-color: #c0392b;
+        }
+
+        .main-container {
+            display: flex;
+            height: calc(100vh - 80px);
+        }
+
+        .sidebar {
+            width: 350px;
+            background-color: white;
+            border-right: 1px solid #ddd;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+
+        .tree-section {
+            flex: 1;
+            padding: 1rem;
+            overflow-y: auto;
+        }
+
+        .tree-section h3 {
+            margin-bottom: 1rem;
+            color: #2c3e50;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 0.5rem;
+        }
+
+        .tree-container {
+            min-height: 300px;
+        }
+
+        .tree-item {
+            margin: 0.5rem 0;
+            position: relative;
+        }
+
+        .tree-button {
+            display: flex;
+            align-items: center;
+            padding: 0.75rem;
+            background-color: #f8f9fa;
+            border: 2px solid #e9ecef;
+            border-radius: 6px;
+            cursor: pointer;
+            transition: all 0.2s;
+            word-wrap: break-word;
+            min-height: 60px;
+            margin-left: var(--depth, 0px);
+        }
+
+        .tree-button:hover {
+            border-color: #3498db;
+            background-color: #e3f2fd;
+        }
+
+        .tree-button.selected {
+            border-color: #2ecc71;
+            background-color: #d5f4e6;
+        }
+
+        .tree-button.dragging {
+            opacity: 0.5;
+            transform: rotate(5deg);
+        }
+
+        .tree-button.drag-over {
+            border-color: #007bff;
+            background-color: #e3f2fd;
+            box-shadow: 0 0 0 2px rgba(0, 123, 255, 0.25);
+        }        .button-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .button-label {
+            font-weight: 600;
+            font-size: 0.95rem;
+            margin-bottom: 0.25rem;
+        }
+
+        .button-details {
+            font-size: 0.8rem;
+            color: #7f8c8d;
+        }
+
+        .button-actions {
+            display: flex;
+            gap: 0.5rem;
+            margin-left: 0.5rem;
+        }
+
+        .btn-small {
+            padding: 0.25rem 0.5rem;
+            font-size: 0.75rem;
+            border-radius: 3px;
+        }
+
+        .add-button {
+            margin: 1rem 0;
+            text-align: center;
+        }
+
+        .content-area {
+            flex: 1;
+            background-color: white;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+
+        .content-header {
+            padding: 1.5rem 2rem 1rem;
+            border-bottom: 1px solid #eee;
+            background-color: #f8f9fa;
+        }
+
+        .content-header h2 {
+            margin: 0;
+            color: #2c3e50;
+        }
+
+        .content-header p {
+            margin: 0.5rem 0 0;
+            color: #7f8c8d;
+            font-size: 0.9rem;
+        }
+
+        .form-container {
+            padding: 2rem;
+            flex: 1;
+        }
+
+        .form-group {
+            margin-bottom: 1.5rem;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 0.5rem;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        .form-group input,
+        .form-group textarea {
+            width: 100%;
+            padding: 0.75rem;
+            border: 2px solid #e9ecef;
+            border-radius: 4px;
+            font-size: 0.9rem;
+            transition: border-color 0.2s;
+        }
+
+        .form-group input:focus,
+        .form-group textarea:focus {
+            outline: none;
+            border-color: #3498db;
+        }
+
+        .form-group textarea {
+            resize: vertical;
+            min-height: 100px;
+        }
+
+        .color-input-container {
+            display: flex;
+            gap: 0.5rem;
+            align-items: center;
+        }
+
+        .color-input {
+            width: 50px;
+            height: 40px;
+            padding: 0;
+            border: 2px solid #e9ecef;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        .form-actions {
+            display: flex;
+            gap: 1rem;
+            margin-top: 2rem;
+            padding-top: 1rem;
+            border-top: 1px solid #eee;
+        }
+
+        .notification {
+            position: fixed;
+            top: 1rem;
+            right: 1rem;
+            padding: 1rem 1.5rem;
+            border-radius: 6px;
+            color: white;
+            font-weight: 600;
+            z-index: 1000;
+            transform: translateX(400px);
+            transition: transform 0.3s ease;
+        }
+
+        .notification.show {
+            transform: translateX(0);
+        }
+
+        .notification.success {
+            background-color: #27ae60;
+        }
+
+        .notification.error {
+            background-color: #e74c3c;
+        }
+
+        .welcome-message {
+            text-align: center;
+            padding: 3rem 2rem;
+            color: #7f8c8d;
+        }
+
+        .welcome-message h3 {
+            margin-bottom: 1rem;
+            color: #2c3e50;
+        }
+
+        .root-drop-zone {
+            min-height: 20px;
+            margin-bottom: 1rem;
+            padding: 10px;
+            border: 2px dashed #ccc;
+            border-radius: 4px;
+            text-align: center;
+            color: #999;
+            display: none;
+            transition: all 0.2s;
+        }
+
+        .root-drop-zone.show {
+            display: block;
+        }
+
+        .root-drop-zone.drag-over {
+            border-color: #3498db;
+            background-color: rgba(52, 152, 219, 0.1);
+            color: #2980b9;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div>
+            <h1>Tap Interface Admin</h1>
+            <div class="subtitle">Configure navigation buttons for the tap interface</div>
+        </div>
+        <div class="header-actions">
+            <div class="changes-indicator" id="changesIndicator">
+                ⚠️ Unsaved Changes
+            </div>
+                        <button class="btn btn-success" id="saveBtn" disabled>
+                Save Changes
+            </button>
+            <button class="btn btn-secondary" id="cancelBtn" disabled>
+                Cancel Changes
+            </button>
+        </div>
+    </div>
+
+    <div class="main-container">
+        <div class="sidebar">
+            <div class="tree-section">
+                <h3>Navigation Structure</h3>
+                <div class="root-drop-zone" id="rootDropZone">
+                    Drop here to move to root level
+                </div>
+                <div class="tree-container" id="treeContainer">
+                    <!-- Tree will be rendered here -->
+                </div>
+                <div class="add-button">
+                    <button class="btn btn-primary" id="addNewButtonBtn">
+                        + Add New Button
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="content-area">
+            <div class="content-header">
+                <h2 id="contentTitle">Select a button to edit</h2>
+                <p id="contentDescription">Choose a button from the navigation structure to modify its properties.</p>
+            </div>
+            
+            <div class="form-container">
+                <div id="welcomeMessage" class="welcome-message">
+                    <h3>Welcome to Tap Interface Admin</h3>
+                    <p>Select a button from the navigation tree on the left to start editing, or add a new button to get started.</p>
+                    <p><strong>Drag & Drop:</strong></p>
+                    <ul style="text-align: left; max-width: 500px; margin: 0 auto;">
+                        <li>Drag button onto another button to <strong>reorder</strong> (insert after)</li>
+                        <li>Hold <strong>Shift</strong> while dropping to make it a <strong>child button</strong></li>
+                        <li>Drop on root zone to move button to <strong>top level</strong></li>
+                    </ul>
+                </div>
+
+                <div id="buttonForm" style="display: none;">
+                    <form id="editForm" onsubmit="return false;">
+                        <div class="form-group">
+                            <label for="buttonLabel">Button Label *</label>
+                            <input type="text" id="buttonLabel" name="label" required placeholder="Enter button text">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="speechText">Speech Text (Optional)</label>
+                            <input type="text" id="speechText" name="speechText" placeholder="Text to speak (if different from label)">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="imageUrl">Image URL (Optional)</label>
+                            <input type="url" id="imageUrl" name="imageUrl" placeholder="https://example.com/icon.png">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="backgroundColor">Background Color</label>
+                            <div class="color-input-container">
+                                <input type="color" id="backgroundColor" name="backgroundColor" class="color-input" value="#FFFFFF">
+                                <input type="text" id="backgroundColorText" placeholder="#FFFFFF" style="flex: 1;">
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="textColor">Text Color</label>
+                            <div class="color-input-container">
+                                <input type="color" id="textColor" name="textColor" class="color-input" value="#000000">
+                                <input type="text" id="textColorText" placeholder="#000000" style="flex: 1;">
+                            </div>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="llmPrompt">LLM Prompt (Optional)</label>
+                            <textarea id="llmPrompt" name="llmPrompt" placeholder="Enter prompt for AI to generate child buttons (e.g., 'Generate greeting phrases for social interactions')"></textarea>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="staticOptions">Static Options (Optional)</label>
+                            <textarea id="staticOptions" name="staticOptions" placeholder="Enter comma-separated list of options (e.g., 'Hello, Hi there, Good morning, How are you')"></textarea>
+                            <small class="form-text text-muted">Use either LLM Prompt OR Static Options, not both. Static options will override LLM prompt if provided.</small>
+                        </div>
+
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-danger" id="deleteButtonBtn">Delete Button</button>
+                            <button type="button" class="btn btn-primary" id="addChildButtonBtn">Add Child Button</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification area -->
+    <div id="notification" class="notification"></div>
+
+    <script>
+        let currentConfig = null;
+        let originalConfig = null;  // Store original for cancel functionality
+        let selectedButton = null;
+        let hasUnsavedChanges = false;
+
+        // Initialize on page load - wait for Firebase to be ready
+        document.addEventListener('DOMContentLoaded', function() {
+            // Initialize Firebase first, then start authentication
+            initializeFirebaseAndAuth();
+            setupColorInputs();
+            setupFormInputs();
+            setupDragAndDrop();
+            setupButtonEventListeners();
+        });
+
+        // Initialize Firebase authentication and then check auth
+        async function initializeFirebaseAndAuth() {
+            try {
+                console.log('Initializing Firebase...');
+                
+                // 1. Fetch Firebase config dynamically
+                let firebaseConfig;
+                try {
+                    const configResponse = await fetch('/api/frontend-config');
+                    const configData = await configResponse.json();
+                    firebaseConfig = configData.firebase_config || configData;
+                    if (!firebaseConfig || !firebaseConfig.apiKey) throw new Error('Invalid config from server.');
+                } catch (error) {
+                    console.error('Failed to fetch Firebase config from server:', error);
+                    showError('Failed to load Firebase configuration.');
+                    return;
+                }
+
+                // 2. Initialize Firebase
+                firebase.initializeApp(firebaseConfig);
+                console.log(`Firebase initialized for project: ${firebaseConfig.projectId}`);
+                
+                // 3. Now check authentication
+                checkAuthentication();
+            } catch (error) {
+                console.error('Firebase initialization failed:', error);
+                showError('Firebase initialization failed: ' + error.message);
+            }
+        }
+
+        // Check if user is authenticated (called after Firebase is initialized)
+        function checkAuthentication() {
+            console.log('Checking authentication...');
+            
+            firebase.auth().onAuthStateChanged(async (user) => {
+                if (user) {
+                    const currentAacUserId = sessionStorage.getItem("currentAacUserId");
+                    const tokenFromUser = await user.getIdToken();
+                    sessionStorage.setItem("firebaseIdToken", tokenFromUser);
+
+                    if (!currentAacUserId) {
+                        console.warn("No AAC User ID found in session. Redirecting to auth page for user selection.");
+                        window.location.href = 'auth.html';
+                        return;
+                    }
+
+                    // Set up global variables for authentication
+                    window.currentAacUserId = currentAacUserId;
+                    window.authToken = tokenFromUser;
+                    
+                    console.log('Authentication successful, user ID:', currentAacUserId);
+                    
+                    // Load configuration after authentication
+                    loadConfiguration();
+                } else {
+                    console.log("User not logged in, redirecting to auth page");
+                    window.location.href = '/auth.html?redirect=' + encodeURIComponent(window.location.pathname);
+                }
+            });
+        }
+
+        // Get auth headers for API calls (same pattern as admin_pages.html)
+        function getAuthHeaders() {
+            const headers = {
+                'Content-Type': 'application/json'
+            };
+            
+            if (window.authToken) {
+                headers['Authorization'] = `Bearer ${window.authToken}`;
+            }
+            
+            if (window.currentAacUserId) {
+                headers['X-User-ID'] = window.currentAacUserId;
+            }
+            
+            // Handle admin context if present
+            const adminTargetAccountId = sessionStorage.getItem('adminTargetAccountId');
+            if (adminTargetAccountId) {
+                headers['X-Admin-Target-Account'] = adminTargetAccountId;
+            }
+            
+            return headers;
+        }
+
+        // Track changes state
+        function markAsChanged() {
+            hasUnsavedChanges = true;
+            updateUI();
+        }
+
+        function markAsSaved() {
+            hasUnsavedChanges = false;
+            updateUI();
+        }
+
+        function updateUI() {
+            const saveBtn = document.getElementById('saveBtn');
+            const cancelBtn = document.getElementById('cancelBtn');
+            const indicator = document.getElementById('changesIndicator');
+
+            if (hasUnsavedChanges) {
+                saveBtn.disabled = false;
+                cancelBtn.disabled = false;
+                indicator.classList.add('unsaved');
+            } else {
+                saveBtn.disabled = true;
+                cancelBtn.disabled = true;
+                indicator.classList.remove('unsaved');
+            }
+        }
+
+        // Load configuration from server
+        async function loadConfiguration() {
+            if (!window.currentAacUserId) {
+                console.log('No authenticated user, skipping configuration load');
+                return;
+            }
+
+            try {
+                console.log('Loading configuration for user:', window.currentAacUserId);
+                const response = await fetch('/api/tap-interface/config', {
+                    headers: getAuthHeaders()
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const config = await response.json();
+                currentConfig = JSON.parse(JSON.stringify(config));
+                originalConfig = JSON.parse(JSON.stringify(config)); // Deep copy
+                markAsSaved();
+                renderTree();
+                showSuccess('Configuration loaded successfully!');
+            } catch (error) {
+                console.error('Error loading configuration:', error);
+                showError('Failed to load configuration: ' + error.message);
+            }
+        }
+
+        // Save changes to server
+        async function saveChanges() {
+            if (!currentConfig || !hasUnsavedChanges) {
+                console.log('Cannot save: missing config or no changes');
+                return;
+            }
+
+            // Prevent double-clicking
+            const saveButton = document.querySelector('.save-btn');
+            if (saveButton && saveButton.disabled) {
+                console.log('Save already in progress');
+                return;
+            }
+            if (saveButton) {
+                saveButton.disabled = true;
+                saveButton.textContent = 'Saving...';
+            }
+
+            try {
+                console.log('Saving configuration for user:', window.currentAacUserId);
+                
+                // Refresh Firebase token before save to ensure it's valid
+                const user = firebase.auth().currentUser;
+                if (user) {
+                    window.authToken = await user.getIdToken(true); // Force refresh
+                }
+                
+                const headers = getAuthHeaders();
+                console.log('Auth headers:', headers);
+                console.log('Config being sent:', JSON.stringify(currentConfig, null, 2));
+                
+                const response = await fetch('/api/tap-interface/config', {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify(currentConfig)
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error('Full error response:', errorText);
+                    throw new Error(`HTTP ${response.status}: ${response.statusText} - ${errorText}`);
+                }
+
+                // Update original config to match current
+                originalConfig = JSON.parse(JSON.stringify(currentConfig));
+                markAsSaved();
+                showSuccess('Configuration saved successfully!');
+            } catch (error) {
+                console.error('Error saving configuration:', error);
+                showError('Failed to save configuration: ' + error.message);
+            } finally {
+                // Re-enable the save button
+                const saveButton = document.querySelector('.save-btn');
+                if (saveButton) {
+                    saveButton.disabled = false;
+                    saveButton.textContent = 'Save Changes';
+                }
+            }
+        }
+
+        // Cancel changes and revert to original
+        function cancelChanges() {
+            if (!hasUnsavedChanges) {
+                return;
+            }
+
+            if (confirm('Are you sure you want to discard all unsaved changes?')) {
+                currentConfig = JSON.parse(JSON.stringify(originalConfig));
+                selectedButton = null;
+                markAsSaved();
+                renderTree();
+                cancelEdit();
+                showSuccess('Changes canceled successfully!');
+            }
+        }
+
+        // Setup button event listeners
+        function setupButtonEventListeners() {
+            // Add New Button
+            const addNewBtn = document.getElementById('addNewButtonBtn');
+            if (addNewBtn) {
+                addNewBtn.addEventListener('click', addNewButton);
+            }
+
+            // Delete Button
+            const deleteBtn = document.getElementById('deleteButtonBtn');
+            if (deleteBtn) {
+                deleteBtn.addEventListener('click', deleteButton);
+            }
+
+            // Add Child Button
+            const addChildBtn = document.getElementById('addChildButtonBtn');
+            if (addChildBtn) {
+                addChildBtn.addEventListener('click', addChildButton);
+            }
+
+            // Save Changes Button
+            const saveBtn = document.getElementById('saveBtn');
+            if (saveBtn) {
+                saveBtn.addEventListener('click', saveChanges);
+            }
+
+            // Cancel Changes Button
+            const cancelBtn = document.getElementById('cancelBtn');
+            if (cancelBtn) {
+                cancelBtn.addEventListener('click', cancelChanges);
+            }
+        }
+
+        // Setup color input synchronization
+        function setupColorInputs() {
+            const bgColor = document.getElementById('backgroundColor');
+            const bgColorText = document.getElementById('backgroundColorText');
+            const textColor = document.getElementById('textColor');
+            const textColorText = document.getElementById('textColorText');
+
+            bgColor.addEventListener('input', () => {
+                bgColorText.value = bgColor.value;
+                updateButtonFromForm();
+            });
+
+            bgColorText.addEventListener('input', () => {
+                if (/^#[0-9A-Fa-f]{6}$/.test(bgColorText.value)) {
+                    bgColor.value = bgColorText.value;
+                }
+                updateButtonFromForm();
+            });
+
+            textColor.addEventListener('input', () => {
+                textColorText.value = textColor.value;
+                updateButtonFromForm();
+            });
+
+            textColorText.addEventListener('input', () => {
+                if (/^#[0-9A-Fa-f]{6}$/.test(textColorText.value)) {
+                    textColor.value = textColorText.value;
+                }
+                updateButtonFromForm();
+            });
+        }
+
+        // Setup form input listeners
+        function setupFormInputs() {
+            const inputs = ['buttonLabel', 'speechText', 'imageUrl', 'llmPrompt', 'staticOptions'];
+            inputs.forEach(id => {
+                document.getElementById(id).addEventListener('input', updateButtonFromForm);
+            });
+        }
+
+        // Update button from form values
+        function updateButtonFromForm() {
+            if (!selectedButton) return;
+
+            const button = getButtonByPath(selectedButton.path);
+            if (!button) return;
+
+            button.label = document.getElementById('buttonLabel').value || 'Untitled Button';
+            button.speech_text = document.getElementById('speechText').value || null;
+            button.image_url = document.getElementById('imageUrl').value || null;
+            button.background_color = document.getElementById('backgroundColor').value || '#FFFFFF';
+            button.text_color = document.getElementById('textColor').value || '#000000';
+            button.llm_prompt = document.getElementById('llmPrompt').value || null;
+            button.static_options = document.getElementById('staticOptions').value || null;
+
+            markAsChanged();
+            renderTree();
+        }
+
+        // Render the navigation tree
+        function renderTree() {
+            const container = document.getElementById('treeContainer');
+            if (!currentConfig || !currentConfig.buttons) {
+                container.innerHTML = '<div style="text-align: center; color: #7f8c8d; padding: 2rem;">No buttons configured</div>';
+                return;
+            }
+
+            container.innerHTML = '';
+            currentConfig.buttons.forEach((button, index) => {
+                renderButton(button, [index], container, 0);
+            });
+        }
+
+        // Render individual button in tree
+        function renderButton(button, path, container, depth) {
+            const buttonDiv = document.createElement('div');
+            buttonDiv.className = 'tree-item';
+            buttonDiv.style.setProperty('--depth', `${depth * 20}px`);
+
+            const isSelected = selectedButton && JSON.stringify(selectedButton.path) === JSON.stringify(path);
+            
+            buttonDiv.innerHTML = `
+                <div class="tree-button ${isSelected ? 'selected' : ''}" 
+                     draggable="true" 
+                     data-path='${JSON.stringify(path)}'>
+                    <div class="button-content">
+                        <div class="button-label">${button.label || 'Untitled Button'}</div>
+                        <div class="button-details">
+                            ${button.children && button.children.length ? `${button.children.length} child button(s)` : 'No children'}
+                            ${button.llm_prompt ? ' • Has LLM prompt' : ''}
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Add click event listener to the button
+            const buttonElement = buttonDiv.querySelector('.tree-button');
+            buttonElement.addEventListener('click', (e) => {
+                e.stopPropagation();
+                selectButton(path);
+            });
+
+            container.appendChild(buttonDiv);
+
+            // Render children (no drop zones needed)
+            if (button.children && button.children.length > 0) {
+                button.children.forEach((child, index) => {
+                    renderButton(child, [...path, index], container, depth + 1);
+                });
+            }
+        }
+
+        // Setup drag and drop functionality
+        function setupDragAndDrop() {
+            let draggedPath = null;
+
+            // Handle drag start
+            document.addEventListener('dragstart', (e) => {
+                if (e.target.closest('.tree-button')) {
+                    const path = JSON.parse(e.target.closest('.tree-button').dataset.path);
+                    draggedPath = path;
+                    e.target.closest('.tree-button').classList.add('dragging');
+                    e.dataTransfer.setData('text/plain', JSON.stringify(path));
+                    
+                    // Show root drop zone
+                    document.getElementById('rootDropZone').classList.add('show');
+                }
+            });
+
+            // Handle drag end
+            document.addEventListener('dragend', (e) => {
+                if (e.target.closest('.tree-button')) {
+                    e.target.closest('.tree-button').classList.remove('dragging');
+                    document.getElementById('rootDropZone').classList.remove('show');
+                    
+                    // Remove all drag-over highlighting
+                    document.querySelectorAll('.tree-button.drag-over').forEach(el => {
+                        el.classList.remove('drag-over');
+                    });
+                    
+                    draggedPath = null;
+                }
+            });
+
+            // Handle drag over for buttons and root zone
+            document.addEventListener('dragover', (e) => {
+                const treeButton = e.target.closest('.tree-button');
+                const rootDropZone = e.target.id === 'rootDropZone';
+                
+                if (treeButton || rootDropZone) {
+                    e.preventDefault();
+                    
+                    if (treeButton && !treeButton.classList.contains('dragging')) {
+                        // Remove drag-over from all other buttons
+                        document.querySelectorAll('.tree-button.drag-over').forEach(el => {
+                            if (el !== treeButton) el.classList.remove('drag-over');
+                        });
+                        treeButton.classList.add('drag-over');
+                    } else if (rootDropZone) {
+                        e.target.classList.add('drag-over');
+                    }
+                }
+            });
+
+            // Handle drag leave
+            document.addEventListener('dragleave', (e) => {
+                const treeButton = e.target.closest('.tree-button');
+                const rootDropZone = e.target.id === 'rootDropZone';
+                
+                if (treeButton) {
+                    treeButton.classList.remove('drag-over');
+                } else if (rootDropZone) {
+                    e.target.classList.remove('drag-over');
+                }
+            });
+
+            // Handle drop
+            document.addEventListener('drop', (e) => {
+                e.preventDefault();
+                
+                // Remove all drag-over highlighting
+                document.querySelectorAll('.tree-button.drag-over').forEach(el => {
+                    el.classList.remove('drag-over');
+                });
+                document.getElementById('rootDropZone').classList.remove('drag-over');
+
+                if (!draggedPath) return;
+
+                try {
+                    // Handle root drop zone
+                    if (e.target.id === 'rootDropZone') {
+                        handleRootDrop(draggedPath);
+                        return;
+                    }
+
+                    // Handle drop on button - either reorder or make child
+                    const targetButton = e.target.closest('.tree-button');
+                    if (targetButton && !targetButton.classList.contains('dragging')) {
+                        const targetPath = JSON.parse(targetButton.dataset.path);
+                        
+                        // Check if holding shift key to force child relationship
+                        if (e.shiftKey) {
+                            handleDropAsChild(draggedPath, targetPath);
+                        } else {
+                            // Default: reorder (insert after)
+                            handleDropForReorder(draggedPath, targetPath);
+                        }
+                    }
+                } catch (error) {
+                    console.error('Drop error:', error);
+                    showError('Failed to move button: ' + error.message);
+                }
+            });
+        }
+
+        // Handle dropping button on root zone
+        function handleRootDrop(sourcePath) {
+            const button = getButtonByPath(sourcePath);
+            if (!button) {
+                showError('Source button not found');
+                return;
+            }
+
+            // Don't move if already at root level
+            if (sourcePath.length === 1) {
+                showSuccess('Button is already at root level');
+                return;
+            }
+
+            // Create a copy of the button
+            const buttonCopy = JSON.parse(JSON.stringify(button));
+
+            // Remove from source
+            removeButtonFromPath(sourcePath);
+
+            // Add to root
+            currentConfig.buttons.push(buttonCopy);
+
+            // Update selection if needed
+            if (selectedButton && JSON.stringify(selectedButton.path) === JSON.stringify(sourcePath)) {
+                selectedButton = { path: [currentConfig.buttons.length - 1] };
+            }
+
+            markAsChanged();
+            renderTree();
+            showSuccess('Button moved to root level');
+        }
+
+        // Handle dropping button for reordering (insert after target)
+        function handleDropForReorder(sourcePath, targetPath) {
+            const sourceButton = getButtonByPath(sourcePath);
+            if (!sourceButton) {
+                showError('Source button not found');
+                return;
+            }
+
+            // Don't drop on itself or its children
+            if (isChildPath(targetPath, sourcePath) || JSON.stringify(sourcePath) === JSON.stringify(targetPath)) {
+                showError('Cannot move button to itself or its children');
+                return;
+            }
+
+            // Create copy of button
+            const buttonCopy = JSON.parse(JSON.stringify(sourceButton));
+
+            // Remove from source (adjust target path if needed)
+            const adjustedTargetPath = adjustPathAfterRemoval(targetPath, sourcePath);
+            removeButtonFromPath(sourcePath);
+
+            // Insert after adjusted target
+            insertAfterPath(buttonCopy, adjustedTargetPath);
+
+            markAsChanged();
+            renderTree();
+            showSuccess('Button reordered successfully');
+        }
+
+        // Handle dropping button as child
+        function handleDropAsChild(sourcePath, targetPath) {
+            const sourceButton = getButtonByPath(sourcePath);
+            const targetButton = getButtonByPath(targetPath);
+            
+            if (!sourceButton || !targetButton) {
+                showError('Source or target button not found');
+                return;
+            }
+
+            // Don't drop on itself or its children
+            if (isChildPath(targetPath, sourcePath) || JSON.stringify(sourcePath) === JSON.stringify(targetPath)) {
+                showError('Cannot move button to itself or its children');
+                return;
+            }
+
+            // Create copy of button
+            const buttonCopy = JSON.parse(JSON.stringify(sourceButton));
+
+            // Remove from source
+            removeButtonFromPath(sourcePath);
+
+            // Add as child to target
+            if (!targetButton.children) {
+                targetButton.children = [];
+            }
+            targetButton.children.push(buttonCopy);
+
+            markAsChanged();
+            renderTree();
+            showSuccess('Button moved as child (hold Shift to make child, otherwise reorders)');
+        }
+
+        // Utility functions for path manipulation
+        function getButtonByPath(path) {
+            if (!Array.isArray(path)) {
+                return null;
+            }
+            
+            let current = { buttons: currentConfig.buttons };
+            
+            for (let i = 0; i < path.length; i++) {
+                // Use 'buttons' for root level, 'children' for nested levels
+                const buttonArray = i === 0 ? current.buttons : current.children;
+                
+                if (!buttonArray || !buttonArray[path[i]]) {
+                    return null;
+                }
+                
+                if (i === path.length - 1) {
+                    return buttonArray[path[i]];
+                }
+                current = buttonArray[path[i]];
+            }
+            return null;
+        }
+
+        function removeButtonFromPath(path) {
+            if (path.length === 1) {
+                currentConfig.buttons.splice(path[0], 1);
+                return;
+            }
+
+            const parentPath = path.slice(0, -1);
+            const parent = getButtonByPath(parentPath);
+            if (parent && parent.children) {
+                parent.children.splice(path[path.length - 1], 1);
+            }
+        }
+
+        function insertAfterPath(button, afterPath) {
+            if (afterPath.length === 1) {
+                currentConfig.buttons.splice(afterPath[0] + 1, 0, button);
+                return;
+            }
+
+            const parentPath = afterPath.slice(0, -1);
+            const parent = getButtonByPath(parentPath);
+            if (parent) {
+                if (!parent.children) parent.children = [];
+                parent.children.splice(afterPath[afterPath.length - 1] + 1, 0, button);
+            }
+        }
+
+        function adjustPathAfterRemoval(targetPath, removedPath) {
+            // If target and removed are at same level, adjust index if needed
+            if (targetPath.length === removedPath.length) {
+                const targetCopy = [...targetPath];
+                
+                // Check if they share the same parent path
+                const sameParent = targetPath.slice(0, -1).every((val, i) => val === removedPath[i]);
+                
+                if (sameParent) {
+                    const targetIndex = targetPath[targetPath.length - 1];
+                    const removedIndex = removedPath[removedPath.length - 1];
+                    
+                    if (targetIndex > removedIndex) {
+                        targetCopy[targetCopy.length - 1] = targetIndex - 1;
+                    }
+                }
+                
+                return targetCopy;
+            }
+            
+            return targetPath;
+        }
+
+        function isChildPath(childPath, parentPath) {
+            if (childPath.length <= parentPath.length) return false;
+            
+            for (let i = 0; i < parentPath.length; i++) {
+                if (childPath[i] !== parentPath[i]) return false;
+            }
+            
+            return true;
+        }
+
+        function pathsEqual(path1, path2) {
+            if (!path1 || !path2 || path1.length !== path2.length) return false;
+            return path1.every((val, i) => val === path2[i]);
+        }
+
+        // Button editing functions
+        function selectButton(path) {
+            selectedButton = { path };
+            const button = getButtonByPath(path);
+            
+            if (button) {
+                showButtonForm(button);
+                renderTree(); // Re-render to update selection highlight
+            }
+        }
+
+        function showButtonForm(button) {
+            document.getElementById('welcomeMessage').style.display = 'none';
+            document.getElementById('buttonForm').style.display = 'block';
+            
+            document.getElementById('contentTitle').textContent = 'Edit Button: ' + (button.label || 'Untitled Button');
+            document.getElementById('contentDescription').textContent = 'Modify the properties of the selected button.';
+
+            // Populate form
+            document.getElementById('buttonLabel').value = button.label || '';
+            document.getElementById('speechText').value = button.speech_text || '';
+            document.getElementById('imageUrl').value = button.image_url || '';
+            document.getElementById('backgroundColor').value = button.background_color || '#FFFFFF';
+            document.getElementById('backgroundColorText').value = button.background_color || '#FFFFFF';
+            document.getElementById('textColor').value = button.text_color || '#000000';
+            document.getElementById('textColorText').value = button.text_color || '#000000';
+            document.getElementById('llmPrompt').value = button.llm_prompt || '';
+            document.getElementById('staticOptions').value = button.static_options || '';
+        }
+
+        function cancelEdit() {
+            selectedButton = null;
+            document.getElementById('welcomeMessage').style.display = 'block';
+            document.getElementById('buttonForm').style.display = 'none';
+            document.getElementById('contentTitle').textContent = 'Select a button to edit';
+            document.getElementById('contentDescription').textContent = 'Choose a button from the navigation structure to modify its properties.';
+            renderTree();
+        }
+
+        function addNewButton() {
+            const newButton = {
+                id: 'button_' + Date.now(),
+                label: 'New Button',
+                speech_text: null,
+                image_url: null,
+                background_color: '#FFFFFF',
+                text_color: '#000000',
+                llm_prompt: null,
+                children: []
+            };
+
+            currentConfig.buttons.push(newButton);
+            markAsChanged();
+            renderTree();
+
+            // Select the new button
+            selectButton([currentConfig.buttons.length - 1]);
+        }
+
+        function addChildButton() {
+            if (!selectedButton) return;
+
+            const parent = getButtonByPath(selectedButton.path);
+            if (!parent) return;
+
+            const newButton = {
+                id: 'button_' + Date.now(),
+                label: 'New Child Button',
+                speech_text: null,
+                image_url: null,
+                background_color: '#FFFFFF',
+                text_color: '#000000',
+                llm_prompt: null,
+                children: []
+            };
+
+            if (!parent.children) parent.children = [];
+            parent.children.push(newButton);
+
+            markAsChanged();
+            renderTree();
+
+            // Select the new child button
+            const newPath = [...selectedButton.path, parent.children.length - 1];
+            selectButton(newPath);
+        }
+
+        function deleteButton() {
+            if (!selectedButton) return;
+
+            const button = getButtonByPath(selectedButton.path);
+            if (!button) return;
+
+            const confirmMessage = `Are you sure you want to delete "${button.label}"?` + 
+                (button.children && button.children.length ? ` This will also delete ${button.children.length} child button(s).` : '');
+
+            if (confirm(confirmMessage)) {
+                removeButtonFromPath(selectedButton.path);
+                selectedButton = null;
+                markAsChanged();
+                renderTree();
+                cancelEdit();
+                showSuccess('Button deleted successfully');
+            }
+        }
+
+        // Notification functions
+        function showSuccess(message) {
+            showNotification(message, 'success');
+        }
+
+        function showError(message) {
+            showNotification(message, 'error');
+        }
+
+        function showNotification(message, type) {
+            const notification = document.getElementById('notification');
+            notification.textContent = message;
+            notification.className = `notification ${type} show`;
+            
+            setTimeout(() => {
+                notification.classList.remove('show');
+            }, 4000);
+        }
+
+        // Prevent page navigation with unsaved changes
+        window.addEventListener('beforeunload', (e) => {
+            if (hasUnsavedChanges) {
+                e.preventDefault();
+                e.returnValue = 'You have unsaved changes. Are you sure you want to leave?';
+                return e.returnValue;
+            }
+        });
+    </script>
+
+    <!-- Firebase Authentication -->
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+</body>
+</html>

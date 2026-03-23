@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Funko Pop Avatar Creator</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .funko-preview {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 20px;
+            transition: all 0.3s ease;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.3);
+        }
+        .funko-preview:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 40px rgba(0,0,0,0.4);
+        }
+        .loading-spinner {
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        .funko-head {
+            border-radius: 50% 50% 50% 50% / 60% 60% 40% 40%;
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-purple-400 via-pink-500 to-red-500 min-h-screen">
+    
+    <!-- Header -->
+    <header class="bg-white/10 backdrop-blur-lg shadow-lg border-b border-white/20">
+        <div class="max-w-6xl mx-auto px-4 py-6">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-4">
+                    <div class="w-16 h-16 bg-gradient-to-r from-yellow-400 to-orange-500 rounded-2xl flex items-center justify-center shadow-lg">
+                        <i class="fas fa-user-astronaut text-white text-2xl"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-3xl font-bold text-white">Funko Pop Avatar Creator</h1>
+                        <p class="text-white/80">Create your personalized Funko Pop style character</p>
+                    </div>
+                </div>
+                <div class="flex space-x-3">
+                    <button id="random-funko-btn" class="bg-white/20 hover:bg-white/30 text-white px-4 py-2 rounded-lg transition-colors border border-white/20">
+                        <i class="fas fa-dice mr-2"></i>Random Funko
+                    </button>
+                    <button id="generate-collection-btn" class="bg-gradient-to-r from-green-400 to-blue-500 hover:from-green-500 hover:to-blue-600 text-white px-6 py-2 rounded-lg transition-all shadow-lg">
+                        <i class="fas fa-collection mr-2"></i>Create Collection
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <div class="max-w-7xl mx-auto px-4 py-8">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            
+            <!-- Funko Preview Section -->
+            <div class="lg:col-span-1">
+                <div class="funko-preview p-8 sticky top-8">
+                    <div class="text-center">
+                        <div id="loading-spinner" class="absolute inset-0 flex items-center justify-center bg-black/50 rounded-2xl hidden">
+                            <div class="bg-white rounded-lg p-4">
+                                <i class="fas fa-spinner loading-spinner text-3xl text-purple-600 mb-2"></i>
+                                <p class="text-gray-800 font-medium">Creating Your Funko...</p>
+                            </div>
+                        </div>
+                        
+                        <!-- Funko Pop Preview -->
+                        <div id="funko-container" class="relative">
+                            <div id="funko-display" class="bg-white/90 backdrop-blur-sm rounded-2xl p-8 shadow-inner">
+                                <!-- Custom SVG Funko Pop will go here -->
+                                <div id="custom-funko" class="w-64 h-80 mx-auto relative">
+                                    <!-- This will be populated by JavaScript -->
+                                </div>
+                            </div>
+                            <div class="mt-4 text-center">
+                                <h3 id="funko-name" class="text-2xl font-bold text-white mb-2">Your Funko Pop</h3>
+                                <div id="funko-details" class="bg-white/20 backdrop-blur-sm rounded-lg p-3 text-white text-sm">
+                                    <p><strong>Style:</strong> <span id="current-style">Classic</span></p>
+                                    <p><strong>Character:</strong> <span id="current-character">Default</span></p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Customization Panel -->
+            <div class="lg:col-span-2">
+                <div class="bg-white/10 backdrop-blur-lg rounded-2xl shadow-2xl p-8 border border-white/20">
+                    <div class="flex items-center justify-between mb-8">
+                        <h2 class="text-2xl font-bold text-white">
+                            <i class="fas fa-palette text-yellow-400 mr-3"></i>
+                            Customize Your Funko Pop
+                        </h2>
+                        <div class="flex items-center space-x-3 bg-white/10 rounded-lg px-4 py-2">
+                            <span class="text-white text-sm">Character Name:</span>
+                            <input id="character-name" type="text" placeholder="Enter name" 
+                                   class="bg-white/20 border border-white/30 rounded px-3 py-1 text-white placeholder-white/60 focus:outline-none focus:ring-2 focus:ring-yellow-400">
+                        </div>
+                    </div>
+
+                    <!-- Character Type -->
+                    <div class="mb-8">
+                        <h3 class="text-lg font-semibold text-white mb-4">
+                            <i class="fas fa-user-tag text-blue-400 mr-2"></i>
+                            Character Type
+                        </h3>
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                            <button class="character-type-btn bg-white/10 hover:bg-white/20 border border-white/30 rounded-lg p-4 text-center transition-all text-white" data-type="human">
+                                <i class="fas fa-user text-2xl mb-2 text-blue-400"></i>
+                                <p class="font-medium">Human</p>
+                            </button>
+                            <button class="character-type-btn bg-white/10 hover:bg-white/20 border border-white/30 rounded-lg p-4 text-center transition-all text-white" data-type="superhero">
+                                <i class="fas fa-mask text-2xl mb-2 text-red-400"></i>
+                                <p class="font-medium">Superhero</p>
+                            </button>
+                            <button class="character-type-btn bg-white/10 hover:bg-white/20 border border-white/30 rounded-lg p-4 text-center transition-all text-white" data-type="fantasy">
+                                <i class="fas fa-hat-wizard text-2xl mb-2 text-purple-400"></i>
+                                <p class="font-medium">Fantasy</p>
+                            </button>
+                            <button class="character-type-btn bg-white/10 hover:bg-white/20 border border-white/30 rounded-lg p-4 text-center transition-all text-white" data-type="robot">
+                                <i class="fas fa-robot text-2xl mb-2 text-green-400"></i>
+                                <p class="font-medium">Robot/Sci-Fi</p>
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Physical Features -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
+                        
+                        <!-- Hair & Head -->
+                        <div class="bg-white/5 rounded-lg p-6">
+                            <h4 class="text-lg font-semibold text-white mb-4">
+                                <i class="fas fa-head-side-virus text-pink-400 mr-2"></i>Hair & Head
+                            </h4>
+                            <div class="space-y-4">
+                                <div>
+                                    <label class="block text-white text-sm font-medium mb-2">Hair Style</label>
+                                    <select id="hair-style" class="w-full bg-white/20 border border-white/30 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-pink-400">
+                                        <option value="short">Short Hair</option>
+                                        <option value="long">Long Hair</option>
+                                        <option value="curly">Curly Hair</option>
+                                        <option value="spiky">Spiky Hair</option>
+                                        <option value="bald">Bald</option>
+                                        <option value="ponytail">Ponytail</option>
+                                        <option value="mohawk">Mohawk</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-white text-sm font-medium mb-2">Hair Color</label>
+                                    <div class="grid grid-cols-4 gap-2">
+                                        <button class="hair-color-btn w-8 h-8 rounded-full bg-yellow-600 border-2 border-white/30 hover:border-white transition-colors" data-color="blonde"></button>
+                                        <button class="hair-color-btn w-8 h-8 rounded-full bg-amber-800 border-2 border-white/30 hover:border-white transition-colors" data-color="brown"></button>
+                                        <button class="hair-color-btn w-8 h-8 rounded-full bg-black border-2 border-white/30 hover:border-white transition-colors" data-color="black"></button>
+                                        <button class="hair-color-btn w-8 h-8 rounded-full bg-red-600 border-2 border-white/30 hover:border-white transition-colors" data-color="red"></button>
+                                        <button class="hair-color-btn w-8 h-8 rounded-full bg-gray-400 border-2 border-white/30 hover:border-white transition-colors" data-color="gray"></button>
+                                        <button class="hair-color-btn w-8 h-8 rounded-full bg-pink-400 border-2 border-white/30 hover:border-white transition-colors" data-color="pink"></button>
+                                        <button class="hair-color-btn w-8 h-8 rounded-full bg-blue-400 border-2 border-white/30 hover:border-white transition-colors" data-color="blue"></button>
+                                        <button class="hair-color-btn w-8 h-8 rounded-full bg-green-400 border-2 border-white/30 hover:border-white transition-colors" data-color="green"></button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Outfit & Accessories -->
+                        <div class="bg-white/5 rounded-lg p-6">
+                            <h4 class="text-lg font-semibold text-white mb-4">
+                                <i class="fas fa-tshirt text-yellow-400 mr-2"></i>Outfit & Style
+                            </h4>
+                            <div class="space-y-4">
+                                <div>
+                                    <label class="block text-white text-sm font-medium mb-2">Outfit Type</label>
+                                    <select id="outfit-type" class="w-full bg-white/20 border border-white/30 rounded-lg px-3 py-2 text-white focus:outline-none focus:ring-2 focus:ring-yellow-400">
+                                        <option value="casual">Casual Wear</option>
+                                        <option value="business">Business Attire</option>
+                                        <option value="superhero">Superhero Costume</option>
+                                        <option value="fantasy">Fantasy Outfit</option>
+                                        <option value="sports">Sports Uniform</option>
+                                        <option value="formal">Formal Wear</option>
+                                        <option value="steampunk">Steampunk</option>
+                                    </select>
+                                </div>
+                                <div>
+                                    <label class="block text-white text-sm font-medium mb-2">Primary Color</label>
+                                    <div class="grid grid-cols-4 gap-2">
+                                        <button class="outfit-color-btn w-8 h-8 rounded-lg bg-red-500 border-2 border-white/30 hover:border-white transition-colors" data-color="red"></button>
+                                        <button class="outfit-color-btn w-8 h-8 rounded-lg bg-blue-500 border-2 border-white/30 hover:border-white transition-colors" data-color="blue"></button>
+                                        <button class="outfit-color-btn w-8 h-8 rounded-lg bg-green-500 border-2 border-white/30 hover:border-white transition-colors" data-color="green"></button>
+                                        <button class="outfit-color-btn w-8 h-8 rounded-lg bg-yellow-500 border-2 border-white/30 hover:border-white transition-colors" data-color="yellow"></button>
+                                        <button class="outfit-color-btn w-8 h-8 rounded-lg bg-purple-500 border-2 border-white/30 hover:border-white transition-colors" data-color="purple"></button>
+                                        <button class="outfit-color-btn w-8 h-8 rounded-lg bg-pink-500 border-2 border-white/30 hover:border-white transition-colors" data-color="pink"></button>
+                                        <button class="outfit-color-btn w-8 h-8 rounded-lg bg-gray-800 border-2 border-white/30 hover:border-white transition-colors" data-color="black"></button>
+                                        <button class="outfit-color-btn w-8 h-8 rounded-lg bg-white border-2 border-white/30 hover:border-gray-400 transition-colors" data-color="white"></button>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Accessories & Props -->
+                    <div class="mb-8">
+                        <h3 class="text-lg font-semibold text-white mb-4">
+                            <i class="fas fa-glasses text-green-400 mr-2"></i>
+                            Accessories & Props
+                        </h3>
+                        <div class="grid grid-cols-3 md:grid-cols-6 gap-3">
+                            <button class="accessory-btn bg-white/10 hover:bg-white/20 border border-white/30 rounded-lg p-3 text-center transition-all text-white" data-accessory="glasses">
+                                <i class="fas fa-glasses text-xl mb-1"></i>
+                                <p class="text-xs">Glasses</p>
+                            </button>
+                            <button class="accessory-btn bg-white/10 hover:bg-white/20 border border-white/30 rounded-lg p-3 text-center transition-all text-white" data-accessory="hat">
+                                <i class="fas fa-hat-cowboy text-xl mb-1"></i>
+                                <p class="text-xs">Hat</p>
+                            </button>
+                            <button class="accessory-btn bg-white/10 hover:bg-white/20 border border-white/30 rounded-lg p-3 text-center transition-all text-white" data-accessory="headphones">
+                                <i class="fas fa-headphones text-xl mb-1"></i>
+                                <p class="text-xs">Headphones</p>
+                            </button>
+                            <button class="accessory-btn bg-white/10 hover:bg-white/20 border border-white/30 rounded-lg p-3 text-center transition-all text-white" data-accessory="sword">
+                                <i class="fas fa-sword text-xl mb-1"></i>
+                                <p class="text-xs">Weapon</p>
+                            </button>
+                            <button class="accessory-btn bg-white/10 hover:bg-white/20 border border-white/30 rounded-lg p-3 text-center transition-all text-white" data-accessory="book">
+                                <i class="fas fa-book text-xl mb-1"></i>
+                                <p class="text-xs">Book</p>
+                            </button>
+                            <button class="accessory-btn bg-white/10 hover:bg-white/20 border border-white/30 rounded-lg p-3 text-center transition-all text-white" data-accessory="phone">
+                                <i class="fas fa-mobile-alt text-xl mb-1"></i>
+                                <p class="text-xs">Phone</p>
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Collection Preview Section -->
+        <div id="collection-preview" class="mt-12 bg-white/10 backdrop-blur-lg rounded-2xl shadow-2xl p-8 border border-white/20 hidden">
+            <div class="flex items-center justify-between mb-6">
+                <h2 class="text-2xl font-bold text-white">
+                    <i class="fas fa-collection text-yellow-400 mr-3"></i>
+                    Your Funko Pop Collection
+                </h2>
+                <span id="collection-count" class="bg-yellow-400 text-gray-900 text-sm font-bold px-3 py-1 rounded-full">
+                    0 characters
+                </span>
+            </div>
+            <div id="collection-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-6">
+                <!-- Collection items will be populated here -->
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/funko-avatar-creator.js"></script>
+</body>
+</html>

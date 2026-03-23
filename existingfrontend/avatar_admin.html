@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Avatar Admin - Bravo AAC</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <style>
+        .avatar-preview {
+            border-radius: 50%;
+            border: 3px solid #e5e7eb;
+            transition: all 0.2s ease;
+        }
+        .avatar-preview:hover {
+            border-color: #3b82f6;
+            transform: scale(1.05);
+        }
+        .user-card {
+            transition: all 0.2s ease;
+        }
+        .user-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px rgba(0,0,0,0.1);
+        }
+        .preset-card {
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .preset-card:hover {
+            transform: scale(1.02);
+            border-color: #3b82f6;
+        }
+        .preset-card.selected {
+            border-color: #10b981;
+            background-color: #f0fdf4;
+        }
+    </style>
+</head>
+<body class="bg-gray-50">
+    <!-- Navigation Header -->
+    <div class="bg-gray-800 text-white p-4">
+        <div class="container mx-auto flex justify-between items-center">
+            <div class="flex items-center space-x-4">
+                <a href="admin.html" class="flex items-center space-x-2 text-gray-300 hover:text-white">
+                    <i class="fas fa-arrow-left"></i>
+                    <span>Back to Admin</span>
+                </a>
+                <div class="border-l border-gray-600 h-6"></div>
+                <h1 class="text-xl font-semibold">Avatar Administration</h1>
+            </div>
+            <div class="flex items-center space-x-3">
+                <button id="save-all-button" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg flex items-center space-x-2">
+                    <i class="fas fa-save"></i>
+                    <span>Save All Changes</span>
+                </button>
+                <button id="export-presets-button" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center space-x-2">
+                    <i class="fas fa-download"></i>
+                    <span>Export Presets</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div class="container mx-auto p-6 max-w-7xl">
+        <!-- Quick Actions Bar -->
+        <div class="bg-white rounded-lg shadow-md p-4 mb-6">
+            <div class="flex flex-wrap gap-4 items-center">
+                <button id="create-preset-button" class="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg flex items-center space-x-2">
+                    <i class="fas fa-plus"></i>
+                    <span>Create Avatar Preset</span>
+                </button>
+                <button id="bulk-assign-button" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg flex items-center space-x-2">
+                    <i class="fas fa-users"></i>
+                    <span>Bulk Assign Avatars</span>
+                </button>
+                <button id="reset-defaults-button" class="bg-orange-600 hover:bg-orange-700 text-white px-4 py-2 rounded-lg flex items-center space-x-2">
+                    <i class="fas fa-undo"></i>
+                    <span>Reset to Defaults</span>
+                </button>
+                <div class="flex-1"></div>
+                <div class="flex items-center space-x-2">
+                    <label for="user-filter" class="text-gray-700 font-medium">Filter Users:</label>
+                    <input type="text" id="user-filter" placeholder="Search users..." class="px-3 py-1 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+            </div>
+        </div>
+
+        <!-- Avatar Presets Section -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <div class="flex items-center justify-between mb-4">
+                <h2 class="text-xl font-semibold text-gray-800">Avatar Presets</h2>
+                <button id="refresh-presets" class="text-blue-600 hover:text-blue-800">
+                    <i class="fas fa-sync-alt"></i> Refresh
+                </button>
+            </div>
+            <div id="presets-container" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                <!-- Presets will be loaded dynamically -->
+            </div>
+        </div>
+
+        <!-- User Profiles Section -->
+        <div class="bg-white rounded-lg shadow-md p-6">
+            <div class="flex items-center justify-between mb-6">
+                <h2 class="text-xl font-semibold text-gray-800">User Profiles</h2>
+                <div class="flex items-center space-x-4">
+                    <span id="user-count" class="text-gray-600"></span>
+                    <button id="refresh-users" class="text-blue-600 hover:text-blue-800">
+                        <i class="fas fa-sync-alt"></i> Refresh
+                    </button>
+                </div>
+            </div>
+            
+            <div id="users-loading" class="text-center py-8 hidden">
+                <div class="inline-block animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                <p class="text-gray-600 mt-2">Loading user profiles...</p>
+            </div>
+            
+            <div id="users-container" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                <!-- User cards will be loaded dynamically -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Avatar Editor Modal -->
+    <div id="avatar-editor-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-lg shadow-xl w-[90vw] h-[90vh] max-w-6xl max-h-[90vh] flex flex-col">
+            <div class="flex items-center justify-between p-4 border-b">
+                <h3 id="editor-title" class="text-lg font-semibold">Edit Avatar</h3>
+                <button id="close-editor" class="text-gray-500 hover:text-gray-700">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+            </div>
+            <div class="flex-1 overflow-hidden">
+                <div id="avatar-editor-container" class="h-full">
+                    <!-- Avatar editor will be loaded here -->
+                </div>
+            </div>
+            <div class="p-4 border-t flex justify-end space-x-3">
+                <button id="cancel-edit" class="px-4 py-2 text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50">
+                    Cancel
+                </button>
+                <button id="save-avatar" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                    Save Avatar
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bulk Assignment Modal -->
+    <div id="bulk-assign-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white rounded-lg shadow-xl w-[80vw] max-w-4xl max-h-[80vh] flex flex-col">
+            <div class="flex items-center justify-between p-4 border-b">
+                <h3 class="text-lg font-semibold">Bulk Assign Avatar</h3>
+                <button id="close-bulk-assign" class="text-gray-500 hover:text-gray-700">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+            </div>
+            <div class="flex-1 overflow-y-auto p-4">
+                <div class="space-y-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Select Avatar Preset:</label>
+                        <div id="bulk-preset-selector" class="grid grid-cols-4 gap-3">
+                            <!-- Presets for bulk assignment -->
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Select Users:</label>
+                        <div class="mb-2">
+                            <button id="select-all-users" class="text-blue-600 hover:text-blue-800 text-sm">Select All</button>
+                            <span class="text-gray-400 mx-2">|</span>
+                            <button id="deselect-all-users" class="text-blue-600 hover:text-blue-800 text-sm">Deselect All</button>
+                        </div>
+                        <div id="bulk-user-selector" class="max-h-64 overflow-y-auto border border-gray-300 rounded-lg p-3">
+                            <!-- User checkboxes for bulk assignment -->
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="p-4 border-t flex justify-end space-x-3">
+                <button id="cancel-bulk-assign" class="px-4 py-2 text-gray-600 border border-gray-300 rounded-lg hover:bg-gray-50">
+                    Cancel
+                </button>
+                <button id="apply-bulk-assign" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700">
+                    Apply to Selected Users
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Success/Error Messages -->
+    <div id="message-container" class="fixed top-4 right-4 z-50 space-y-2">
+        <!-- Messages will be added here dynamically -->
+    </div>
+
+    <script src="/static/avatar-selector.js"></script>
+    <script src="/static/avatar_admin.js"></script>
+</body>
+</html>

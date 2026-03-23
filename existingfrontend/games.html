@@ -1,0 +1,4186 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Games</title>
+    <!-- Firebase SDK for silent token refresh -->
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+    <script src="/static/token-refresh.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link rel="stylesheet" href="/static/splash-screen.css">
+    <style>
+        /* --- Basic Body Style --- */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f7f6;
+        }
+
+        /* --- Admin Toolbar Styles --- */
+        .admin-toolbar {
+            background-color: #ffffff;
+            padding: 0.25rem 0.5rem;
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            gap: 0.4rem;
+            flex-wrap: wrap;
+        }
+
+        .admin-toolbar button {
+            padding: 0.25rem 0.5rem;
+            border: 1px solid #ccc;
+            background-color: #f8f9fa;
+            border-radius: 0.25rem;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .admin-toolbar button:hover {
+            background-color: #e9ecef;
+            border-color: #adb5bd;
+        }
+
+        /* --- Page Banner Styles --- */
+        .page-banner {
+            background-color: #002244;
+            color: #FB4F14;
+            padding: 0.75em 1.5em;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        .page-banner h1 {
+            margin: 0;
+            font-size: 1.75em;
+            font-weight: 500;
+            text-align: left;
+        }
+
+        /* --- Game Container Styles --- */
+        .game-container {
+            max-width: 1200px;
+            margin: 2rem auto;
+            padding: 1rem;
+        }
+
+        /* --- Grid Container Styles (from gridpage) --- */
+        #gridContainer {
+            display: grid;
+            gap: 24px;
+            padding: 24px;
+            max-width: 1400px;
+            margin: 0 auto;
+            --button-font-size: 16px;
+        }
+
+        #gridContainer button {
+            position: relative;
+            padding: 12px;
+            font-size: var(--button-font-size);
+            font-weight: 600;
+            cursor: pointer;
+            background-color: #ffffff;
+            color: #1e293b;
+            border: 1px solid rgba(255,255,255,0.5);
+            border-radius: 24px;
+            box-shadow: 
+                0 10px 15px -3px rgba(0, 0, 0, 0.08),
+                0 4px 6px -2px rgba(0, 0, 0, 0.04),
+                inset 0 0 0 1px rgba(255,255,255,0.5);
+            text-align: center;
+            min-height: 100px;
+            aspect-ratio: 1 / 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+            word-wrap: break-word;
+            hyphens: auto;
+            line-height: 1.2;
+            overflow: hidden;
+        }
+
+        @supports not (aspect-ratio: 1 / 1) {
+            #gridContainer button {
+                height: 120px;
+            }
+        }
+
+        #gridContainer button:hover {
+            transform: translateY(-6px) scale(1.02);
+            box-shadow: 
+                0 20px 25px -5px rgba(0, 0, 0, 0.1),
+                0 10px 10px -5px rgba(0, 0, 0, 0.04);
+            z-index: 10;
+        }
+
+        #gridContainer button:active {
+            transform: scale(0.95);
+            box-shadow: 0 2px 4px 0 rgba(0, 0, 0, 0.05);
+        }
+
+        /* --- Game Grid Styles --- */
+        .game-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 1rem;
+            margin: 2rem 0;
+        }
+
+        .game-button {
+            background: white;
+            border: 3px solid #ddd;
+            border-radius: 1rem;
+            padding: 1.5rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 1.1rem;
+            font-weight: 500;
+            color: #002244;
+        }
+
+        .game-button:hover {
+            border-color: #FB4F14;
+            background-color: #fff5f3;
+            transform: translateY(-2px);
+        }
+
+        .game-button.selected {
+            border-color: #FB4F14;
+            background-color: #FB4F14;
+            color: white;
+        }
+
+        .game-button.scanning {
+            border-color: #fbbf24;
+            background-color: #fef3c7;
+            animation: pulse 1s infinite;
+        }
+
+        /* Make sure action buttons in actionButtons container also get scanning styles */
+        #actionButtons .game-button.scanning {
+            border-color: #fbbf24;
+            background-color: #fef3c7;
+            animation: pulse 1s infinite;
+        }
+
+        .game-button i {
+            display: block;
+            font-size: 2rem;
+            margin-bottom: 0.5rem;
+            color: inherit;
+        }
+
+        /* --- Game Status Styles --- */
+        .game-status {
+            background: white;
+            border-radius: 1rem;
+            padding: 1.5rem;
+            margin: 1rem 0;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+
+        .game-status h2 {
+            color: #002244;
+            margin-bottom: 1rem;
+        }
+
+        .game-status .status-text {
+            font-size: 1.1rem;
+            color: #666;
+            margin-bottom: 1rem;
+        }
+
+        .game-status .counter {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #FB4F14;
+        }
+
+        /* --- Question History Styles --- */
+        .question-history {
+            background: white;
+            border-radius: 1rem;
+            padding: 1.5rem;
+            margin: 1rem 0;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }
+
+        .question-history h3 {
+            color: #002244;
+            margin-bottom: 1rem;
+        }
+
+        #qaList {
+            max-height: 150px;
+            height: 150px;
+            overflow-y: auto;
+            padding: 0.5rem;
+            border: 1px solid #eee;
+            border-radius: 0.5rem;
+            background-color: #fafafa;
+        }
+
+        #storyQaList {
+            max-height: 180px;
+            overflow-y: auto;
+            padding: 0.5rem;
+            border: 1px solid #eee;
+            border-radius: 0.5rem;
+            background-color: #fafafa;
+        }
+
+        .story-helper-item {
+            padding: 0.5rem 0;
+            border-bottom: 1px solid #eee;
+            color: #002244;
+            font-weight: 500;
+        }
+
+        .story-helper-item:last-child {
+            border-bottom: none;
+        }
+
+        .qa-item {
+            padding: 0.5rem 0;
+            border-bottom: 1px solid #eee;
+        }
+
+        .qa-item:last-child {
+            border-bottom: none;
+        }
+
+        .qa-question {
+            font-weight: 500;
+            color: #002244;
+        }
+
+        .qa-answer {
+            color: #FB4F14;
+            font-weight: bold;
+        }
+
+        .story-read-title {
+            color: #002244;
+            margin-bottom: 0.75rem;
+            font-size: 1.2rem;
+            font-weight: 700;
+        }
+
+        .story-read-text {
+            max-height: 260px;
+            overflow-y: auto;
+            padding: 0.75rem;
+            border: 1px solid #e5e7eb;
+            border-radius: 0.5rem;
+            background-color: #fafafa;
+            line-height: 1.6;
+            font-size: 1.05rem;
+            color: #1f2937;
+            white-space: pre-wrap;
+        }
+
+        .story-read-word.active {
+            background-color: #fef3c7;
+            border-radius: 0.25rem;
+            color: #111827;
+        }
+
+        .story-illustration-container {
+            margin-bottom: 0.85rem;
+        }
+
+        .story-illustration-status {
+            margin-bottom: 0.5rem;
+            color: #334155;
+            font-size: 0.95rem;
+            font-weight: 600;
+        }
+
+        .story-illustration-frame {
+            width: 100%;
+            max-width: 520px;
+            margin: 0 auto;
+            border-radius: 0.75rem;
+            overflow: hidden;
+            border: 1px solid #e2e8f0;
+            background: #f8fafc;
+            box-shadow: 0 4px 10px rgba(15, 23, 42, 0.08);
+        }
+
+        .story-illustration-image {
+            width: 100%;
+            height: auto;
+            display: block;
+            transform-origin: center;
+            animation: storyKenBurns 18s ease-in-out infinite alternate;
+        }
+
+        @keyframes storyKenBurns {
+            0% { transform: scale(1) translate(0, 0); }
+            100% { transform: scale(1.08) translate(-1.5%, -1%); }
+        }
+
+        /* --- Action Buttons now use game-button styling --- */
+
+        /* --- Listening Indicator --- */
+        .listening-indicator {
+            background: #22c55e;
+            color: white;
+            border-radius: 1rem;
+            padding: 1rem;
+            text-align: center;
+            margin: 1rem 0;
+            animation: pulse 2s infinite;
+        }
+
+        /* --- Loading States --- */
+        .loading {
+            text-align: center;
+            padding: 2rem;
+        }
+
+        .loading i {
+            font-size: 3rem;
+            color: #FB4F14;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        /* --- Hidden State --- */
+        .hidden {
+            display: none !important;
+        }
+
+        /* --- Error States --- */
+        .error-state {
+            background: #fee2e2;
+            border: 2px solid #fca5a5;
+            border-radius: 1rem;
+            padding: 1.5rem;
+            text-align: center;
+            margin: 1rem 0;
+        }
+
+        .error-state i {
+            font-size: 2rem;
+            color: #dc2626;
+            margin-bottom: 1rem;
+        }
+
+        .error-state h3 {
+            color: #dc2626;
+            margin-bottom: 0.5rem;
+        }
+
+        .error-state p {
+            color: #7f1d1d;
+        }
+    </style>
+</head>
+<body>
+    <!-- Splash Screen -->
+    <div id="splashScreen" class="splash-screen">
+        <div class="splash-content">
+            <i class="fas fa-gamepad" style="font-size: 4rem; color: #FB4F14; margin-bottom: 1rem;"></i>
+            <h2>Loading Games...</h2>
+        </div>
+    </div>
+
+    <!-- Page Banner -->
+    <div class="page-banner">
+        <h1 id="pageTitle">🎮 Games</h1>
+        <div class="admin-toolbar">
+            <!-- Admin toolbar content can be added here -->
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div id="mainContent" class="game-container">
+        
+        <!-- Game Menu (Initial View) -->
+        <div id="gridContainer">
+            <!-- Buttons will be dynamically generated here -->
+        </div>
+
+        <!-- 20 Questions Game View -->
+        <div id="twentyQuestionsGame" class="hidden">
+            
+            <!-- Game Status -->
+            <div id="gameStatus" class="game-status">
+                <h2 id="gameTitle">20 Questions</h2>
+                <div id="statusText" class="status-text">Choose how you want to play!</div>
+                <div id="gameCounter" class="counter"></div>
+            </div>
+
+            <!-- Role Selection -->
+            <div id="roleSelection" class="game-grid">
+                <div class="game-button" onclick="selectRole('ask')">
+                    <i class="fas fa-user-friends"></i>
+                    I ask the questions
+                </div>
+                <div class="game-button" onclick="selectRole('answer')">
+                    <i class="fas fa-lightbulb"></i>
+                    They ask the questions
+                </div>
+            </div>
+
+            <!-- Category Selection -->
+            <div id="categorySelection" class="game-grid hidden">
+                <div class="game-button" onclick="selectCategory('person')">
+                    <i class="fas fa-user"></i>
+                    Person
+                </div>
+                <div class="game-button" onclick="selectCategory('place')">
+                    <i class="fas fa-map-marker-alt"></i>
+                    Place
+                </div>
+                <div class="game-button" onclick="selectCategory('thing')">
+                    <i class="fas fa-cube"></i>
+                    Thing
+                </div>
+            </div>
+
+            <!-- Options Selection (for questions, guesses, or P/P/T options) -->
+            <div id="optionsSelection" class="game-grid hidden">
+                <!-- Options will be populated dynamically -->
+            </div>
+
+            <!-- Response Options (for Player 1 to choose their response) -->
+            <div id="responseOptions" class="game-grid hidden">
+                <!-- Response options will be populated dynamically -->
+            </div>
+
+            <!-- Question History -->
+            <div id="questionHistory" class="question-history hidden">
+                <h3>Questions Asked:</h3>
+                <div id="qaList">
+                    <!-- Q&A pairs will be added here -->
+                </div>
+            </div>
+
+            <!-- Listening Indicator -->
+            <div id="listeningIndicator" class="listening-indicator hidden">
+                <i class="fas fa-microphone"></i>
+                <div>Listening...</div>
+            </div>
+
+            <!-- Loading State -->
+            <div id="loadingState" class="loading hidden">
+                <i class="fas fa-spinner"></i>
+                <div>Generating options...</div>
+            </div>
+
+            <!-- Error State -->
+            <div id="errorState" class="error-state hidden">
+                <i class="fas fa-exclamation-triangle"></i>
+                <h3>Oops!</h3>
+                <p id="errorMessage">Something went wrong. Please try again.</p>
+            </div>
+
+            <!-- Action Buttons -->
+            <div id="actionButtons" class="game-grid hidden">
+                <div id="askAnotherBtn" class="game-button" onclick="askAnother()">
+                    <i class="fas fa-question-circle"></i>
+                    Ask Another Question
+                </div>
+                <div id="makeGuessBtn" class="game-button" onclick="makeGuess()">
+                    <i class="fas fa-lightbulb"></i>
+                    Make a Guess
+                </div>
+                <div class="game-button" style="background-color: #dc2626; color: white;" onclick="exitGame()">
+                    <i class="fas fa-times"></i>
+                    Exit Game
+                </div>
+            </div>
+        </div>
+
+        <!-- Story Builder Game View -->
+        <div id="storyBuilderGame" class="hidden">
+            <div id="storyUserOptions" class="game-grid hidden">
+                <!-- Dynamic answer/title options -->
+            </div>
+
+            <div id="storyTranscript" class="question-history">
+                <h3>Story Q&A</h3>
+                <div id="storyQaList"></div>
+            </div>
+
+            <div id="storyLibrary" class="question-history">
+                <h3>Saved Stories</h3>
+                <div id="storyLibraryList" class="game-grid"></div>
+            </div>
+
+            <div id="storyReadDisplay" class="question-history hidden">
+                <div id="storyReadTitle" class="story-read-title"></div>
+                <div id="storyReadIllustrationContainer" class="story-illustration-container hidden">
+                    <div id="storyReadIllustrationStatus" class="story-illustration-status"></div>
+                    <div id="storyReadIllustrationFrame" class="story-illustration-frame hidden">
+                        <img id="storyReadIllustrationImage" class="story-illustration-image" alt="Story illustration" />
+                    </div>
+                </div>
+                <div id="storyReadText" class="story-read-text"></div>
+                <div id="storyReadActions" class="game-grid" style="margin-top: 1rem;">
+                    <button class="game-button" onclick="readSelectedStoryAgain()"><i class="fas fa-volume-up"></i>Read Again</button>
+                    <button class="game-button" onclick="exportStoryAudio(false)"><i class="fas fa-file-audio"></i>Export Audio</button>
+                    <button id="createIllustrationReadButton" class="game-button" onclick="createStoryIllustration(false)"><i class="fas fa-image"></i>Create Illustration</button>
+                    <button id="regenerateIllustrationReadButton" class="game-button" onclick="createStoryIllustration(true)"><i class="fas fa-sync"></i>Regenerate Illustration</button>
+                    <button class="game-button" onclick="backToStoryReadList()"><i class="fas fa-arrow-left"></i>Back to Stories</button>
+                </div>
+            </div>
+
+            <div id="storyDetail" class="question-history hidden">
+                <h3>Story Detail</h3>
+                <input id="storyTitleInput" class="w-full p-2 border border-gray-300 rounded mb-3" placeholder="Story title" />
+                <textarea id="storyTextInput" class="w-full p-2 border border-gray-300 rounded" rows="8" placeholder="Story text"></textarea>
+                <div id="storyIllustrationContainer" class="story-illustration-container" style="margin-top: 0.85rem;">
+                    <div id="storyIllustrationStatus" class="story-illustration-status">No illustration yet.</div>
+                    <div id="storyIllustrationFrame" class="story-illustration-frame hidden">
+                        <img id="storyIllustrationImage" class="story-illustration-image" alt="Story illustration preview" />
+                    </div>
+                </div>
+                <div id="storyDetailActions" class="game-grid" style="margin-top: 1rem;">
+                    <button class="game-button" onclick="readCurrentStory()"><i class="fas fa-volume-up"></i>Read Story</button>
+                    <button class="game-button" onclick="exportStoryAudio(true)"><i class="fas fa-file-audio"></i>Export Audio</button>
+                    <button class="game-button" onclick="saveCurrentStoryEdits()"><i class="fas fa-save"></i>Save Edits</button>
+                    <button id="createIllustrationButton" class="game-button" onclick="createStoryIllustration(false)"><i class="fas fa-image"></i>Create Illustration</button>
+                    <button id="regenerateIllustrationButton" class="game-button" onclick="createStoryIllustration(true)"><i class="fas fa-sync"></i>Regenerate Illustration</button>
+                    <button class="game-button" onclick="deleteCurrentStory()" style="background-color: #dc2626; color: white;"><i class="fas fa-trash"></i>Delete Story</button>
+                    <button class="game-button" onclick="closeStoryDetail()"><i class="fas fa-arrow-left"></i>Back to Builder</button>
+                </div>
+            </div>
+
+            <div id="storyBottomControls" style="margin-top: 0.75rem; display:flex; gap:0.6rem; justify-content:center; flex-wrap:wrap;">
+                <button id="storyDeleteStoriesButton" type="button" onclick="promptStoryDeletePin()" class="hidden" style="padding: 0.7rem 1rem; border-radius: 10px; border: 1px solid #991b1b; background: #dc2626; color: #ffffff; font-weight: 700;">
+                    <i class="fas fa-trash"></i> Delete Stories
+                </button>
+            </div>
+
+            <div id="storyBottomStatus" class="game-status" style="position: sticky; bottom: 0; z-index: 20; margin-top: 1rem;">
+                <div id="storyStatusMessage" class="status-text">Say the wake word to ask the next question or complete the story.</div>
+                <div id="storyHeardTranscript" class="qa-question"></div>
+            </div>
+
+            <div id="storyDeleteModal" class="hidden" style="position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 60; display: flex; align-items: center; justify-content: center; padding: 1rem;">
+                <div style="background: #fff; width: min(760px, 95vw); max-height: 85vh; border-radius: 12px; padding: 1rem; overflow: hidden; display: flex; flex-direction: column;">
+                    <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom: 0.75rem;">
+                        <h3 style="margin: 0; color: #002244; font-size: 1.2rem;">Delete Stories</h3>
+                        <button type="button" style="padding: 0.4rem 0.8rem; font-size: 0.9rem; border-radius:8px; border:1px solid #cbd5e1; background:#fff;" onclick="closeStoryDeleteModal()"><i class="fas fa-times"></i> Close</button>
+                    </div>
+                    <p id="storyDeleteModalMessage" style="margin: 0 0 0.6rem 0; color: #334155; font-size: 0.95rem;">Select stories to delete.</p>
+                    <div id="storyDeleteList" style="overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 8px; padding: 0.6rem; flex: 1;"></div>
+                    <div style="display:flex; justify-content:flex-end; gap:0.6rem; margin-top: 0.8rem;">
+                        <button type="button" style="padding: 0.6rem 1rem; border-radius:8px; border:1px solid #cbd5e1; background:#fff;" onclick="closeStoryDeleteModal()">Cancel</button>
+                        <button id="storyConfirmDeleteButton" type="button" style="padding: 0.6rem 1rem; border-radius:8px; border:1px solid #991b1b; background:#dc2626; color:#fff; font-weight:700;" onclick="confirmDeleteSelectedStories()">Delete Selected</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Include JavaScript -->
+    <script src="/static/splash-screen.js"></script>
+    
+    <script>
+        // Authentication variables (same pattern as gridpage.js)
+        let currentAacUserId = null;
+        let firebaseIdToken = null;
+        const AAC_USER_ID_SESSION_KEY = "currentAacUserId";
+        const FIREBASE_TOKEN_SESSION_KEY = "firebaseIdToken";
+        
+        // Game state variables
+        let currentGame = null;
+        let gameState = {
+            role: null, // 'ask' or 'answer'
+            category: null, // 'person', 'place', 'thing'
+            selectedItem: null, // The item being guessed (for 'answer' role)
+            askedQuestions: [], // Array of {question, answer} objects
+            questionCount: 0,
+            guessCount: 0,
+            previousGuesses: [], // Array of wrong guesses to exclude
+            maxQuestions: 20,
+            maxGuesses: 3,
+            wakeWord: 'bravo', // Will be loaded from settings
+            isListening: false,
+            currentPhase: 'menu', // 'menu', 'role', 'category', 'ready', 'playing', 'guessing', 'finished'
+            scanDelay: 3500, // Will be loaded from settings
+            awaitingAnswerType: null // 'question' or 'guess'
+        };
+
+        let storyState = {
+            transcript: [],
+            pendingQuestion: '',
+            partnerSuggestions: [],
+            currentOptions: [],
+            selectingTitle: false,
+            selectedStoryId: null,
+            stories: [],
+            mode: 'build',
+            view: 'entry',
+            currentStoryTitle: '',
+            currentStoryText: '',
+            readWordRanges: [],
+            readWordWeightTotal: 0,
+            activeReadWordIndex: -1,
+            activeReadUtterance: null,
+            deleteSelectionIds: [],
+            verifiedAdminPin: false,
+            illustrationUrl: '',
+            illustrationStatus: 'not_created',
+            illustrationStyle: 'storybook illustration'
+        };
+
+        // Speech recognition setup
+        let recognition = null;
+        let isRecognitionActive = false;
+        
+        // Scanning system
+        let scanningSystem = {
+            isScanning: false,
+            currentContainer: null,
+            currentIndex: 0,
+            buttons: [],
+            interval: null,
+            restartDelay: 500
+        };
+
+        // Authenticated fetch function (same as other pages)
+        async function authenticatedFetch(url, options = {}, _isRetry = false) {
+            // Re-read token from sessionStorage (may have been refreshed by token-refresh.js)
+            firebaseIdToken = sessionStorage.getItem(FIREBASE_TOKEN_SESSION_KEY);
+            currentAacUserId = sessionStorage.getItem(AAC_USER_ID_SESSION_KEY);
+
+            if (!firebaseIdToken || !currentAacUserId) {
+                console.error("Authentication: Firebase ID Token or AAC User ID not found. Redirecting to login.");
+                sessionStorage.clear();
+                window.location.href = 'auth.html';
+                throw new Error("Authentication required.");
+            }
+
+            const headers = {
+                'Authorization': `Bearer ${firebaseIdToken}`,
+                'X-User-ID': currentAacUserId,
+                'Content-Type': 'application/json',
+                ...options.headers
+            };
+
+            const response = await fetch(url, { ...options, headers });
+
+            if ((response.status === 401 || response.status === 403) && !_isRetry) {
+                console.warn(`Authentication failed (${response.status}) for ${url}. Attempting silent token refresh...`);
+                if (typeof window.refreshFirebaseToken === 'function') {
+                    const newToken = await window.refreshFirebaseToken();
+                    if (newToken) {
+                        console.log('[AUTH] Token refreshed successfully, retrying request...');
+                        return authenticatedFetch(url, options, true);
+                    }
+                }
+                sessionStorage.clear();
+                window.location.href = 'auth.html';
+                throw new Error("Authentication failed");
+            }
+            if (response.status === 401 || response.status === 403) {
+                sessionStorage.clear();
+                window.location.href = 'auth.html';
+                throw new Error("Authentication failed after token refresh");
+            }
+
+            return response;
+        }
+
+        // Initialize user context (same pattern as other pages)
+        async function initializeUserContext() {
+            console.log('initializeUserContext: Starting initialization...');
+            
+            firebaseIdToken = sessionStorage.getItem(FIREBASE_TOKEN_SESSION_KEY);
+            currentAacUserId = sessionStorage.getItem(AAC_USER_ID_SESSION_KEY);
+
+            if (!firebaseIdToken || !currentAacUserId) {
+                console.log("No Firebase ID Token or AAC User ID found in session. Redirecting to auth.html.");
+                sessionStorage.clear();
+                window.location.href = 'auth.html';
+                return false;
+            }
+            
+            console.log(`User context initialized. AAC User ID: ${currentAacUserId}`);
+            return true;
+        }
+
+        // Initialize page when DOM is loaded
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('Games page initializing...');
+            initializeGamesPage();
+        });
+
+        // Add keyboard event listener for scanning controls
+        document.addEventListener('keydown', function(event) {
+            const isStepAdvance = event.code === 'Tab' && scanMode === 'step';
+            const isSelect = event.code === 'Space' || event.code === 'Enter';
+            if (isStepAdvance || isSelect) {
+                if (isStepAdvance) {
+                    interruptScanningAnnouncementPlayback();
+                }
+                if (waitingForInitialSwitch && pendingScanContainerId) {
+                    event.preventDefault();
+                    const pendingContainerId = pendingScanContainerId;
+                    waitingForInitialSwitch = false;
+                    pendingScanContainerId = null;
+                    startScanning(pendingContainerId, true);
+                    return;
+                }
+
+                if (scanningSystem.isScanning) {
+                    event.preventDefault();
+                    if (isStepAdvance) {
+                        scanNextButton();
+                    } else {
+                        selectCurrentScannedButton();
+                    }
+                }
+            }
+        });
+
+        // Initialize the games page
+        async function initializeGamesPage() {
+            try {
+                // Initialize authentication
+                const userReady = await initializeUserContext();
+                if (!userReady) {
+                    return; // Redirection already handled
+                }
+                
+                // Load user settings for wake word
+                await loadUserSettings();
+                
+                // Initialize speech recognition
+                initializeSpeechRecognition();
+                
+                // Generate game menu buttons
+                await generateGameMenuButtons();
+                
+                // Hide splash screen
+                hideSplashScreen();
+                
+            } catch (error) {
+                console.error('Error initializing games page:', error);
+                showError('Failed to initialize games. Please refresh the page.');
+                hideSplashScreen();
+            }
+        }
+
+        // Generate game menu buttons using gridpage pattern
+        async function generateGameMenuButtons() {
+            const container = document.getElementById('gridContainer');
+            if (!container) return;
+            
+            container.innerHTML = '';
+            updateGridLayout();
+            
+            const gameButtons = [
+                { text: 'Home', onClick: () => window.location.href = useTapInterface ? '/static/tap_interface.html' : '/gridpage.html' },
+                { text: '20 Questions', onClick: () => startTwentyQuestions() },
+                { text: 'Guess Who', onClick: () => startGuessGame('who') },
+                { text: 'Guess Where', onClick: () => startGuessGame('where') },
+                { text: 'Guess What', onClick: () => startGuessGame('what') },
+                { text: 'Hangman', onClick: () => window.location.href = '/static/hangman.html' },
+                { text: 'Story Builder', onClick: () => startStoryBuilder() }
+            ];
+            
+            for (let idx = 0; idx < gameButtons.length; idx++) {
+                const buttonData = gameButtons[idx];
+                const currentRow = Math.floor(idx / gridColumns);
+                const currentCol = idx % gridColumns;
+                
+                const button = document.createElement('button');
+                
+                // Try to get symbol image
+                let symbolImageUrl = await getSymbolImageForText(buttonData.text);
+                
+                if (symbolImageUrl) {
+                    // Create container with image and text footer
+                    const buttonContent = document.createElement('div');
+                    buttonContent.style.position = 'relative';
+                    buttonContent.style.width = '100%';
+                    buttonContent.style.height = '100%';
+                    buttonContent.style.display = 'flex';
+                    buttonContent.style.flexDirection = 'column';
+                    
+                    const imageContainer = document.createElement('div');
+                    imageContainer.style.flex = '1';
+                    imageContainer.style.position = 'relative';
+                    imageContainer.style.overflow = 'hidden';
+                    imageContainer.style.width = '100%';
+                    
+                    const imageElement = document.createElement('img');
+                    imageElement.src = symbolImageUrl;
+                    imageElement.alt = buttonData.text;
+                    imageElement.style.width = '100%';
+                    imageElement.style.height = '100%';
+                    imageElement.style.objectFit = 'contain';
+                    imageElement.style.position = 'absolute';
+                    imageElement.style.top = '0';
+                    imageElement.style.left = '0';
+                    
+                    imageElement.onerror = () => {
+                        imageElement.style.display = 'none';
+                    };
+                    
+                    const textFooter = document.createElement('div');
+                    textFooter.style.height = '28px';
+                    textFooter.style.width = '100%';
+                    textFooter.style.backgroundColor = 'rgba(0, 0, 0, 0.9)';
+                    textFooter.style.color = 'white';
+                    textFooter.style.display = 'flex';
+                    textFooter.style.alignItems = 'center';
+                    textFooter.style.justifyContent = 'center';
+                    textFooter.style.padding = '2px 4px';
+                    textFooter.style.margin = '0';
+                    textFooter.style.borderRadius = '0';
+                    textFooter.style.position = 'absolute';
+                    textFooter.style.bottom = '0';
+                    textFooter.style.left = '0';
+                    textFooter.style.right = '0';
+                    
+                    const textSpan = document.createElement('span');
+                    textSpan.textContent = buttonData.text;
+                    textSpan.style.fontSize = '0.7em';
+                    textSpan.style.fontWeight = 'bold';
+                    textSpan.style.textAlign = 'center';
+                    textSpan.style.lineHeight = '1.1';
+                    
+                    imageContainer.appendChild(imageElement);
+                    textFooter.appendChild(textSpan);
+                    buttonContent.appendChild(imageContainer);
+                    buttonContent.appendChild(textFooter);
+                    button.appendChild(buttonContent);
+                } else {
+                    // Text-only button
+                    button.textContent = buttonData.text;
+                }
+                
+                button.dataset.row = currentRow;
+                button.dataset.col = currentCol;
+                button.classList.add('grid-button');
+                button.style.gridRowStart = currentRow + 1;
+                button.style.gridColumnStart = currentCol + 1;
+                
+                if (!symbolImageUrl) {
+                    button.style.padding = '0';
+                    button.style.margin = '0';
+                    button.style.border = 'none';
+                    button.style.position = 'relative';
+                    button.style.overflow = 'hidden';
+                }
+                
+                button.addEventListener('click', buttonData.onClick);
+                
+                container.appendChild(button);
+            }
+            
+            // Start scanning after a brief delay (same as gridpage pattern)
+            setTimeout(() => {
+                if (!ScanningOff) {
+                    console.log('▶️ Starting scanning on games menu');
+                    startScanning('gridContainer');
+                } else {
+                    console.log('🔇 Scanning is disabled (ScanningOff=true)');
+                }
+            }, defaultDelay);
+        }
+        
+        // Update grid layout (from gridpage)
+        let gridColumns = 10; // Default matching gridpage
+        let enablePictograms = false; // Default - will be loaded from settings (matches gridpage default)
+        let ScanningOff = false; // Default
+        let scanMode = 'auto'; // auto | step
+        let waitForSwitchToScan = false; // Default
+        let useTapInterface = false; // Whether user is using tap interface
+        let selectedTtsVoiceName = 'en-US-Neural2-A';
+        let configuredSpeechRateWpm = 170;
+        let defaultDelay = 100; // Delay before starting scanning
+        let waitingForInitialSwitch = false;
+        let pendingScanContainerId = null;
+        const GAMES_SWITCH_PROMPT_SHOWN_KEY = 'bravoSwitchPromptShown_games';
+        
+        function updateGridLayout() {
+            const gridContainer = document.getElementById('gridContainer');
+            if (!gridContainer) return;
+            
+            gridContainer.style.gridTemplateColumns = `repeat(${gridColumns}, 1fr)`;
+            
+            const baseFontSize = 20;
+            const minFontSize = 10;
+            const maxFontSize = 28;
+            const fontSize = Math.max(minFontSize, Math.min(maxFontSize, baseFontSize * (8 / gridColumns)));
+            
+            gridContainer.style.setProperty('--button-font-size', `${fontSize}px`);
+        }
+        
+        // Add pictogram images to game-button divs in a container (for tap mode)
+        async function enhanceButtonsWithImages(containerId) {
+            if (!enablePictograms) return;
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            
+            const buttons = container.querySelectorAll('.game-button');
+            const promises = Array.from(buttons).map(async (button) => {
+                // Skip if already enhanced with an image
+                if (button.querySelector('.game-btn-img')) return;
+                
+                // Get search text: use data attribute or clean text content
+                let searchText = button.dataset.scanLabel || '';
+                if (!searchText) {
+                    searchText = button.textContent.trim();
+                }
+                // Skip very long text (full questions don't match images well)
+                if (!searchText || searchText.length > 60) return;
+                
+                try {
+                    const imageUrl = await getSymbolImageForText(searchText);
+                    if (imageUrl) {
+                        const img = document.createElement('img');
+                        img.src = imageUrl;
+                        img.alt = '';
+                        img.className = 'game-btn-img';
+                        img.style.cssText = 'width:48px;height:48px;object-fit:contain;margin-right:12px;flex-shrink:0;border-radius:8px;';
+                        img.onerror = () => { img.style.display = 'none'; };
+                        button.insertBefore(img, button.firstChild);
+                        button.style.display = 'flex';
+                        button.style.alignItems = 'center';
+                        button.style.justifyContent = 'center';
+                    }
+                } catch (e) {
+                    console.warn('Failed to load image for game button:', searchText);
+                }
+            });
+            
+            await Promise.all(promises);
+        }
+        
+        // Image search function (from gridpage with caching)
+        async function getSymbolImageForText(text, keywords = null) {
+            console.log(`🔍 getSymbolImageForText called for "${text}", enablePictograms: ${enablePictograms}`);
+            if (!text || text.trim() === '') {
+                console.log(`❌ Empty text provided to getSymbolImageForText`);
+                return null;
+            }
+            
+            // Check if pictograms/images are enabled
+            if (!enablePictograms) {
+                console.log(`❌ Pictograms disabled, skipping image load for "${text}"`);
+                return null;
+            }
+            
+            // Persistent in-memory and sessionStorage cache
+            if (!window.symbolImageCache) {
+                window.symbolImageCache = new Map();
+                
+                // Load cache from sessionStorage
+                try {
+                    const cachedData = sessionStorage.getItem('symbolImageCache');
+                    if (cachedData) {
+                        const parsed = JSON.parse(cachedData);
+                        Object.entries(parsed).forEach(([key, value]) => {
+                            if (value.timestamp > Date.now() - 3600000) {
+                                window.symbolImageCache.set(key, value);
+                            }
+                        });
+                        console.log(`✅ Restored ${window.symbolImageCache.size} cached symbol images`);
+                    }
+                } catch (e) {
+                    console.warn('Failed to restore symbol image cache:', e);
+                }
+            }
+            
+            const cacheKey = `grid_${text.trim().toLowerCase()}`;
+            if (window.symbolImageCache.has(cacheKey)) {
+                const cached = window.symbolImageCache.get(cacheKey);
+                if (cached.timestamp > Date.now() - 3600000) {
+                    console.log(`[IMAGE] Cache hit for "${text}": ${cached.imageUrl ? 'found' : 'null'}`);
+                    return cached.imageUrl;
+                }
+            }
+            
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => {
+                    console.warn(`⏰ Timeout reached for symbol search: "${text}"`);
+                    controller.abort();
+                }, 10000);
+                
+                let symbolsUrl = `/api/symbols/button-search?q=${encodeURIComponent(text.trim())}&limit=1`;
+                if (keywords && keywords.length > 0) {
+                    symbolsUrl += `&keywords=${encodeURIComponent(JSON.stringify(keywords))}`;
+                }
+                
+                const response = await authenticatedFetch(symbolsUrl, {
+                    signal: controller.signal
+                });
+                
+                clearTimeout(timeoutId);
+                
+                if (!response.ok) {
+                    console.warn(`Symbol search failed for "${text}": ${response.status}`);
+                    return null;
+                }
+                
+                const data = await response.json();
+                
+                if (data && data.symbols && Array.isArray(data.symbols) && data.symbols.length > 0) {
+                    const symbolUrl = data.symbols[0].url;
+                    // Cache the result
+                    window.symbolImageCache.set(cacheKey, {
+                        imageUrl: symbolUrl,
+                        timestamp: Date.now()
+                    });
+                    // Persist to sessionStorage
+                    try {
+                        const cacheObj = Object.fromEntries(window.symbolImageCache);
+                        sessionStorage.setItem('symbolImageCache', JSON.stringify(cacheObj));
+                    } catch (e) {
+                        console.warn('Failed to persist symbol cache:', e);
+                    }
+                    console.log(`✅ Found Firestore image for "${text}": ${symbolUrl}`);
+                    return symbolUrl;
+                } else {
+                    // Cache null result
+                    window.symbolImageCache.set(cacheKey, {
+                        imageUrl: null,
+                        timestamp: Date.now()
+                    });
+                    try {
+                        const cacheObj = Object.fromEntries(window.symbolImageCache);
+                        sessionStorage.setItem('symbolImageCache', JSON.stringify(cacheObj));
+                    } catch (e) {
+                        console.warn('Failed to persist symbol cache:', e);
+                    }
+                    console.log(`❌ No Firestore image found for "${text}"`);
+                    return null;
+                }
+            } catch (error) {
+                if (error.name === 'AbortError') {
+                    console.warn(`🚫 Request aborted for symbol "${text}" - likely due to timeout`);
+                } else {
+                    console.error(`Error fetching symbol for "${text}":`, error);
+                }
+                return null;
+            }
+        }
+
+        // Load user settings
+        async function loadUserSettings() {
+            try {
+                const response = await authenticatedFetch('/api/settings');
+                if (response.ok) {
+                    const settings = await response.json();
+                    gameState.wakeWord = (settings.wakeWordInterjection + ' ' + settings.wakeWordName).toLowerCase();
+                    console.log('Wake word loaded:', gameState.wakeWord);
+                    
+                    // Load scan delay setting (same as gridpage)
+                    if (settings && typeof settings.scanDelay === 'number' && !isNaN(settings.scanDelay)) {
+                        gameState.scanDelay = Math.max(100, parseInt(settings.scanDelay));
+                        console.log(`Games scan delay loaded: ${gameState.scanDelay}ms`);
+                    } else {
+                        gameState.scanDelay = 3500; // Default
+                    }
+                    
+                    // Load Grid Columns (same as gridpage)
+                    if (settings && typeof settings.gridColumns === 'number' && !isNaN(settings.gridColumns)) {
+                        gridColumns = Math.max(2, Math.min(18, parseInt(settings.gridColumns)));
+                        console.log(`Grid Columns loaded: ${gridColumns}`);
+                    } else {
+                        gridColumns = 10; // Default value
+                    }
+                    
+                    // Load pictograms setting
+                    enablePictograms = settings.enablePictograms === true;
+                    console.log('enablePictograms loaded:', enablePictograms);
+                    
+                    // Load scanning settings
+                    ScanningOff = settings.ScanningOff === true;
+                    console.log('ScanningOff loaded:', ScanningOff);
+                    scanMode = settings.scanMode === 'step' ? 'step' : 'auto';
+                    console.log('scanMode loaded:', scanMode);
+                    waitForSwitchToScan = settings.waitForSwitchToScan === true;
+                    console.log('waitForSwitchToScan loaded:', waitForSwitchToScan);
+                    
+                    // Load tap interface preference
+                    useTapInterface = settings.useTapInterface === true;
+                    console.log('useTapInterface loaded:', useTapInterface);
+
+                    if (settings && typeof settings.selected_tts_voice_name === 'string' && settings.selected_tts_voice_name.trim()) {
+                        selectedTtsVoiceName = settings.selected_tts_voice_name.trim();
+                    }
+
+                    if (settings && typeof settings.speech_rate === 'number' && !isNaN(settings.speech_rate)) {
+                        configuredSpeechRateWpm = Math.max(50, Math.min(400, parseInt(settings.speech_rate, 10)));
+                    }
+                    
+                    // Force pictograms on for tap interface users
+                    if (useTapInterface) {
+                        enablePictograms = true;
+                        console.log('Tap mode: forcing enablePictograms=true');
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading user settings:', error);
+                // Use defaults (match gridpage defaults)
+                gameState.wakeWord = 'hey bravo';
+                gameState.scanDelay = 3500;
+                gridColumns = 10;
+                enablePictograms = false; // Default to false like gridpage
+                ScanningOff = false;
+                scanMode = 'auto';
+                waitForSwitchToScan = false;
+                selectedTtsVoiceName = 'en-US-Neural2-A';
+                configuredSpeechRateWpm = 170;
+            }
+        }
+
+        // Initialize speech recognition
+        function initializeSpeechRecognition() {
+            if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+                const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+                recognition = new SpeechRecognition();
+                
+                recognition.continuous = false;
+                recognition.interimResults = false;
+                recognition.lang = 'en-US';
+                
+                recognition.onstart = function() {
+                    console.log('Speech recognition started');
+                    isRecognitionActive = true;
+                    showListening();
+                };
+                
+                recognition.onresult = function(event) {
+                    const transcript = event.results[0][0].transcript.toLowerCase().trim();
+                    console.log('Speech recognized:', transcript);
+                    handleSpeechResult(transcript);
+                };
+                
+                recognition.onerror = function(event) {
+                    console.error('Speech recognition error:', event.error);
+                    hideListening();
+                    isRecognitionActive = false;
+                    
+                    // Auto-restart for certain phases
+                    if (shouldAutoRestartListeningPhase()) {
+                        setTimeout(() => {
+                            if (shouldAutoRestartListeningPhase()) {
+                                startListening();
+                            }
+                        }, 1500);
+                    }
+                };
+                
+                recognition.onend = function() {
+                    console.log('Speech recognition ended');
+                    hideListening();
+                    isRecognitionActive = false;
+                    
+                    // Auto-restart for certain phases, but wait longer if an announcement is playing
+                    if (shouldAutoRestartListeningPhase()) {
+                        
+                        // If an announcement is currently playing, wait longer to avoid interference
+                        const delay = isAnnouncingNow ? 4000 : 1000;
+                        console.log(`Recognition onend: Restarting in ${delay}ms (announcing: ${isAnnouncingNow})`);
+                        
+                        setTimeout(() => {
+                            if (shouldAutoRestartListeningPhase()) {
+                                startListening();
+                            }
+                        }, delay);
+                    }
+                };
+            } else {
+                console.warn('Speech recognition not supported in this browser');
+            }
+        }
+
+        function shouldAutoRestartListeningPhase() {
+            return [
+                'ready',
+                'awaiting_wake_word',
+                'awaiting_answer',
+                'story_awaiting_wake_word',
+                'story_listening_for_question'
+            ].includes(gameState.currentPhase);
+        }
+
+        // Handle speech recognition results
+        function handleSpeechResult(transcript) {
+            hideListening();
+
+            if (currentGame === 'story_builder') {
+                handleStorySpeechResult(transcript);
+                return;
+            }
+            
+            // Check for wake word during scanning ONLY in voice response phases
+            if (scanningSystem.isScanning && 
+                (gameState.currentPhase === 'playing' || gameState.currentPhase === 'guessing') &&
+                (transcript.includes(gameState.wakeWord.replace(' ', '')) || 
+                 transcript.includes(gameState.wakeWord))) {
+                selectCurrentScannedButton();
+                return;
+            }
+            
+            if (gameState.currentPhase === 'ready') {
+                // Waiting for "ready"
+                if (transcript.includes('ready')) {
+                    proceedAfterReady();
+                } else {
+                    // Announce waiting message - onend handler will restart listening after proper delay
+                    announce("I'm waiting for you to say 'ready'");
+                }
+            } else if (gameState.currentPhase === 'awaiting_answer') {
+                // Waiting for yes/no answer
+                if (transcript.includes('yes')) {
+                    handleAnswer('Yes');
+                } else if (transcript.includes('no')) {
+                    handleAnswer('No');
+                } else {
+                    announce("Please say 'yes' or 'no'");
+                    // Restart listening after a delay
+                    setTimeout(() => {
+                        if (gameState.currentPhase === 'awaiting_answer') {
+                            startListening();
+                        }
+                    }, 2000);
+                }
+            } else if (gameState.currentPhase === 'awaiting_wake_word') {
+                // Waiting for wake word
+                if (transcript.includes(gameState.wakeWord.replace(' ', '')) || 
+                    transcript.includes(gameState.wakeWord)) {
+                    handleWakeWord();
+                } else {
+                    // Keep listening for wake word silently
+                    setTimeout(() => {
+                        if (gameState.currentPhase === 'awaiting_wake_word') {
+                            startListening();
+                        }
+                    }, 1000);
+                }
+            } else if (gameState.currentPhase === 'listening_for_intent') {
+                // Waiting for "question" or "guess"
+                if (transcript.includes('question')) {
+                    handlePlayerIntent('question');
+                } else if (transcript.includes('guess')) {
+                    handlePlayerIntent('guess');
+                } else {
+                    announce("Do you have a question or guess?");
+                    // Restart listening after a delay
+                    setTimeout(() => {
+                        if (gameState.currentPhase === 'listening_for_intent') {
+                            startListening();
+                        }
+                    }, 2000);
+                }
+            } else if (gameState.currentPhase === 'listening_for_question') {
+                // Listening for the actual question
+                handlePlayerQuestion(transcript);
+            } else if (gameState.currentPhase === 'listening_for_guess') {
+                // Listening for the actual guess
+                handlePlayerGuess(transcript);
+            } else if (gameState.currentPhase === 'selecting_response') {
+                // Ignore speech while selecting response options via scanning
+                // Do nothing - let the user scan through options
+                return;
+            }
+        }
+
+        // Start listening for speech
+        function startListening() {
+            console.log(`LISTENING: startListening() called in phase: ${gameState.currentPhase}`);
+            
+            // Completely prevent listening during action selection and response selection phases
+            if (gameState.currentPhase === 'action_selection' ||
+                gameState.currentPhase === 'selecting_response' ||
+                gameState.currentPhase === 'story_selecting_answer' ||
+                gameState.currentPhase === 'story_confirm_end' ||
+                gameState.currentPhase === 'story_selecting_title' ||
+                gameState.currentPhase === 'story_post_story_actions' ||
+                gameState.currentPhase === 'story_generating' ||
+                gameState.currentPhase === 'story_detail') {
+                console.log(`LISTENING: Blocked during ${gameState.currentPhase} phase`);
+                return;
+            }
+            
+            if (recognition && !isRecognitionActive) {
+                try {
+                    recognition.start();
+                } catch (error) {
+                    console.error('Error starting speech recognition:', error);
+                    // Retry after a short delay
+                    setTimeout(() => {
+                        if (!isRecognitionActive && shouldAutoRestartListeningPhase()) {
+                            startListening();
+                        }
+                    }, 1000);
+                }
+            }
+        }
+
+        // Stop listening for speech
+        function stopListening() {
+            if (recognition && isRecognitionActive) {
+                try {
+                    recognition.stop();
+                    isRecognitionActive = false;
+                    hideListening();
+                } catch (error) {
+                    console.log('Recognition already stopped or error stopping:', error);
+                }
+            }
+        }
+
+        // Scanning System Functions
+        function startScanning(containerId, forceStart = false) {
+            // Skip scanning entirely when ScanningOff is true (tap mode users)
+            if (ScanningOff) {
+                console.log(`SCANNING: Skipped for ${containerId} (ScanningOff=true)`);
+                waitingForInitialSwitch = false;
+                pendingScanContainerId = null;
+                return;
+            }
+
+            // Match gridpage behavior: optionally wait for switch press before beginning scan
+            if (waitForSwitchToScan && !forceStart) {
+                waitingForInitialSwitch = true;
+                pendingScanContainerId = containerId;
+                stopScanning();
+                console.log(`SCANNING: Waiting for switch press before scanning (${containerId})`);
+
+                const hasShownPrompt = sessionStorage.getItem(GAMES_SWITCH_PROMPT_SHOWN_KEY) === 'true';
+                if (!hasShownPrompt) {
+                    sessionStorage.setItem(GAMES_SWITCH_PROMPT_SHOWN_KEY, 'true');
+                    announce('Press switch to begin scanning');
+                }
+                return;
+            }
+
+            waitingForInitialSwitch = false;
+            pendingScanContainerId = null;
+            
+            console.log(`SCANNING: Starting scan for container: ${containerId}`);
+            
+            // Stop any existing scanning first
+            stopScanning();
+            
+            const container = document.getElementById(containerId);
+            if (!container) {
+                console.error(`SCANNING: Container ${containerId} not found`);
+                return;
+            }
+            
+            console.log(`SCANNING: Container found:`, container);
+            console.log(`SCANNING: Container classes:`, container.className);
+            console.log(`SCANNING: Container hidden?`, container.classList.contains('hidden'));
+            
+            scanningSystem.currentContainer = container;
+            // Look for grid buttons in the main menu or game-button in gameplay screens
+            scanningSystem.buttons = Array.from(container.querySelectorAll('button, .game-button, .grid-button')).filter((element) => {
+                if (!element || !(element instanceof HTMLElement)) {
+                    return false;
+                }
+                const styles = window.getComputedStyle(element);
+                return styles.display !== 'none' && styles.visibility !== 'hidden' && element.offsetParent !== null;
+            });
+            scanningSystem.currentIndex = 0;
+            scanningSystem.isScanning = true;
+            
+            console.log(`SCANNING: Found ${scanningSystem.buttons.length} buttons`);
+            scanningSystem.buttons.forEach((btn, i) => {
+                console.log(`SCANNING: Button ${i}: "${btn.textContent}" classes: ${btn.className}`);
+            });
+            console.log(`SCANNING: scanDelay is ${gameState.scanDelay}ms`);
+            
+            if (scanningSystem.buttons.length === 0) {
+                console.error('SCANNING: No buttons found');
+                return;
+            }
+            
+            // Start scanning cycle
+            scanNextButton();
+        }
+
+        function scanNextButton() {
+            if (!scanningSystem.isScanning || scanningSystem.buttons.length === 0) return;
+
+            if (scanningSystem.interval) {
+                clearTimeout(scanningSystem.interval);
+                scanningSystem.interval = null;
+            }
+            
+            console.log(`SCANNING: Index ${scanningSystem.currentIndex}, Delay: ${gameState.scanDelay}ms`);
+            
+            // Remove scanning class from all buttons
+            scanningSystem.buttons.forEach(btn => {
+                btn.classList.remove('scanning');
+            });
+            
+            // Add scanning class to current button
+            const currentButton = scanningSystem.buttons[scanningSystem.currentIndex];
+            if (currentButton) {
+                currentButton.classList.add('scanning');
+                
+                // Get button text for speech synthesis (like gridpage - use speechSynthesis, not announce)
+                let buttonText = currentButton.dataset.scanLabel || currentButton.textContent || currentButton.innerText || '';
+                // Clean up the text (remove extra whitespace)
+                buttonText = buttonText.trim().replace(/\s+/g, ' ');
+                
+                console.log(`SCANNING: Speaking "${buttonText}"`);
+                
+                // Use speechSynthesis for scanning (personal speaker/voice, like gridpage)
+                try {
+                    const utterance = new SpeechSynthesisUtterance(buttonText);
+                    window.speechSynthesis.cancel();
+                    window.speechSynthesis.speak(utterance);
+                    console.log('SCANNING: Speech synthesis called successfully');
+                } catch (e) {
+                    console.error("Speech synthesis error:", e);
+                }
+            }
+            
+            // Move to next button
+            scanningSystem.currentIndex = (scanningSystem.currentIndex + 1) % scanningSystem.buttons.length;
+            
+            // Schedule next scan only in auto mode
+            if (scanMode !== 'step') {
+                console.log(`SCANNING: Next scan in ${gameState.scanDelay}ms`);
+                scanningSystem.interval = setTimeout(scanNextButton, gameState.scanDelay);
+            }
+        }
+
+        function stopScanning() {
+            scanningSystem.isScanning = false;
+            if (scanningSystem.interval) {
+                clearTimeout(scanningSystem.interval);
+                scanningSystem.interval = null;
+            }
+            
+            // Remove scanning class from all buttons
+            if (scanningSystem.buttons) {
+                scanningSystem.buttons.forEach(btn => {
+                    btn.classList.remove('scanning');
+                });
+            }
+        }
+
+        function selectCurrentScannedButton() {
+            if (!scanningSystem.isScanning || scanningSystem.buttons.length === 0) return;
+            
+            // Get the currently highlighted button
+            const currentButton = scanningSystem.buttons.find(btn => btn.classList.contains('scanning'));
+            
+            if (currentButton) {
+                stopScanning();
+                currentButton.click();
+            }
+        }
+
+        // Show/hide listening indicator
+        function showListening() {
+            document.getElementById('listeningIndicator').classList.remove('hidden');
+        }
+
+        function hideListening() {
+            document.getElementById('listeningIndicator').classList.add('hidden');
+        }
+
+        // Announcement queue and processing (same as gridpage.js)
+        let announcementQueue = [];
+        let isAnnouncingNow = false;
+        let activeAnnouncementAudioContext = null;
+        let activeAnnouncementAudioSource = null;
+
+        function interruptScanningAnnouncementPlayback() {
+            announcementQueue = [];
+            isAnnouncingNow = false;
+
+            if (window.speechSynthesis) {
+                window.speechSynthesis.cancel();
+            }
+
+            if (activeAnnouncementAudioSource) {
+                try {
+                    activeAnnouncementAudioSource.onended = null;
+                    activeAnnouncementAudioSource.stop(0);
+                } catch (e) {
+                    // no-op
+                }
+                try {
+                    activeAnnouncementAudioSource.disconnect();
+                } catch (e) {
+                    // no-op
+                }
+                activeAnnouncementAudioSource = null;
+            }
+
+            if (activeAnnouncementAudioContext && activeAnnouncementAudioContext.state !== 'closed') {
+                activeAnnouncementAudioContext.close().catch(() => {});
+            }
+            activeAnnouncementAudioContext = null;
+        }
+
+        // Base64 to ArrayBuffer conversion
+        function base64ToArrayBuffer(base64) {
+            const binaryString = window.atob(base64);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            return bytes.buffer;
+        }
+
+        // Play audio to device (simplified version of gridpage)
+        async function playAudioToDevice(audioDataBuffer, sampleRate, announcementType, progressCallback = null) {
+            try {
+                const audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                const audioBuffer = await audioContext.decodeAudioData(audioDataBuffer);
+                const source = audioContext.createBufferSource();
+                source.buffer = audioBuffer;
+                source.connect(audioContext.destination);
+                activeAnnouncementAudioContext = audioContext;
+                activeAnnouncementAudioSource = source;
+                
+                return new Promise((resolve, reject) => {
+                    const totalDuration = audioBuffer.duration || 0;
+                    let startedAt = null;
+                    let rafId = null;
+
+                    const tickProgress = () => {
+                        if (startedAt === null || typeof progressCallback !== 'function') {
+                            return;
+                        }
+
+                        const elapsed = Math.max(0, audioContext.currentTime - startedAt);
+                        const ratio = totalDuration > 0 ? Math.min(1, elapsed / totalDuration) : 1;
+                        progressCallback(ratio, elapsed, totalDuration);
+
+                        if (ratio < 1) {
+                            rafId = window.requestAnimationFrame(tickProgress);
+                        }
+                    };
+
+                    source.onended = () => {
+                        if (rafId !== null) {
+                            window.cancelAnimationFrame(rafId);
+                        }
+                        activeAnnouncementAudioSource = null;
+                        if (activeAnnouncementAudioContext === audioContext) {
+                            activeAnnouncementAudioContext = null;
+                        }
+                        if (audioContext && audioContext.state !== 'closed') {
+                            audioContext.close().catch(() => {});
+                        }
+                        if (typeof progressCallback === 'function') {
+                            progressCallback(1, totalDuration, totalDuration);
+                        }
+                        resolve();
+                    };
+                    source.onerror = reject;
+                    source.start(0);
+
+                    startedAt = audioContext.currentTime;
+                    if (typeof progressCallback === 'function') {
+                        rafId = window.requestAnimationFrame(tickProgress);
+                    }
+                });
+            } catch (error) {
+                console.error('Error playing audio:', error);
+                throw error;
+            }
+        }
+
+        // Process announcement queue (same pattern as gridpage.js)
+        async function processAnnouncementQueue() {
+            if (isAnnouncingNow || announcementQueue.length === 0) {
+                return;
+            }
+
+            isAnnouncingNow = true;
+            const { textToAnnounce, announcementType, voiceNameOverride, speechRateOverride, progressCallback, resolve, reject } = announcementQueue.shift();
+
+            console.log(`ANNOUNCE QUEUE: Playing "${textToAnnounce.substring(0, 30)}..." (Type: ${announcementType})`);
+
+            // Show speech bubble if enabled (same as gridpage.js)
+            if (typeof showSplashScreen === 'function') {
+                const splashText = String(textToAnnounce || '')
+                    .replace(/<[^>]*>/g, ' ')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+                showSplashScreen(splashText || textToAnnounce);
+            }
+
+            // Stop speech recognition during announcements to prevent interference
+            if (recognition && isRecognitionActive) {
+                try {
+                    recognition.stop();
+                } catch (e) {
+                    console.log('Recognition already stopped');
+                }
+            }
+
+            try {
+                // Fetch audio data from server using authenticatedFetch (same as gridpage)
+                const response = await authenticatedFetch(`/play-audio`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        text: textToAnnounce,
+                        routing_target: announcementType,
+                        voice_name_override: voiceNameOverride || null,
+                        speech_rate_override: Number.isFinite(speechRateOverride) ? speechRateOverride : null
+                    }),
+                });
+
+                if (!response.ok) {
+                    const errorBody = await response.json().catch(() => response.text());
+                    throw new Error(`Failed to synthesize audio: ${response.status} - ${JSON.stringify(errorBody)}`);
+                }
+
+                const jsonResponse = await response.json();
+                const audioData = jsonResponse.audio_data;
+                const sampleRate = jsonResponse.sample_rate;
+
+                if (!audioData) {
+                    throw new Error("No audio data received from server.");
+                }
+
+                const audioDataArrayBuffer = base64ToArrayBuffer(audioData);
+                await playAudioToDevice(audioDataArrayBuffer, sampleRate, announcementType, progressCallback);
+
+                resolve(); // Resolve the promise for this announcement
+            } catch (error) {
+                console.error('Error in announcement:', error);
+                reject(error);
+            } finally {
+                isAnnouncingNow = false;
+                // Process next announcement in queue
+                processAnnouncementQueue();
+            }
+        }
+
+        // Announce text using same system as gridpage.js
+        async function announce(textToAnnounce, announcementType = "system", voiceNameOverride = null, speechRateOverride = null, progressCallback = null) {
+            console.log(`ANNOUNCE: QUEUING "${textToAnnounce.substring(0, 30)}..." (Type: ${announcementType})`);
+            
+            return new Promise((resolve, reject) => {
+                announcementQueue.push({
+                    textToAnnounce,
+                    announcementType,
+                    voiceNameOverride,
+                    speechRateOverride,
+                    progressCallback,
+                    resolve,
+                    reject
+                });
+
+                // Trigger the queue processing
+                processAnnouncementQueue();
+            });
+        }
+
+        // Start 20 Questions game
+        function startTwentyQuestions() {
+            currentGame = '20_questions';
+            gameState = {
+                role: null,
+                category: null,
+                selectedItem: null,
+                askedQuestions: [],
+                questionCount: 0,
+                guessCount: 0,
+                maxQuestions: 20,
+                maxGuesses: 3,
+                previousGuesses: [],
+                currentGuess: null,
+                wakeWord: gameState.wakeWord,
+                scanDelay: gameState.scanDelay || 3500, // Preserve or default scan delay
+                isListening: false,
+                currentPhase: 'role'
+            };
+            
+            // Hide menu and show game
+            document.getElementById('gridContainer').classList.add('hidden');
+            document.getElementById('twentyQuestionsGame').classList.remove('hidden');
+            
+            // Show role selection
+            document.getElementById('statusText').textContent = 'Choose how you want to play:';
+            document.getElementById('roleSelection').classList.remove('hidden');
+            
+            announce("Let's play 20 questions!");
+            
+            // Start scanning for role selection (no listening - user taps/uses switch)
+            setTimeout(() => {
+                startScanning('roleSelection');
+                enhanceButtonsWithImages('roleSelection');
+            }, 2000);
+        }
+
+        function resetStoryBuilderState() {
+            storyState = {
+                transcript: [],
+                pendingQuestion: '',
+                partnerSuggestions: [],
+                currentOptions: [],
+                selectingTitle: false,
+                selectedStoryId: null,
+                stories: [],
+                mode: 'build',
+                view: 'entry',
+                currentStoryTitle: '',
+                currentStoryText: '',
+                readWordRanges: [],
+                readWordWeightTotal: 0,
+                activeReadWordIndex: -1,
+                activeReadUtterance: null,
+                deleteSelectionIds: [],
+                verifiedAdminPin: false,
+                illustrationUrl: '',
+                illustrationStatus: 'not_created',
+                illustrationStyle: 'storybook illustration'
+            };
+        }
+
+        function normalizeStoryIllustrationStatus(statusText) {
+            const normalized = String(statusText || 'not_created').trim().toLowerCase();
+            if (normalized === 'ready' || normalized === 'generating' || normalized === 'failed' || normalized === 'not_created') {
+                return normalized;
+            }
+            return 'not_created';
+        }
+
+        function getStoryIllustrationStatusMessage(status, hasImage) {
+            if (status === 'generating') {
+                return 'Generating illustration...';
+            }
+            if (status === 'failed') {
+                return hasImage ? 'Illustration loaded, but latest generation failed.' : 'Illustration generation failed. Try again.';
+            }
+            if (status === 'ready' && hasImage) {
+                return 'Illustration ready.';
+            }
+            return 'No illustration yet.';
+        }
+
+        function updateStoryIllustrationButtons(status, hasImage) {
+            const createBtn = document.getElementById('createIllustrationButton');
+            const regenBtn = document.getElementById('regenerateIllustrationButton');
+            const createReadBtn = document.getElementById('createIllustrationReadButton');
+            const regenReadBtn = document.getElementById('regenerateIllustrationReadButton');
+            const isGenerating = status === 'generating';
+
+            if (createBtn) {
+                createBtn.disabled = isGenerating;
+                createBtn.style.opacity = isGenerating ? '0.55' : '1';
+                createBtn.innerHTML = hasImage
+                    ? '<i class="fas fa-image"></i>Create New Illustration'
+                    : '<i class="fas fa-image"></i>Create Illustration';
+            }
+
+            if (regenBtn) {
+                regenBtn.disabled = isGenerating || !hasImage;
+                regenBtn.style.opacity = (isGenerating || !hasImage) ? '0.55' : '1';
+            }
+
+            if (createReadBtn) {
+                createReadBtn.disabled = isGenerating;
+                createReadBtn.style.opacity = isGenerating ? '0.55' : '1';
+                createReadBtn.innerHTML = hasImage
+                    ? '<i class="fas fa-image"></i>Create New Illustration'
+                    : '<i class="fas fa-image"></i>Create Illustration';
+            }
+
+            if (regenReadBtn) {
+                regenReadBtn.disabled = isGenerating || !hasImage;
+                regenReadBtn.style.opacity = (isGenerating || !hasImage) ? '0.55' : '1';
+            }
+        }
+
+        function renderStoryIllustrationViews() {
+            const url = String(storyState.illustrationUrl || '').trim();
+            const hasImage = Boolean(url);
+            const status = normalizeStoryIllustrationStatus(storyState.illustrationStatus);
+            const statusMessage = getStoryIllustrationStatusMessage(status, hasImage);
+
+            const detailStatusEl = document.getElementById('storyIllustrationStatus');
+            const detailFrameEl = document.getElementById('storyIllustrationFrame');
+            const detailImageEl = document.getElementById('storyIllustrationImage');
+            if (detailStatusEl) {
+                detailStatusEl.textContent = statusMessage;
+            }
+            if (detailFrameEl && detailImageEl) {
+                if (hasImage) {
+                    detailImageEl.src = url;
+                    detailFrameEl.classList.remove('hidden');
+                } else {
+                    detailImageEl.removeAttribute('src');
+                    detailFrameEl.classList.add('hidden');
+                }
+            }
+
+            const readContainerEl = document.getElementById('storyReadIllustrationContainer');
+            const readStatusEl = document.getElementById('storyReadIllustrationStatus');
+            const readFrameEl = document.getElementById('storyReadIllustrationFrame');
+            const readImageEl = document.getElementById('storyReadIllustrationImage');
+            if (readContainerEl && readStatusEl && readFrameEl && readImageEl) {
+                if (hasImage || status === 'generating' || status === 'failed') {
+                    readContainerEl.classList.remove('hidden');
+                    readStatusEl.textContent = statusMessage;
+                    if (hasImage) {
+                        readImageEl.src = url;
+                        readFrameEl.classList.remove('hidden');
+                    } else {
+                        readImageEl.removeAttribute('src');
+                        readFrameEl.classList.add('hidden');
+                    }
+                } else {
+                    readContainerEl.classList.add('hidden');
+                    readImageEl.removeAttribute('src');
+                    readFrameEl.classList.add('hidden');
+                }
+            }
+
+            updateStoryIllustrationButtons(status, hasImage);
+        }
+
+        function syncStoryIllustrationFromStory(story) {
+            const safeStory = story && typeof story === 'object' ? story : {};
+            storyState.illustrationUrl = String(safeStory.illustration_url || '').trim();
+            storyState.illustrationStatus = normalizeStoryIllustrationStatus(safeStory.illustration_status);
+            storyState.illustrationStyle = String(safeStory.illustration_style || storyState.illustrationStyle || 'storybook illustration');
+            renderStoryIllustrationViews();
+        }
+
+        async function createStoryIllustration(regenerate = false) {
+            if (!storyState.selectedStoryId) {
+                showError('No story selected.');
+                return;
+            }
+
+            try {
+                const selectedTitle = (document.getElementById('storyTitleInput')?.value || storyState.currentStoryTitle || '').trim();
+                const selectedText = (document.getElementById('storyTextInput')?.value || storyState.currentStoryText || '').trim();
+                if (!selectedText) {
+                    showError('Add story text before creating an illustration.');
+                    return;
+                }
+
+                storyState.currentStoryTitle = selectedTitle || storyState.currentStoryTitle;
+                storyState.currentStoryText = selectedText;
+                storyState.illustrationStatus = 'generating';
+                renderStoryIllustrationViews();
+                showLoading();
+
+                const response = await authenticatedFetch(`/api/games/story/${storyState.selectedStoryId}/illustrate`, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        style: storyState.illustrationStyle || 'storybook illustration',
+                        regenerate: Boolean(regenerate)
+                    })
+                });
+
+                if (!response.ok) {
+                    let backendError = '';
+                    try {
+                        const errorData = await response.json();
+                        backendError = String(errorData?.error || errorData?.detail || '').trim();
+                    } catch (parseError) {
+                        backendError = '';
+                    }
+                    const combinedError = backendError
+                        ? `HTTP ${response.status}: ${backendError}`
+                        : `HTTP ${response.status}: ${response.statusText}`;
+                    throw new Error(combinedError);
+                }
+
+                const data = await response.json();
+                hideLoading();
+
+                if (!data.success || !data.story) {
+                    throw new Error(data.error || 'Failed to generate illustration');
+                }
+
+                syncStoryIllustrationFromStory(data.story);
+                await loadStoryLibrary();
+                setStoryStatusMessage(data.reused_existing ? 'Existing illustration loaded.' : 'Illustration ready.');
+            } catch (error) {
+                console.error('Error creating story illustration:', error);
+                hideLoading();
+                storyState.illustrationStatus = 'failed';
+                renderStoryIllustrationViews();
+                const message = String(error?.message || 'Failed to generate illustration. Try again.');
+                showError(message);
+            }
+        }
+
+        function buildStoryAudioExportFilename(titleText) {
+            const cleaned = String(titleText || 'story')
+                .trim()
+                .replace(/\s+/g, '_')
+                .replace(/[^a-zA-Z0-9_-]/g, '_')
+                .replace(/^_+|_+$/g, '');
+            const safeBase = cleaned || 'story';
+            return `${safeBase}_audio.wav`;
+        }
+
+        async function exportStoryAudio(fromDetailView = false) {
+            if (!storyState.selectedStoryId) {
+                showError('No story selected.');
+                return;
+            }
+
+            try {
+                const titleFromInput = document.getElementById('storyTitleInput')?.value || '';
+                const textFromInput = document.getElementById('storyTextInput')?.value || '';
+
+                const selectedTitle = (fromDetailView ? titleFromInput : storyState.currentStoryTitle) || titleFromInput || storyState.currentStoryTitle || 'Untitled Story';
+                const selectedText = (fromDetailView ? textFromInput : storyState.currentStoryText) || textFromInput || storyState.currentStoryText || '';
+
+                if (!String(selectedText).trim()) {
+                    showError('Story text is empty. Add story text before exporting audio.');
+                    return;
+                }
+
+                showLoading();
+                const response = await authenticatedFetch(`/api/games/story/${storyState.selectedStoryId}/export-audio`, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        title: selectedTitle,
+                        story_text: selectedText
+                    })
+                });
+
+                if (!response.ok) {
+                    let backendError = '';
+                    try {
+                        const errorData = await response.json();
+                        backendError = String(errorData?.error || errorData?.detail || '').trim();
+                    } catch (parseError) {
+                        backendError = '';
+                    }
+                    const combinedError = backendError
+                        ? `HTTP ${response.status}: ${backendError}`
+                        : `HTTP ${response.status}: ${response.statusText}`;
+                    throw new Error(combinedError);
+                }
+
+                const audioBlob = await response.blob();
+                const contentDisposition = response.headers.get('Content-Disposition') || '';
+                const quotedFilenameMatch = contentDisposition.match(/filename="([^"]+)"/i);
+                const bareFilenameMatch = contentDisposition.match(/filename=([^;]+)/i);
+                const serverFilename = quotedFilenameMatch?.[1] || bareFilenameMatch?.[1]?.trim();
+                const filename = serverFilename || buildStoryAudioExportFilename(selectedTitle);
+
+                const blobUrl = URL.createObjectURL(audioBlob);
+                const downloadLink = document.createElement('a');
+                downloadLink.href = blobUrl;
+                downloadLink.download = filename;
+                document.body.appendChild(downloadLink);
+                downloadLink.click();
+                downloadLink.remove();
+                URL.revokeObjectURL(blobUrl);
+
+                hideLoading();
+                setStoryStatusMessage(`Story audio exported as ${filename}.`);
+            } catch (error) {
+                console.error('Error exporting story audio:', error);
+                hideLoading();
+                showError(String(error?.message || 'Failed to export story audio.'));
+            }
+        }
+
+        function updateStoryBottomControls({ showDeleteStories = false } = {}) {
+            const deleteBtn = document.getElementById('storyDeleteStoriesButton');
+            if (deleteBtn) {
+                deleteBtn.classList.toggle('hidden', !showDeleteStories);
+            }
+        }
+
+        function getStoryEntryOptions() {
+            return [
+                { option: 'Go Back', summary: 'Go Back', action: 'story_entry_back' },
+                { option: 'Create a New Story', summary: 'Create New Story', action: 'story_entry_create' },
+                { option: 'Read an Existing Story', summary: 'Read Existing Story', action: 'story_entry_read' }
+            ];
+        }
+
+        function getReadExistingStoryOptions() {
+            const options = [
+                { option: 'Go Back', summary: 'Go Back', action: 'story_read_back' }
+            ];
+
+            storyState.stories.forEach((story) => {
+                options.push({
+                    option: story.title || 'Untitled Story',
+                    summary: story.title || 'Untitled Story',
+                    action: 'story_read_story',
+                    storyId: story.id,
+                    storyTitle: story.title || 'Untitled Story'
+                });
+            });
+
+            if (storyState.stories.length === 0) {
+                options.push({
+                    option: 'No saved stories found',
+                    summary: 'No Saved Stories',
+                    action: 'story_noop'
+                });
+            }
+
+            return options;
+        }
+
+        async function showStoryEntryMenu() {
+            stopListening();
+            closeStoryDeleteModal();
+            storyState.view = 'entry';
+            gameState.currentPhase = 'story_entry_menu';
+
+            document.getElementById('storyTranscript').classList.add('hidden');
+            document.getElementById('storyLibrary').classList.add('hidden');
+            document.getElementById('storyReadDisplay').classList.add('hidden');
+            document.getElementById('storyDetail').classList.add('hidden');
+
+            updateStoryBottomControls({ showDeleteStories: false });
+            setStoryStatusMessage('Choose an option to begin Story Builder.');
+            displayStoryUserOptions(getStoryEntryOptions());
+        }
+
+        async function startCreateStoryFlow() {
+            stopScanning();
+            stopListening();
+            closeStoryDeleteModal();
+
+            storyState.mode = 'build';
+            storyState.view = 'create';
+            storyState.pendingQuestion = '';
+            storyState.selectedStoryId = null;
+            storyState.currentStoryTitle = '';
+            storyState.currentStoryText = '';
+            storyState.transcript = [];
+
+            document.getElementById('storyUserOptions').classList.add('hidden');
+            document.getElementById('storyTranscript').classList.remove('hidden');
+            document.getElementById('storyLibrary').classList.add('hidden');
+            document.getElementById('storyReadDisplay').classList.add('hidden');
+            document.getElementById('storyDetail').classList.add('hidden');
+
+            updateStoryTranscriptUI();
+            updateStoryBottomControls({ showDeleteStories: false });
+
+            gameState.currentPhase = 'story_awaiting_wake_word';
+            setStoryStatusMessage(`Let's create a story! Say ${gameState.wakeWord} to ask me a question about the story.`);
+            await announce(`Let's create a story! Say ${gameState.wakeWord} to ask me a question about the story.`);
+            if (gameState.currentPhase === 'story_awaiting_wake_word') {
+                startListening();
+            }
+        }
+
+        async function showExistingStoriesMenu() {
+            stopListening();
+            closeStoryDeleteModal();
+
+            storyState.view = 'read';
+            gameState.currentPhase = 'story_read_list';
+
+            await loadStoryLibrary();
+
+            document.getElementById('storyTranscript').classList.add('hidden');
+            document.getElementById('storyLibrary').classList.add('hidden');
+            document.getElementById('storyReadDisplay').classList.add('hidden');
+            document.getElementById('storyDetail').classList.add('hidden');
+
+            updateStoryBottomControls({ showDeleteStories: true });
+            setStoryStatusMessage('Choose a story to read.');
+            displayStoryUserOptions(getReadExistingStoryOptions());
+        }
+
+        async function readExistingStoryById(storyId, storyTitle = 'Untitled Story') {
+            if (!storyId) {
+                showError('Story not found.');
+                await showExistingStoriesMenu();
+                return;
+            }
+
+            try {
+                gameState.currentPhase = 'story_generating';
+                const response = await authenticatedFetch(`/api/games/story/${storyId}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                if (!data.success || !data.story) {
+                    throw new Error(data.error || 'Story not found');
+                }
+
+                const story = data.story;
+                storyState.selectedStoryId = story.id;
+                storyState.currentStoryTitle = story.title || storyTitle || 'Untitled Story';
+                storyState.currentStoryText = story.story_text || '';
+                syncStoryIllustrationFromStory(story);
+
+                document.getElementById('storyTranscript').classList.add('hidden');
+                document.getElementById('storyLibrary').classList.add('hidden');
+                document.getElementById('storyDetail').classList.add('hidden');
+                document.getElementById('storyReadDisplay').classList.remove('hidden');
+                updateStoryBottomControls({ showDeleteStories: false });
+
+                await announce(`Let's read ${storyState.currentStoryTitle}!`);
+                await readStoryWithHighlight(storyState.currentStoryTitle, storyState.currentStoryText || 'This story is empty.');
+                gameState.currentPhase = 'story_reading_story';
+                setStoryStatusMessage('Story loaded. You can read again, create an illustration, or go back to stories.');
+            } catch (error) {
+                console.error('Error reading existing story:', error);
+                showError('Unable to read that story.');
+                await showExistingStoriesMenu();
+            }
+        }
+
+        async function backToStoryReadList() {
+            await showExistingStoriesMenu();
+        }
+
+        async function readSelectedStoryAgain() {
+            const title = storyState.currentStoryTitle || 'Untitled Story';
+            const text = storyState.currentStoryText || '';
+            await readStoryWithHighlight(title, text || 'This story is empty.');
+            setStoryStatusMessage('Story loaded. You can read again, create an illustration, or go back to stories.');
+        }
+
+        async function validateStoryAdminPin(pin) {
+            try {
+                const response = await authenticatedFetch('/api/account/toolbar-pin', { method: 'GET' });
+                if (!response.ok) {
+                    return false;
+                }
+                const data = await response.json();
+                return (data.pin || '') === pin;
+            } catch (error) {
+                console.error('Error validating admin PIN:', error);
+                return false;
+            }
+        }
+
+        async function promptStoryDeletePin() {
+            if (storyState.view !== 'read') {
+                return;
+            }
+
+            if (storyState.verifiedAdminPin) {
+                openStoryDeleteModal();
+                return;
+            }
+
+            const pin = window.prompt('Enter Admin PIN to delete stories:');
+            if (pin === null) {
+                return;
+            }
+
+            const isValid = await validateStoryAdminPin(String(pin).trim());
+            if (!isValid) {
+                showError('Incorrect Admin PIN.');
+                return;
+            }
+
+            storyState.verifiedAdminPin = true;
+            openStoryDeleteModal();
+        }
+
+        function closeStoryDeleteModal() {
+            const modal = document.getElementById('storyDeleteModal');
+            if (modal) {
+                modal.classList.add('hidden');
+            }
+            storyState.deleteSelectionIds = [];
+
+            if (storyState.view === 'read' && gameState.currentPhase === 'story_read_list') {
+                setTimeout(() => startScanning('storyUserOptions'), 250);
+            }
+        }
+
+        function openStoryDeleteModal() {
+            const modal = document.getElementById('storyDeleteModal');
+            const list = document.getElementById('storyDeleteList');
+            const message = document.getElementById('storyDeleteModalMessage');
+            if (!modal || !list || !message) {
+                return;
+            }
+
+            stopScanning();
+            list.innerHTML = '';
+            storyState.deleteSelectionIds = [];
+
+            if (!storyState.stories.length) {
+                const empty = document.createElement('div');
+                empty.className = 'story-helper-item';
+                empty.textContent = 'No stories available to delete.';
+                list.appendChild(empty);
+                message.textContent = 'There are no saved stories to delete.';
+            } else {
+                message.textContent = 'Select one or more stories to delete.';
+                storyState.stories.forEach((story) => {
+                    const row = document.createElement('label');
+                    row.style.display = 'flex';
+                    row.style.alignItems = 'center';
+                    row.style.gap = '0.6rem';
+                    row.style.padding = '0.4rem 0';
+                    row.style.borderBottom = '1px solid #f1f5f9';
+
+                    const checkbox = document.createElement('input');
+                    checkbox.type = 'checkbox';
+                    checkbox.value = story.id || '';
+                    checkbox.addEventListener('change', () => {
+                        const selected = Array.from(list.querySelectorAll('input[type="checkbox"]:checked')).map((item) => item.value);
+                        storyState.deleteSelectionIds = selected;
+                    });
+
+                    const label = document.createElement('span');
+                    label.textContent = story.title || 'Untitled Story';
+
+                    row.appendChild(checkbox);
+                    row.appendChild(label);
+                    list.appendChild(row);
+                });
+            }
+
+            modal.classList.remove('hidden');
+        }
+
+        async function confirmDeleteSelectedStories() {
+            const selectedIds = Array.isArray(storyState.deleteSelectionIds)
+                ? storyState.deleteSelectionIds.filter(Boolean)
+                : [];
+
+            if (!selectedIds.length) {
+                showError('Select at least one story to delete.');
+                return;
+            }
+
+            const confirmed = window.confirm(`Delete ${selectedIds.length} selected stor${selectedIds.length === 1 ? 'y' : 'ies'}? This cannot be undone.`);
+            if (!confirmed) {
+                return;
+            }
+
+            showLoading();
+            try {
+                for (const storyId of selectedIds) {
+                    const response = await authenticatedFetch(`/api/games/story/${storyId}`, {
+                        method: 'DELETE'
+                    });
+
+                    if (!response.ok) {
+                        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                    }
+                }
+
+                closeStoryDeleteModal();
+                hideLoading();
+                await showExistingStoriesMenu();
+                setStoryStatusMessage('Selected stories deleted. Choose a story to read.');
+            } catch (error) {
+                console.error('Error deleting selected stories:', error);
+                hideLoading();
+                showError('Failed to delete selected stories.');
+            }
+        }
+
+        function setPageTitle(text) {
+            const titleEl = document.getElementById('pageTitle');
+            if (titleEl) {
+                titleEl.textContent = text;
+            }
+        }
+
+        function setStoryStatusMessage(message, heardTranscript = '') {
+            const statusEl = document.getElementById('storyStatusMessage');
+            const transcriptEl = document.getElementById('storyHeardTranscript');
+            if (statusEl) {
+                statusEl.textContent = message || '';
+            }
+            if (transcriptEl) {
+                transcriptEl.textContent = heardTranscript ? `Heard: ${heardTranscript}` : '';
+            }
+        }
+
+        function renderStoryReadText(title, text) {
+            const titleEl = document.getElementById('storyReadTitle');
+            const textEl = document.getElementById('storyReadText');
+            if (!titleEl || !textEl) {
+                return;
+            }
+
+            titleEl.textContent = title || 'Untitled Story';
+            textEl.innerHTML = '';
+            storyState.readWordRanges = [];
+            storyState.readWordWeightTotal = 0;
+            storyState.activeReadWordIndex = -1;
+
+            const sourceText = String(text || '');
+            const tokenRegex = /\S+/g;
+            let cursor = 0;
+            let match;
+
+            while ((match = tokenRegex.exec(sourceText)) !== null) {
+                const tokenStart = match.index;
+                const tokenText = match[0];
+
+                if (tokenStart > cursor) {
+                    textEl.appendChild(document.createTextNode(sourceText.slice(cursor, tokenStart)));
+                }
+
+                const span = document.createElement('span');
+                span.className = 'story-read-word';
+                span.textContent = tokenText;
+                textEl.appendChild(span);
+
+                const gapText = tokenStart > cursor ? sourceText.slice(cursor, tokenStart) : '';
+                let weight = Math.max(1, tokenText.replace(/[^A-Za-z0-9]/g, '').length * 0.42);
+
+                if (/[,:;]$/.test(tokenText)) {
+                    weight += 1.0;
+                }
+                if (/[.!?]["')\]]*$/.test(tokenText)) {
+                    weight += 2.1;
+                }
+                if (/…$/.test(tokenText) || /\.\.\.$/.test(tokenText)) {
+                    weight += 2.8;
+                }
+
+                const lineBreakCount = (gapText.match(/\n/g) || []).length;
+                if (lineBreakCount > 0) {
+                    weight += lineBreakCount * 1.6;
+                }
+
+                storyState.readWordWeightTotal += weight;
+
+                storyState.readWordRanges.push({
+                    start: tokenStart,
+                    end: tokenStart + tokenText.length,
+                    node: span,
+                    cumulativeWeight: storyState.readWordWeightTotal
+                });
+
+                cursor = tokenStart + tokenText.length;
+            }
+
+            if (cursor < sourceText.length) {
+                textEl.appendChild(document.createTextNode(sourceText.slice(cursor)));
+            }
+        }
+
+        function setActiveStoryReadWordByCharIndex(charIndex) {
+            if (!Array.isArray(storyState.readWordRanges) || storyState.readWordRanges.length === 0) {
+                return;
+            }
+
+            let nextIndex = -1;
+            for (let i = 0; i < storyState.readWordRanges.length; i++) {
+                const token = storyState.readWordRanges[i];
+                if (charIndex >= token.start && charIndex < token.end) {
+                    nextIndex = i;
+                    break;
+                }
+            }
+
+            if (nextIndex === -1 || nextIndex === storyState.activeReadWordIndex) {
+                return;
+            }
+
+            if (storyState.activeReadWordIndex >= 0 && storyState.readWordRanges[storyState.activeReadWordIndex]) {
+                storyState.readWordRanges[storyState.activeReadWordIndex].node.classList.remove('active');
+            }
+
+            storyState.activeReadWordIndex = nextIndex;
+            const activeToken = storyState.readWordRanges[nextIndex];
+            activeToken.node.classList.add('active');
+            activeToken.node.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        }
+
+        function clearStoryReadHighlight() {
+            if (
+                storyState.activeReadWordIndex >= 0
+                && Array.isArray(storyState.readWordRanges)
+                && storyState.readWordRanges[storyState.activeReadWordIndex]
+            ) {
+                storyState.readWordRanges[storyState.activeReadWordIndex].node.classList.remove('active');
+            }
+            storyState.activeReadWordIndex = -1;
+        }
+
+        function getStoryCharIndexForPlaybackRatio(ratio, fallbackTextLength) {
+            if (!Array.isArray(storyState.readWordRanges) || storyState.readWordRanges.length === 0) {
+                return 0;
+            }
+
+            const safeRatio = Math.max(0, Math.min(1, Number(ratio) || 0));
+            const totalWeight = Math.max(0.0001, Number(storyState.readWordWeightTotal) || 0);
+            const targetWeight = safeRatio * totalWeight;
+
+            for (let i = 0; i < storyState.readWordRanges.length; i++) {
+                const token = storyState.readWordRanges[i];
+                if ((token.cumulativeWeight || 0) >= targetWeight) {
+                    return token.start;
+                }
+            }
+
+            const lastToken = storyState.readWordRanges[storyState.readWordRanges.length - 1];
+            return Number.isFinite(lastToken?.start)
+                ? lastToken.start
+                : Math.max(0, (fallbackTextLength || 1) - 1);
+        }
+
+        function escapeStoryTextForSsml(rawText) {
+            return String(rawText || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&apos;');
+        }
+
+        function buildStoryNarrationSsml(rawText) {
+            const content = escapeStoryTextForSsml(rawText)
+                .replace(/\r\n/g, '\n')
+                .replace(/\n{2,}/g, '<break time="650ms"/>')
+                .replace(/\n/g, '<break time="320ms"/>')
+                .replace(/\.\.\./g, '...<break time="480ms"/>')
+                .replace(/([,;:])(\s|$)/g, '$1<break time="180ms"/>$2')
+                .replace(/([!?]+)(\s|$)/g, '$1<break time="520ms"/>$2')
+                .replace(/([.])(\s|$)/g, '$1<break time="430ms"/>$2');
+
+            return `<speak>${content}</speak>`;
+        }
+
+        async function readStoryWithHighlight(title, storyText) {
+            const text = String(storyText || '').trim();
+            renderStoryReadText(title, text || 'This story is empty.');
+
+            if (!text) {
+                await announce('This story is empty.');
+                return;
+            }
+
+            try {
+                const narrationSsml = buildStoryNarrationSsml(text);
+                await announce(
+                    narrationSsml,
+                    'system',
+                    selectedTtsVoiceName || null,
+                    configuredSpeechRateWpm,
+                    (ratio) => {
+                        if (!text.length) {
+                            return;
+                        }
+                        const charIndex = getStoryCharIndexForPlaybackRatio(ratio, text.length);
+                        setActiveStoryReadWordByCharIndex(charIndex);
+                    }
+                );
+            } finally {
+                clearStoryReadHighlight();
+                storyState.activeReadUtterance = null;
+            }
+        }
+
+        async function startStoryBuilder() {
+            currentGame = 'story_builder';
+            resetStoryBuilderState();
+            setPageTitle('🎮 Games - Story Builder');
+
+            stopScanning();
+            stopListening();
+
+            document.getElementById('gridContainer').classList.add('hidden');
+            document.getElementById('twentyQuestionsGame').classList.add('hidden');
+            document.getElementById('storyBuilderGame').classList.remove('hidden');
+
+            document.getElementById('storyUserOptions').classList.add('hidden');
+            document.getElementById('storyTranscript').classList.add('hidden');
+            document.getElementById('storyLibrary').classList.add('hidden');
+            document.getElementById('storyReadDisplay').classList.add('hidden');
+            document.getElementById('storyDetail').classList.add('hidden');
+            closeStoryDeleteModal();
+
+            updateStoryTranscriptUI();
+            setStoryStatusMessage('Choose an option to begin Story Builder.');
+
+            await showStoryEntryMenu();
+        }
+
+        function handleStorySpeechResult(transcript) {
+            if (gameState.currentPhase !== 'story_awaiting_wake_word' && gameState.currentPhase !== 'story_listening_for_question') {
+                return;
+            }
+
+            const rawTranscript = String(transcript || '').trim();
+            const normalizedTranscript = rawTranscript.toLowerCase();
+            const normalizedWakeWord = gameState.wakeWord.toLowerCase();
+            const compactWakeWord = normalizedWakeWord.replace(/\s+/g, '');
+            const compactTranscript = normalizedTranscript.replace(/\s+/g, '');
+            setStoryStatusMessage(`Say ${gameState.wakeWord} to ask the next question or complete the story.`, normalizedTranscript);
+
+            if (gameState.currentPhase === 'story_awaiting_wake_word') {
+                if (compactTranscript.includes(compactWakeWord) || normalizedTranscript.includes(normalizedWakeWord)) {
+                    gameState.currentPhase = 'story_listening_for_question';
+                    setStoryStatusMessage("I'm listening. Say 'The End' to finish the story.", normalizedTranscript);
+                    announce("I'm listening. Say 'The End' to finish the story.").finally(() => {
+                        if (gameState.currentPhase === 'story_listening_for_question') {
+                            startListening();
+                        }
+                    });
+                    return;
+                }
+
+                setTimeout(() => {
+                    if (gameState.currentPhase === 'story_awaiting_wake_word') {
+                        startListening();
+                    }
+                }, 900);
+                return;
+            }
+
+            if (gameState.currentPhase === 'story_listening_for_question') {
+                let partnerQuestion = rawTranscript;
+                const escapedWakeWord = normalizedWakeWord.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const wakeWordPrefixRegex = new RegExp(`^${escapedWakeWord}[\\s,.:;!?-]*`, 'i');
+                partnerQuestion = rawTranscript.replace(wakeWordPrefixRegex, '').trim();
+                partnerQuestion = partnerQuestion.replace(/^\s+|\s+$/g, '');
+
+                if (!partnerQuestion) {
+                    announce('Please ask a question for Story Builder.');
+                    setTimeout(() => {
+                        if (gameState.currentPhase === 'story_listening_for_question') {
+                            startListening();
+                        }
+                    }, 1500);
+                    return;
+                }
+
+                storyState.pendingQuestion = partnerQuestion;
+                setStoryStatusMessage(`Question captured: ${partnerQuestion}`, partnerQuestion);
+                announce(`I heard '${partnerQuestion}'. Give me a moment to respond.`);
+
+                if (/^the end\??$/i.test(partnerQuestion)) {
+                    gameState.currentPhase = 'story_confirm_end';
+                    setStoryStatusMessage('Story completion requested. Select Yes or No.', partnerQuestion);
+                    displayStoryUserOptions(['Yes', 'No']);
+                    return;
+                }
+
+                requestStoryOptionsForQuestion(partnerQuestion);
+                return;
+            }
+        }
+
+        function getStoryStandardActionOptions() {
+            return [
+                {
+                    option: 'Something else',
+                    summary: 'Something Else',
+                    action: 'story_something_else'
+                },
+                {
+                    option: 'Ask again',
+                    summary: 'Ask Again',
+                    action: 'story_ask_again'
+                },
+                {
+                    option: 'Quit story',
+                    summary: 'Quit Story',
+                    action: 'story_quit'
+                }
+            ];
+        }
+
+        function getStoryExcludableOptionTexts(options) {
+            if (!Array.isArray(options)) {
+                return [];
+            }
+
+            return options
+                .filter((item) => !(item && typeof item === 'object' && item.action))
+                .map((item) => {
+                    if (item && typeof item === 'object') {
+                        return item.option || item.summary || '';
+                    }
+                    return String(item || '');
+                })
+                .map((text) => text.trim())
+                .filter(Boolean);
+        }
+
+        function getStoryPostReadActionOptions() {
+            return [
+                {
+                    option: 'Exit Story Builder',
+                    summary: 'Exit Story Builder',
+                    action: 'story_post_exit'
+                },
+                {
+                    option: 'Read Story Again',
+                    summary: 'Read Story Again',
+                    action: 'story_post_read_again'
+                },
+                {
+                    option: 'Make changes to story',
+                    summary: 'Make Changes to Story',
+                    action: 'story_post_make_changes'
+                }
+            ];
+        }
+
+        function showStoryQaMode() {
+            document.getElementById('storyDetail').classList.add('hidden');
+            document.getElementById('storyLibrary').classList.add('hidden');
+            document.getElementById('storyReadDisplay').classList.add('hidden');
+            document.getElementById('storyUserOptions').classList.add('hidden');
+        }
+
+        async function presentPostStoryActions(statusMessage = 'Choose what to do next with your story.') {
+            gameState.currentPhase = 'story_post_story_actions';
+            updateStoryBottomControls({ showDeleteStories: false });
+            setStoryStatusMessage(statusMessage);
+            displayStoryUserOptions(getStoryPostReadActionOptions());
+        }
+
+        async function beginStoryEditMode() {
+            storyState.mode = 'edit';
+            storyState.view = 'create';
+            storyState.pendingQuestion = '';
+            showStoryQaMode();
+            updateStoryBottomControls({ showDeleteStories: false });
+            gameState.currentPhase = 'story_awaiting_wake_word';
+            setStoryStatusMessage(`I want to make some changes. Say ${gameState.wakeWord} to ask me about the changes.`);
+            await announce(`I want to make some changes. Say ${gameState.wakeWord} to ask me about the changes.`);
+            if (gameState.currentPhase === 'story_awaiting_wake_word') {
+                startListening();
+            }
+        }
+
+        async function regenerateStoryWithCurrentTranscript() {
+            if (!storyState.selectedStoryId) {
+                showError('No story selected for changes.');
+                return;
+            }
+
+            gameState.currentPhase = 'story_generating';
+            showLoading();
+
+            try {
+                const selectedTitle = (document.getElementById('storyTitleInput').value || storyState.currentStoryTitle || 'Untitled Story').trim();
+
+                const response = await authenticatedFetch('/api/games/story/finalize', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        title: selectedTitle,
+                        transcript: storyState.transcript
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                if (!data.success || !data.story) {
+                    throw new Error(data.error || 'Story regeneration failed');
+                }
+
+                const updatedStoryResponse = await authenticatedFetch(`/api/games/story/${storyState.selectedStoryId}`, {
+                    method: 'PUT',
+                    body: JSON.stringify({
+                        title: selectedTitle,
+                        story_text: data.story.story_text || '',
+                        transcript: storyState.transcript
+                    })
+                });
+
+                if (!updatedStoryResponse.ok) {
+                    throw new Error(`HTTP ${updatedStoryResponse.status}: ${updatedStoryResponse.statusText}`);
+                }
+
+                const updatedData = await updatedStoryResponse.json();
+                hideLoading();
+
+                if (!updatedData.success || !updatedData.story) {
+                    throw new Error(updatedData.error || 'Failed to save regenerated story');
+                }
+
+                storyState.mode = 'build';
+                await loadStoryLibrary();
+                openStoryDetailFromData(updatedData.story);
+                await announce(`Let's listen to our story ${updatedData.story.title || selectedTitle}.`);
+                await announce(updatedData.story.story_text || 'Your story is ready.');
+                await presentPostStoryActions('Story updated. Choose what to do next.');
+            } catch (error) {
+                console.error('Error regenerating edited story:', error);
+                hideLoading();
+                showError('Failed to regenerate story. Please try again.');
+                gameState.currentPhase = 'story_awaiting_wake_word';
+                setStoryStatusMessage(`Say ${gameState.wakeWord} to ask the next question or complete the story.`);
+                startListening();
+            }
+        }
+
+        async function requestStoryOptionsForQuestion(partnerQuestion, excludedOptions = []) {
+            showLoading();
+            try {
+                const response = await authenticatedFetch('/api/games/story/options', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        partner_question: partnerQuestion,
+                        transcript: storyState.transcript,
+                        exclude_existing_options: excludedOptions
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                hideLoading();
+
+                const userOptions = Array.isArray(data.user_options) ? data.user_options : [];
+                storyState.view = 'create';
+                gameState.currentPhase = 'story_selecting_answer';
+
+                document.getElementById('storyTranscript').classList.remove('hidden');
+                document.getElementById('storyLibrary').classList.add('hidden');
+                document.getElementById('storyReadDisplay').classList.add('hidden');
+                document.getElementById('storyDetail').classList.add('hidden');
+                updateStoryBottomControls({ showDeleteStories: false });
+
+                displayStoryUserOptions(userOptions, { appendStandardActions: true });
+                setStoryStatusMessage('Choose an answer option for the user.', partnerQuestion);
+            } catch (error) {
+                console.error('Error generating Story Builder options:', error);
+                hideLoading();
+                showError('Failed to generate story options. Try again.');
+                gameState.currentPhase = 'story_awaiting_wake_word';
+                setStoryStatusMessage(`Say ${gameState.wakeWord} to ask the next question or complete the story.`);
+                setTimeout(() => startListening(), 1200);
+            }
+        }
+
+        function displayStoryUserOptions(options, config = {}) {
+            const container = document.getElementById('storyUserOptions');
+            container.innerHTML = '';
+
+            const appendStandardActions = Boolean(config.appendStandardActions);
+            const baseOptions = Array.isArray(options) && options.length > 0 ? options : ['Try Again'];
+            const safeOptions = appendStandardActions
+                ? [...baseOptions, ...getStoryStandardActionOptions()]
+                : baseOptions;
+            storyState.currentOptions = safeOptions;
+
+            safeOptions.forEach((item) => {
+                const isObj = typeof item === 'object' && item !== null;
+                // summary is used for scanning label (short); option is the full text spoken on selection
+                const scanLabel = isObj ? (item.summary || item.option || '') : String(item);
+                const fullOptionText = isObj ? (item.option || item.summary || '') : String(item);
+
+                const button = document.createElement('button');
+                button.className = 'game-button';
+                button.textContent = scanLabel;
+                button.dataset.scanLabel = scanLabel;
+                button.onclick = () => selectStoryOption(isObj ? item : fullOptionText);
+                container.appendChild(button);
+            });
+
+            container.classList.remove('hidden');
+            setTimeout(() => startScanning('storyUserOptions'), 400);
+            enhanceButtonsWithImages('storyUserOptions');
+        }
+
+        async function selectStoryOption(selectedOption) {
+            stopScanning();
+            document.getElementById('storyUserOptions').classList.add('hidden');
+
+            const isObj = selectedOption && typeof selectedOption === 'object';
+            const optionText = isObj ? String(selectedOption.option || selectedOption.summary || '').trim() : String(selectedOption || '').trim();
+            const selectedAction = isObj ? selectedOption.action : null;
+
+            if (selectedAction === 'story_entry_back') {
+                goBackToMenu();
+                return;
+            }
+
+            if (selectedAction === 'story_entry_create') {
+                await startCreateStoryFlow();
+                return;
+            }
+
+            if (selectedAction === 'story_entry_read') {
+                await showExistingStoriesMenu();
+                return;
+            }
+
+            if (selectedAction === 'story_read_back') {
+                await showStoryEntryMenu();
+                return;
+            }
+
+            if (selectedAction === 'story_read_story') {
+                await readExistingStoryById(selectedOption.storyId, selectedOption.storyTitle || optionText);
+                return;
+            }
+
+            if (selectedAction === 'story_noop') {
+                await showExistingStoriesMenu();
+                return;
+            }
+
+            if (selectedAction === 'story_something_else') {
+                const excludedOptions = getStoryExcludableOptionTexts(storyState.currentOptions);
+                setStoryStatusMessage('Getting different answer options.', storyState.pendingQuestion);
+                await requestStoryOptionsForQuestion(storyState.pendingQuestion, excludedOptions);
+                return;
+            }
+
+            if (selectedAction === 'story_ask_again') {
+                gameState.currentPhase = 'story_awaiting_wake_word';
+                storyState.pendingQuestion = '';
+                setStoryStatusMessage(`Please use ${gameState.wakeWord} and ask again.`);
+                announce(`Please use ${gameState.wakeWord} and ask again.`).finally(() => {
+                    if (gameState.currentPhase === 'story_awaiting_wake_word') {
+                        startListening();
+                    }
+                });
+                return;
+            }
+
+            if (selectedAction === 'story_quit') {
+                goBackToMenu();
+                return;
+            }
+
+            if (selectedAction === 'story_post_exit') {
+                goBackToMenu();
+                return;
+            }
+
+            if (selectedAction === 'story_post_read_again') {
+                const storyText = document.getElementById('storyTextInput').value || storyState.currentStoryText || '';
+                if (storyText.trim()) {
+                    await announce(storyText);
+                }
+                await presentPostStoryActions('Choose what to do next with your story.');
+                return;
+            }
+
+            if (selectedAction === 'story_post_make_changes') {
+                await beginStoryEditMode();
+                return;
+            }
+
+            if (gameState.currentPhase === 'story_confirm_end') {
+                storyState.transcript.push({ question: 'The End?', answer: optionText });
+                updateStoryTranscriptUI();
+
+                if (String(optionText).toLowerCase() === 'yes') {
+                    if (storyState.mode === 'edit') {
+                        await announce("I'm updating your story now.");
+                        await regenerateStoryWithCurrentTranscript();
+                        return;
+                    }
+                    await announce("I'm picking a title for the story.");
+                    await requestStoryTitleOptions();
+                    return;
+                }
+
+                gameState.currentPhase = 'story_awaiting_wake_word';
+                setStoryStatusMessage(`Say ${gameState.wakeWord} to ask the next question or complete the story.`);
+                await announce(`Say ${gameState.wakeWord} to ask another question.`);
+                startListening();
+                return;
+            }
+
+            if (gameState.currentPhase === 'story_selecting_title') {
+                await announce(`Let's listen to our story ${optionText}.`);
+                await finalizeStory(optionText);
+                return;
+            }
+
+            if (gameState.currentPhase === 'story_selecting_answer') {
+                await announce(optionText);
+                storyState.transcript.push({
+                    question: storyState.pendingQuestion,
+                    answer: optionText
+                });
+                updateStoryTranscriptUI();
+                gameState.currentPhase = 'story_awaiting_wake_word';
+                setStoryStatusMessage(`Say ${gameState.wakeWord} to ask the next question or complete the story.`);
+                await announce(`Say ${gameState.wakeWord} to ask another question.`);
+                startListening();
+            }
+        }
+
+        async function requestStoryTitleOptions() {
+            gameState.currentPhase = 'story_generating';
+            showLoading();
+
+            try {
+                const response = await authenticatedFetch('/api/games/story/title-options', {
+                    method: 'POST',
+                    body: JSON.stringify({ transcript: storyState.transcript })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                const titleOptions = Array.isArray(data.title_options) ? data.title_options : [];
+                hideLoading();
+                gameState.currentPhase = 'story_selecting_title';
+                setStoryStatusMessage('Choose a title for your story.');
+                displayStoryUserOptions(titleOptions);
+            } catch (error) {
+                console.error('Error generating title options:', error);
+                hideLoading();
+                showError('Failed to generate title options.');
+                gameState.currentPhase = 'story_awaiting_wake_word';
+                setStoryStatusMessage(`Say ${gameState.wakeWord} to ask the next question or complete the story.`);
+                startListening();
+            }
+        }
+
+        async function finalizeStory(selectedTitle) {
+            gameState.currentPhase = 'story_generating';
+            showLoading();
+
+            try {
+                const response = await authenticatedFetch('/api/games/story/finalize', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        title: selectedTitle,
+                        transcript: storyState.transcript
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                hideLoading();
+
+                if (!data.success || !data.story) {
+                    throw new Error(data.error || 'Story generation failed');
+                }
+
+                storyState.mode = 'build';
+                await loadStoryLibrary();
+                openStoryDetailFromData(data.story);
+                setStoryStatusMessage('Story saved. Reading now.');
+                await announce(data.story.story_text || 'Your story is ready.');
+                await presentPostStoryActions('Story complete. Choose what to do next.');
+            } catch (error) {
+                console.error('Error finalizing story:', error);
+                hideLoading();
+                showError('Failed to finish story. Please try again.');
+                gameState.currentPhase = 'story_awaiting_wake_word';
+                setStoryStatusMessage(`Say ${gameState.wakeWord} to ask the next question or complete the story.`);
+                startListening();
+            }
+        }
+
+        function updateStoryTranscriptUI() {
+            const list = document.getElementById('storyQaList');
+            list.innerHTML = '';
+
+            for (let i = storyState.transcript.length - 1; i >= 0; i--) {
+                const qa = storyState.transcript[i];
+                const item = document.createElement('div');
+                item.className = 'qa-item';
+                item.innerHTML = `<div class="qa-question">Q: ${qa.question || ''}</div><div class="qa-answer">A: ${qa.answer || ''}</div>`;
+                list.appendChild(item);
+            }
+        }
+
+        async function loadStoryLibrary() {
+            try {
+                const response = await authenticatedFetch('/api/games/story/list');
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                const data = await response.json();
+                storyState.stories = Array.isArray(data.stories) ? data.stories : [];
+                renderStoryLibrary();
+            } catch (error) {
+                console.error('Error loading story library:', error);
+                showError('Unable to load saved stories.');
+            }
+        }
+
+        function renderStoryLibrary() {
+            const container = document.getElementById('storyLibraryList');
+            container.innerHTML = '';
+
+            if (!storyState.stories.length) {
+                const empty = document.createElement('div');
+                empty.className = 'story-helper-item';
+                empty.textContent = 'No saved stories yet.';
+                container.appendChild(empty);
+                return;
+            }
+
+            storyState.stories.forEach((story) => {
+                const button = document.createElement('button');
+                button.className = 'game-button';
+                button.dataset.scanLabel = story.title || 'Saved Story';
+                button.innerHTML = `<i class="fas fa-book-open"></i>${story.title || 'Untitled Story'}`;
+                button.onclick = () => openStoryDetail(story.id);
+                container.appendChild(button);
+            });
+        }
+
+        async function showStoryLibrary() {
+            await showExistingStoriesMenu();
+        }
+
+        async function openStoryDetail(storyId) {
+            try {
+                const response = await authenticatedFetch(`/api/games/story/${storyId}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                const data = await response.json();
+                if (!data.success || !data.story) {
+                    throw new Error(data.error || 'Story not found');
+                }
+                openStoryDetailFromData(data.story);
+                gameState.currentPhase = 'story_detail';
+            } catch (error) {
+                console.error('Error loading story detail:', error);
+                showError('Unable to load story.');
+            }
+        }
+
+        function openStoryDetailFromData(story) {
+            storyState.selectedStoryId = story.id;
+            storyState.currentStoryTitle = story.title || '';
+            storyState.currentStoryText = story.story_text || '';
+            const incomingTranscript = Array.isArray(story.transcript) ? story.transcript : [];
+            storyState.transcript = incomingTranscript.filter((entry) => entry && typeof entry === 'object');
+            syncStoryIllustrationFromStory(story);
+            document.getElementById('storyLibrary').classList.add('hidden');
+            document.getElementById('storyReadDisplay').classList.add('hidden');
+            document.getElementById('storyDetail').classList.remove('hidden');
+            document.getElementById('storyTitleInput').value = story.title || '';
+            document.getElementById('storyTextInput').value = story.story_text || '';
+            updateStoryTranscriptUI();
+            setStoryStatusMessage('Story detail view. Read, edit, or delete.');
+        }
+
+        async function closeStoryDetail() {
+            await showStoryEntryMenu();
+        }
+
+        async function readCurrentStory() {
+            const text = document.getElementById('storyTextInput').value || '';
+            if (!text.trim()) {
+                showError('Story text is empty.');
+                return;
+            }
+            storyState.currentStoryTitle = document.getElementById('storyTitleInput').value || storyState.currentStoryTitle || 'Untitled Story';
+            storyState.currentStoryText = text;
+            renderStoryIllustrationViews();
+            document.getElementById('storyDetail').classList.add('hidden');
+            document.getElementById('storyReadDisplay').classList.remove('hidden');
+            await readStoryWithHighlight(storyState.currentStoryTitle || 'Untitled Story', text);
+            document.getElementById('storyReadDisplay').classList.add('hidden');
+            document.getElementById('storyDetail').classList.remove('hidden');
+        }
+
+        async function saveCurrentStoryEdits() {
+            if (!storyState.selectedStoryId) {
+                showError('No story selected.');
+                return;
+            }
+
+            try {
+                const title = document.getElementById('storyTitleInput').value || '';
+                const storyText = document.getElementById('storyTextInput').value || '';
+                const response = await authenticatedFetch(`/api/games/story/${storyState.selectedStoryId}`, {
+                    method: 'PUT',
+                    body: JSON.stringify({ title: title, story_text: storyText })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                await loadStoryLibrary();
+                setStoryStatusMessage('Story edits saved.');
+            } catch (error) {
+                console.error('Error saving story edits:', error);
+                showError('Failed to save edits.');
+            }
+        }
+
+        async function deleteCurrentStory() {
+            if (!storyState.selectedStoryId) {
+                showError('No story selected.');
+                return;
+            }
+
+            if (!window.confirm('Delete this story?')) {
+                return;
+            }
+
+            try {
+                const response = await authenticatedFetch(`/api/games/story/${storyState.selectedStoryId}`, {
+                    method: 'DELETE'
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                storyState.selectedStoryId = null;
+                document.getElementById('storyDetail').classList.add('hidden');
+                document.getElementById('storyLibrary').classList.remove('hidden');
+                await loadStoryLibrary();
+                setStoryStatusMessage('Story deleted.');
+                gameState.currentPhase = 'story_awaiting_wake_word';
+                startListening();
+            } catch (error) {
+                console.error('Error deleting story:', error);
+                showError('Failed to delete story.');
+            }
+        }
+
+        function exitStoryBuilder() {
+            goBackToMenu();
+        }
+
+        // Select game role
+        function selectRole(role) {
+            gameState.role = role;
+            
+            // Stop scanning when role is selected
+            stopScanning();
+            
+            // Hide role selection
+            document.getElementById('roleSelection').classList.add('hidden');
+            
+            if (role === 'ask') {
+                // User will ask questions - skip category selection, go straight to ready
+                gameState.currentPhase = 'ready';
+                gameState.category = 'thing'; // Default to 'thing', LLM will ask "Is it a person?" etc.
+                document.getElementById('statusText').textContent = 'Say "ready" when you have selected something for me to guess';
+                announce('I will ask the questions, say "ready" when you have selected something for me to guess');
+                
+                // Start listening for "ready"
+                setTimeout(() => {
+                    startListening();
+                }, 2000);
+                
+            } else {
+                // User will answer questions - show category selection with scanning (no listening)
+                gameState.currentPhase = 'category';
+                document.getElementById('statusText').textContent = 'What type of thing are you thinking of?';
+                
+                // Announce that Player 2 will ask questions
+                announce("Let's see if you can guess what I am thinking. Give me a moment to pick something");
+                
+                // Delay before showing category selection so announcement plays
+                setTimeout(() => {
+                    document.getElementById('categorySelection').classList.remove('hidden');
+                    enhanceButtonsWithImages('categorySelection');
+                    
+                    // Start scanning for category selection (no listening - user taps/uses switch)
+                    setTimeout(() => {
+                        startScanning('categorySelection');
+                    }, 500);
+                }, 3500);
+            }
+        }
+
+        // Select category
+        function selectCategory(category) {
+            gameState.category = category;
+            
+            // Stop scanning
+            stopScanning();
+            
+            // Hide category selection
+            document.getElementById('categorySelection').classList.add('hidden');
+            
+            if (gameState.role === 'ask') {
+                // This path should not be reached since we skip category for 'ask' role
+                // But just in case, handle it
+                gameState.currentPhase = 'ready';
+                document.getElementById('statusText').textContent = 'Say "ready" when you have selected your ' + category;
+                announce('Say "ready" when you have selected your ' + category);
+                
+                // Start listening for "ready"
+                setTimeout(() => {
+                    startListening();
+                }, 2000);
+                
+            } else {
+                // User will answer questions - show P/P/T options
+                gameState.currentPhase = 'selecting';
+                loadGameOptions();
+            }
+        }
+
+        // Proceed after user says "ready"
+        async function proceedAfterReady() {
+            gameState.currentPhase = 'playing';
+            document.getElementById('statusText').textContent = 'Let me think of some questions...';
+            
+            // Generate first set of questions
+            await loadQuestions();
+        }
+
+        // Load game options (person/place/thing choices)
+        async function loadGameOptions() {
+            showLoading();
+            
+            try {
+                const requestPayload = {
+                    game_type: '20_questions',
+                    category: gameState.category,
+                    request_different: false
+                };
+                
+                console.log('Sending options request:', requestPayload);
+                
+                const response = await authenticatedFetch('/api/games/options', {
+                    method: 'POST',
+                    body: JSON.stringify(requestPayload)
+                });
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error('API error response:', errorText);
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                console.log('Game options loaded:', data);
+                
+                hideLoading();
+                displayOptions(data.options, 'select');
+                
+                // Start scanning for selection (no listening - user taps/uses switch)
+                setTimeout(() => {
+                    startScanning('optionsSelection');
+                }, 500);
+                
+            } catch (error) {
+                console.error('Error loading game options:', error);
+                hideLoading();
+                showError('Failed to load options. Please try again.');
+            }
+        }
+
+        // Load questions for the game
+        async function loadQuestions() {
+            showLoading();
+            
+            try {
+                const requestPayload = {
+                    game_type: '20_questions',
+                    category: gameState.category,
+                    asked_questions: gameState.askedQuestions,
+                    question_count: gameState.questionCount,
+                    exclude_options: gameState.currentOptions || []
+                };
+                
+                console.log('Sending questions request:', requestPayload);
+                
+                const response = await authenticatedFetch('/api/games/questions', {
+                    method: 'POST',
+                    body: JSON.stringify(requestPayload)
+                });
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error('API error response:', errorText);
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                console.log('Questions loaded:', data);
+                
+                hideLoading();
+                displayOptions(data.questions, 'question');
+                updateQuestionCounter();
+                
+            } catch (error) {
+                console.error('Error loading questions:', error);
+                hideLoading();
+                showError('Failed to load questions. Please try again.');
+            }
+        }
+
+        // Load guess options
+        async function loadGuesses() {
+            showLoading();
+            
+            try {
+                const response = await authenticatedFetch('/api/games/guesses', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        game_type: '20_questions',
+                        category: gameState.category,
+                        asked_questions: gameState.askedQuestions,
+                        guess_count: gameState.guessCount,
+                        previous_guesses: gameState.previousGuesses,
+                        exclude_options: gameState.currentOptions || []
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                console.log('Guesses loaded:', data);
+                
+                hideLoading();
+                displayOptions(data.guesses, 'guess');
+                
+            } catch (error) {
+                console.error('Error loading guesses:', error);
+                hideLoading();
+                showError('Failed to load guesses. Please try again.');
+            }
+        }
+
+        // Display options (questions, guesses, or selections)
+        function displayOptions(options, type) {
+            // Store current options for exclusion when requesting different ones
+            if (type === 'question') {
+                gameState.currentOptions = options.map(option => {
+                    if (option && typeof option === 'object') {
+                        return option.text || option.question || '';
+                    }
+                    return option;
+                }).filter(Boolean);
+            } else {
+                gameState.currentOptions = options;
+            }
+            
+            const container = document.getElementById('optionsSelection');
+            container.innerHTML = '';
+            container.classList.remove('hidden');
+            
+            // Add the main options
+            options.forEach((option, index) => {
+                const button = document.createElement('div');
+                button.className = 'game-button';
+                let optionLabel = option;
+                let optionText = option;
+
+                if (type === 'question' && option && typeof option === 'object') {
+                    optionText = option.text || option.question || '';
+                    optionLabel = option.summary || option.label || optionText;
+                }
+
+                button.dataset.fullOption = optionText || '';
+                button.dataset.scanLabel = optionLabel || '';
+                button.onclick = () => handleOptionClick(optionText, type);
+                
+                if (type === 'question') {
+                    button.innerHTML = `<i class="fas fa-question"></i>${optionLabel}`;
+                } else if (type === 'guess') {
+                    button.innerHTML = `<i class="fas fa-lightbulb"></i>Is it ${option}?`;
+                } else if (type === 'select') {
+                    button.innerHTML = `<i class="fas fa-star"></i>${option}`;
+                }
+                
+                container.appendChild(button);
+            });
+            
+            // Add "Something Else" button
+            const somethingElseButton = document.createElement('div');
+            somethingElseButton.className = 'game-button';
+            somethingElseButton.onclick = () => handleSomethingElse(type);
+            somethingElseButton.innerHTML = `<i class="fas fa-sync-alt"></i>Something Else`;
+            container.appendChild(somethingElseButton);
+            
+            // Add "Exit Game" button
+            const exitButton = document.createElement('div');
+            exitButton.className = 'game-button';
+            exitButton.style.backgroundColor = '#dc2626';
+            exitButton.style.color = 'white';
+            exitButton.onclick = () => exitGame();
+            exitButton.innerHTML = `<i class="fas fa-times"></i>Exit Game`;
+            container.appendChild(exitButton);
+            
+            // Update status text based on type
+            if (type === 'question') {
+                document.getElementById('statusText').textContent = `Questions remaining: ${gameState.maxQuestions - gameState.questionCount}`;
+            } else if (type === 'guess') {
+                document.getElementById('statusText').textContent = `Guesses remaining: ${gameState.maxGuesses - gameState.guessCount}`;
+            } else if (type === 'select') {
+                document.getElementById('statusText').textContent = `Choose your ${gameState.category}:`;
+            }
+            
+            // Start scanning after options are displayed (no listening - user should scan/select)
+            setTimeout(() => {
+                startScanning('optionsSelection');
+            }, 500);
+            
+            // Add pictograms to option buttons for tap mode
+            enhanceButtonsWithImages('optionsSelection');
+        }
+
+        // Handle option click
+        function handleOptionClick(option, type) {
+            // Stop scanning when option is selected
+            stopScanning();
+            
+            if (type === 'question') {
+                askQuestion(option);
+            } else if (type === 'guess') {
+                makeGuessAttempt(option);
+            } else if (type === 'select') {
+                selectItem(option);
+            }
+        }
+
+        // Handle "Something Else" button
+        function handleSomethingElse(type) {
+            // Stop current scanning
+            stopScanning();
+            
+            if (type === 'question') {
+                loadQuestions();
+            } else if (type === 'guess') {
+                loadGuesses();
+            } else if (type === 'select') {
+                // Request different options
+                loadDifferentOptions();
+            }
+        }
+
+        // Load different options for selection
+        async function loadDifferentOptions() {
+            showLoading();
+            
+            try {
+                const response = await authenticatedFetch('/api/games/options', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        game_type: '20_questions',
+                        category: gameState.category,
+                        request_different: true,
+                        exclude_options: gameState.currentOptions || []
+                    })
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const data = await response.json();
+                console.log('Different options loaded:', data);
+                
+                hideLoading();
+                displayOptions(data.options, 'select');
+                
+            } catch (error) {
+                console.error('Error loading different options:', error);
+                hideLoading();
+                showError('Failed to load different options. Please try again.');
+            }
+        }
+
+        // Select an item for the "you ask questions" mode
+        function selectItem(item) {
+            gameState.selectedItem = item;
+            gameState.currentPhase = 'awaiting_wake_word';
+            
+            // Hide options
+            document.getElementById('optionsSelection').classList.add('hidden');
+            
+            document.getElementById('statusText').textContent = `I'm ready. To ask a question or make a guess, start with "${gameState.wakeWord}".`;
+            announce(`I'm ready. To ask a question or make a guess, start with ${gameState.wakeWord}.`);
+            
+            // Start listening for wake word
+            setTimeout(() => {
+                startListening();
+            }, 3000);
+        }
+
+        // Handle wake word detected
+        function handleWakeWord() {
+            gameState.currentPhase = 'listening_for_intent';
+            announce("I'm listening. Do you have a question or guess?");
+            
+            // Wait for the announcement to finish playing, then start listening for intent
+            setTimeout(() => {
+                if (gameState.currentPhase === 'listening_for_intent') {
+                    startListening();
+                }
+            }, 4000); // Increased to 4 seconds to give time for TTS and user response
+        }
+
+        // Handle player intent (question or guess)
+        function handlePlayerIntent(intent) {
+            if (intent === 'question') {
+                gameState.currentPhase = 'listening_for_question';
+                announce("Ready for your question");
+                
+                setTimeout(() => {
+                    startListening();
+                }, 2000);
+                
+            } else if (intent === 'guess') {
+                gameState.currentPhase = 'listening_for_guess';
+                announce("Ready for your guess");
+                
+                setTimeout(() => {
+                    startListening();
+                }, 2000);
+            }
+        }
+
+        // Handle player question
+        async function handlePlayerQuestion(question) {
+            // This function should ONLY be called on the 'answer' role path (You Guess)
+            // On the 'ask' role path (I Guess), questions are handled via loadQuestions + askQuestion
+            if (gameState.role !== 'answer') {
+                console.error('handlePlayerQuestion called on wrong role:', gameState.role);
+                return;
+            }
+            
+            gameState.questionCount++;
+            updateQuestionCounter();
+            gameState.currentQuestion = question; // Store the question
+            
+            // Announce the question back to Player 1
+            announce(`Ok. Your question is ${question}. Give me a moment to respond`);
+            
+            // Load response options after small delay (instead of calling /api/games/answer)
+            setTimeout(() => {
+                loadResponseOptions('question_response');
+            }, 2000);
+        }
+
+        // Handle player guess
+        function handlePlayerGuess(guess) {
+            // This function should ONLY be called on the 'answer' role path (You Guess)
+            // On the 'ask' role path (I Guess), guesses are handled via loadGuesses + makeGuessAttempt
+            if (gameState.role !== 'answer') {
+                console.error('handlePlayerGuess called on wrong role:', gameState.role);
+                return;
+            }
+            
+            gameState.guessCount++;
+            gameState.currentGuess = guess; // Store the guess
+            
+            // Announce the guess
+            announce(`Ok. They guessed ${guess}. Give me a moment to respond`);
+            
+            // Load response options (both correct and incorrect options) after small delay
+            setTimeout(() => {
+                loadResponseOptions('guess_response');
+            }, 2000);
+        }
+
+        // Ask a question (user asking mode)
+        function askQuestion(question) {
+            gameState.questionCount++;
+            gameState.currentPhase = 'awaiting_answer';
+            gameState.awaitingAnswerType = 'question';
+            gameState.currentQuestion = question; // Store the question for history/LLM context
+            
+            // Hide options
+            document.getElementById('optionsSelection').classList.add('hidden');
+            
+            // Announce the question
+            announce(question);
+            
+            // Wait for first announcement to finish, then announce the instruction
+            setTimeout(() => {
+                announce('Say yes or no to answer the question');
+                
+                // Start listening for yes/no after the instruction announcement
+                setTimeout(() => {
+                    startListening();
+                }, 3000);
+            }, 3000);
+        }
+
+        // Handle yes/no answer
+        function handleAnswer(answer) {
+            // Stop listening since we got an answer
+            stopListening();
+
+            // If the last prompt was a guess, resolve the guess result and stop here
+            if (gameState.awaitingAnswerType === 'guess') {
+                const isCorrect = answer.toLowerCase() === 'yes';
+                gameState.awaitingAnswerType = null;
+                handleGuessResult(isCorrect);
+                return;
+            }
+            
+            // Add to question history
+            const lastQuestion = gameState.askedQuestions.length > 0 ? 
+                gameState.askedQuestions[gameState.askedQuestions.length - 1].question : 'Unknown';
+            
+            // Find the current question from the last asked
+            // We need to store the current question when it's asked
+            if (!gameState.currentQuestion) {
+                gameState.currentQuestion = 'Question';
+            }
+            
+            gameState.askedQuestions.push({
+                question: gameState.currentQuestion,
+                answer: answer
+            });
+
+            gameState.awaitingAnswerType = null;
+            
+            updateQuestionHistory();
+            updateQuestionCounter();
+            
+            // Show action buttons or continue based on question count
+            if (gameState.questionCount >= gameState.maxQuestions) {
+                // Maximum questions reached, must guess
+                loadGuesses();
+            } else {
+                // Show action buttons
+                showActionButtons();
+            }
+        }
+
+        // Store current question when asking
+        function storeCurrentQuestion(question) {
+            gameState.currentQuestion = question;
+        }
+
+        // Load response options for Player 1 to choose their response
+        async function loadResponseOptions(responseType) {
+            // Stop any active listening immediately and set proper phase
+            stopListening();
+            hideListening();
+            gameState.currentPhase = 'response_selection';
+            
+            // Show loading state
+            document.getElementById('loadingState').classList.remove('hidden');
+            document.getElementById('responseOptions').classList.add('hidden');
+            
+            try {
+                // Prepare request data
+                const requestData = {
+                    game_type: "20_questions",
+                    response_type: responseType,
+                    category: gameState.category,
+                    selected_item: gameState.selectedItem,
+                    player_question_or_guess: responseType === 'question_response' ? gameState.currentQuestion : gameState.currentGuess,
+                    questions_remaining: gameState.maxQuestions - gameState.questionCount,
+                    guesses_remaining: gameState.maxGuesses - gameState.guessCount,
+                    questions_asked: gameState.questionCount,
+                    guesses_made: gameState.guessCount
+                };
+                
+                console.log('Loading response options for:', responseType);
+                
+                const response = await authenticatedFetch('/api/games/response-options', {
+                    method: 'POST',
+                    body: JSON.stringify(requestData)
+                });
+                
+                const data = await response.json();
+                if (!data.success) {
+                    throw new Error(data.error || 'Failed to load response options');
+                }
+                
+                // Hide loading
+                document.getElementById('loadingState').classList.add('hidden');
+                
+                // Store response type for later
+                gameState.currentResponseType = responseType;
+                gameState.responseOptions = data.response_options;
+                
+                console.log('Response options loaded:', data.response_options);
+                
+                // Display response options
+                displayResponseOptions(data.response_options);
+                
+            } catch (error) {
+                console.error('Error loading response options:', error);
+                document.getElementById('loadingState').classList.add('hidden');
+                document.getElementById('errorState').classList.remove('hidden');
+                document.getElementById('errorMessage').textContent = 'Failed to generate response options. Try again.';
+                
+                // Retry after delay
+                setTimeout(() => {
+                    document.getElementById('errorState').classList.add('hidden');
+                    loadResponseOptions(responseType);
+                }, 2000);
+            }
+        }
+
+        // Display response options in the grid
+        function displayResponseOptions(options) {
+            const container = document.getElementById('responseOptions');
+            container.innerHTML = '';
+            
+            options.forEach((option, index) => {
+                const button = document.createElement('div');
+                button.className = 'game-button';
+                // Store both answer_type in data attribute for retrieval
+                if (option.answer_type) {
+                    button.setAttribute('data-answer-type', option.answer_type);
+                }
+                // Handle both object format {text, answer_type} and string format
+                const displayText = option.text || option;
+                button.textContent = displayText;
+                button.onclick = () => selectResponseOption(option, index);
+                container.appendChild(button);
+            });
+            
+            container.classList.remove('hidden');
+            
+            // Start scanning for response selection
+            setTimeout(() => {
+                startScanning('responseOptions');
+            }, 500);
+            
+            // Add pictograms to response buttons for tap mode
+            enhanceButtonsWithImages('responseOptions');
+        }
+
+        // Handle selection of a response option
+        function selectResponseOption(selectedOption, index) {
+            // Stop scanning
+            stopScanning();
+            
+            // Hide response options
+            document.getElementById('responseOptions').classList.add('hidden');
+            
+            // Extract response text and answer type
+            let responseText, answerType;
+            if (typeof selectedOption === 'object' && selectedOption.text) {
+                responseText = selectedOption.text;
+                answerType = selectedOption.answer_type;
+            } else if (typeof selectedOption === 'string') {
+                responseText = selectedOption;
+                // Try to get from button's data attribute
+                const buttons = document.querySelectorAll('#responseOptions .game-button');
+                if (buttons[index]) {
+                    answerType = buttons[index].getAttribute('data-answer-type');
+                }
+            }
+            
+            console.log('Selected:', responseText, 'Answer type:', answerType);
+            
+            // Store selection
+            gameState.selectedResponse = responseText;
+            gameState.selectedAnswerType = answerType;
+            
+            // Get remaining counts
+            const questionsRemaining = gameState.maxQuestions - gameState.questionCount;
+            const guessesRemaining = gameState.maxGuesses - gameState.guessCount;
+            
+            // Build announcement
+            let announcement = responseText;
+            
+            // Handle based on response type
+            if (gameState.currentResponseType === 'question_response') {
+                // Question answer response
+                announcement += `. You have ${questionsRemaining} question${questionsRemaining !== 1 ? 's' : ''} left.`;
+                announce(announcement);
+                
+                setTimeout(() => {
+                    // After responding to Player 2's question, listen for next question or guess
+                    // Player 2 will either ask another question or make a guess
+                    gameState.currentPhase = 'awaiting_wake_word';
+                    hideListening();
+                    document.getElementById('statusText').textContent = 'Listening for next question or guess...';
+                    announce(`To ask another question or make a guess, start with ${gameState.wakeWord}.`);
+                    showListening();
+                    startListening();
+                }, 3500);
+                
+            } else if (gameState.currentResponseType === 'guess_response') {
+                // Guess response
+                if (answerType === 'correct') {
+                    // Guess was correct - Player 2 wins
+                    announce(responseText);
+                    setTimeout(() => {
+                        announce(`You successfully guessed it! It was ${gameState.selectedItem}!`);
+                        setTimeout(() => {
+                            goBackToMenu();
+                        }, 3000);
+                    }, 2000);
+                } else {
+                    // Guess was incorrect
+                    // Add to previous guesses
+                    if (gameState.currentGuess) {
+                        if (!gameState.previousGuesses) {
+                            gameState.previousGuesses = [];
+                        }
+                        if (!gameState.previousGuesses.includes(gameState.currentGuess)) {
+                            gameState.previousGuesses.push(gameState.currentGuess);
+                        }
+                    }
+                    
+                    if (guessesRemaining > 1) {
+                        // More guesses available - continue with Player 2 asking questions or guessing
+                        announcement += `. ${guessesRemaining - 1} guess${guessesRemaining !== 2 ? 'es' : ''} left.`;
+                        announce(announcement);
+                        setTimeout(() => {
+                            // After incorrect guess, listen for Player 2's next question or guess
+                            gameState.currentPhase = 'awaiting_wake_word';
+                            hideListening();
+                            document.getElementById('statusText').textContent = 'Listening for next question or guess...';
+                            announce(`To ask another question or make a guess, start with ${gameState.wakeWord}.`);
+                            showListening();
+                            startListening();
+                        }, 3500);
+                    } else {
+                        // No more guesses - Player 1 wins
+                        announce(responseText);
+                        setTimeout(() => {
+                            announce(`You ran out of guesses. The answer was ${gameState.selectedItem}. Great game!`);
+                            setTimeout(() => {
+                                goBackToMenu();
+                            }, 3000);
+                        }, 2000);
+                    }
+                }
+            }
+        }
+
+        // Show action buttons
+        function showActionButtons() {
+            // Ensure listening is stopped before showing action buttons
+            stopListening();
+            hideListening();
+            
+            // Set phase to action_selection to prevent wake word detection during scanning
+            gameState.currentPhase = 'action_selection';
+            
+            document.getElementById('actionButtons').classList.remove('hidden');
+            document.getElementById('statusText').textContent = 'What would you like to do next?';
+            
+            // Start scanning for action buttons (no listening - user taps/uses switch)
+            setTimeout(() => {
+                startScanning('actionButtons');
+            }, 500);
+            
+            // Add pictograms to action buttons for tap mode
+            enhanceButtonsWithImages('actionButtons');
+        }
+
+        // Ask another question
+        function askAnother() {
+            document.getElementById('actionButtons').classList.add('hidden');
+            gameState.currentPhase = 'playing';
+            loadQuestions();
+        }
+
+        // Make a guess
+        function makeGuess() {
+            document.getElementById('actionButtons').classList.add('hidden');
+            gameState.currentPhase = 'guessing';
+            loadGuesses();
+        }
+
+        // Make a guess attempt
+        function makeGuessAttempt(guess) {
+            gameState.guessCount++;
+            gameState.currentGuess = guess; // Store current guess
+            
+            // Hide options
+            document.getElementById('optionsSelection').classList.add('hidden');
+            
+            // Announce the guess as a proper question
+            announce(`Is it ${guess}?`);
+            
+            if (gameState.role === 'answer') {
+                gameState.currentPhase = 'awaiting_result';
+                // Load response options after announcement (both correct and incorrect options)
+                setTimeout(() => {
+                    loadResponseOptions('guess_response');
+                }, 3500);
+            } else {
+                gameState.currentPhase = 'awaiting_answer';
+                gameState.awaitingAnswerType = 'guess';
+                // Ask Player 2 to answer and listen for yes/no
+                setTimeout(() => {
+                    announce('Say yes or no to answer the question');
+                    setTimeout(() => {
+                        startListening();
+                    }, 3000);
+                }, 3000);
+            }
+        }
+
+        // Handle guess result
+        function handleGuessResult(isCorrect) {
+            if (isCorrect) {
+                announce("Great game! Thanks for playing!");
+                setTimeout(() => {
+                    goBackToMenu();
+                }, 3000);
+            } else {
+                // Add wrong guess to previousGuesses to avoid repeating it
+                if (gameState.currentGuess) {
+                    if (!gameState.previousGuesses) {
+                        gameState.previousGuesses = [];
+                    }
+                    if (!gameState.previousGuesses.includes(gameState.currentGuess)) {
+                        gameState.previousGuesses.push(gameState.currentGuess);
+                        console.log(`Added wrong guess to previousGuesses: ${gameState.currentGuess}`);
+                        console.log(`Previous guesses now: ${JSON.stringify(gameState.previousGuesses)}`);
+                    }
+                }
+                
+                if (gameState.guessCount >= gameState.maxGuesses) {
+                    announce("That was tough! I hope I do better next time!");
+                    setTimeout(() => {
+                        goBackToMenu();
+                    }, 3000);
+                } else {
+                    // Stop scanning and show action buttons
+                    stopScanning();
+                    
+                    // Show action buttons for another question or guess
+                    const actionButtons = document.getElementById('actionButtons');
+                    if (actionButtons) {
+                        actionButtons.classList.remove('hidden');
+                    }
+                    
+                    announce("Darn. Give me a moment to pick another question or guess.");
+                    
+                    // Update phase and prepare for scanning
+                    gameState.currentPhase = 'action_selection';
+                    
+                    // Start scanning for action selection
+                    setTimeout(() => {
+                        startScanning('actionButtons');
+                    }, 3500);
+                }
+            }
+        }
+
+        // Update question counter
+        function updateQuestionCounter() {
+            const counter = document.getElementById('gameCounter');
+            if (gameState.role === 'ask') {
+                counter.textContent = `Questions: ${gameState.questionCount}/${gameState.maxQuestions}`;
+            } else {
+                counter.textContent = `Questions: ${gameState.questionCount} | Guesses: ${gameState.guessCount}/${gameState.maxGuesses}`;
+            }
+        }
+
+        // Update question history display
+        function updateQuestionHistory() {
+            const historyContainer = document.getElementById('questionHistory');
+            const qaList = document.getElementById('qaList');
+            
+            if (gameState.askedQuestions.length > 0) {
+                historyContainer.classList.remove('hidden');
+                
+                qaList.innerHTML = '';
+                // Show most recent questions first by iterating in reverse
+                for (let i = gameState.askedQuestions.length - 1; i >= 0; i--) {
+                    const qa = gameState.askedQuestions[i];
+                    const item = document.createElement('div');
+                    item.className = 'qa-item';
+                    item.innerHTML = `
+                        <div class="qa-question">Q: ${qa.question}</div>
+                        <div class="qa-answer">A: ${qa.answer}</div>
+                    `;
+                    qaList.appendChild(item);
+                }
+            }
+        }
+
+        // New game
+        function newGame() {
+            // Stop scanning and speech recognition
+            stopScanning();
+            if (recognition && isRecognitionActive) {
+                recognition.stop();
+            }
+            
+            // Reset game state but stay in game view
+            gameState = {
+                role: null,
+                category: null,
+                selectedItem: null,
+                askedQuestions: [],
+                questionCount: 0,
+                guessCount: 0,
+                maxQuestions: 20,
+                maxGuesses: 3,
+                wakeWord: gameState.wakeWord,
+                isListening: false,
+                currentPhase: 'role'
+            };
+            
+            // Hide all game sections
+            document.getElementById('categorySelection').classList.add('hidden');
+            document.getElementById('optionsSelection').classList.add('hidden');
+            document.getElementById('questionHistory').classList.add('hidden');
+            document.getElementById('actionButtons').classList.add('hidden');
+            document.getElementById('listeningIndicator').classList.add('hidden');
+            document.getElementById('loadingState').classList.add('hidden');
+            document.getElementById('errorState').classList.add('hidden');
+            
+            // Show role selection
+            document.getElementById('statusText').textContent = 'Choose how you want to play:';
+            document.getElementById('roleSelection').classList.remove('hidden');
+            document.getElementById('gameCounter').textContent = '';
+            
+            announce("Let's play another round of 20 questions!");
+            
+            // Start scanning for role selection (no listening - user taps/uses switch)
+            setTimeout(() => {
+                startScanning('roleSelection');
+                enhanceButtonsWithImages('roleSelection');
+            }, 2000);
+        }
+
+        // Exit game
+        function exitGame() {
+            goBackToMenu();
+        }
+
+        // Go back to main menu
+        function goBackToMenu() {
+            // Reset everything
+            currentGame = null;
+            gameState.currentPhase = 'menu';
+            resetStoryBuilderState();
+            setPageTitle('🎮 Games');
+            
+            // Stop scanning
+            stopScanning();
+            
+            // Stop any ongoing speech recognition
+            if (recognition && isRecognitionActive) {
+                recognition.stop();
+            }
+            
+            // Cancel speech synthesis
+            if ('speechSynthesis' in window) {
+                speechSynthesis.cancel();
+            }
+            
+            // Hide game view and show menu
+            document.getElementById('twentyQuestionsGame').classList.add('hidden');
+            document.getElementById('storyBuilderGame').classList.add('hidden');
+            document.getElementById('gridContainer').classList.remove('hidden');
+            
+            // Re-initialize scanning for the menu
+            startScanning('gridContainer');
+            
+            // Reset all game sections
+            document.getElementById('roleSelection').classList.add('hidden');
+            document.getElementById('categorySelection').classList.add('hidden');
+            document.getElementById('optionsSelection').classList.add('hidden');
+            document.getElementById('questionHistory').classList.add('hidden');
+            document.getElementById('actionButtons').classList.add('hidden');
+            document.getElementById('listeningIndicator').classList.add('hidden');
+            document.getElementById('loadingState').classList.add('hidden');
+            document.getElementById('errorState').classList.add('hidden');
+            document.getElementById('storyUserOptions').classList.add('hidden');
+            document.getElementById('storyTranscript').classList.add('hidden');
+            document.getElementById('storyLibrary').classList.add('hidden');
+            document.getElementById('storyReadDisplay').classList.add('hidden');
+            document.getElementById('storyDetail').classList.add('hidden');
+            closeStoryDeleteModal();
+            updateStoryBottomControls({ showDeleteStories: false });
+            setStoryStatusMessage('');
+        }
+
+        // Show/hide loading state
+        function showLoading() {
+            document.getElementById('loadingState').classList.remove('hidden');
+            document.getElementById('optionsSelection').classList.add('hidden');
+        }
+
+        function hideLoading() {
+            document.getElementById('loadingState').classList.add('hidden');
+        }
+
+        // Show error
+        function showError(message) {
+            document.getElementById('errorMessage').textContent = message;
+            document.getElementById('errorState').classList.remove('hidden');
+            
+            // Hide error after 5 seconds
+            setTimeout(() => {
+                document.getElementById('errorState').classList.add('hidden');
+            }, 5000);
+        }
+
+        // Start Guess games - redirect to guess_games.html with type parameter
+        function startGuessGame(type) {
+            window.location.href = `/static/guess_games.html?type=${type}`;
+        }
+        
+        // Backward compatibility - redirect old Guess Who link
+        function startGuessWho() {
+            startGuessGame('who');
+        }
+
+        // Hide splash screen
+        function hideSplashScreen() {
+            const splashScreen = document.getElementById('splashScreen');
+            if (splashScreen) {
+                splashScreen.style.display = 'none';
+            }
+            
+            // Also check for splash screen managed by splash-screen.js
+            if (window.splashScreen && window.splashScreen.hide) {
+                window.splashScreen.hide();
+            }
+        }
+
+        // Add CSS for scanning highlight (if not already present)
+        if (!document.getElementById('scanning-styles')) {
+            const styleSheet = document.createElement("style");
+            styleSheet.id = 'scanning-styles';
+            styleSheet.textContent = `
+                .scanning { /* Highlight style for individual buttons */
+                    box-shadow: 0 0 10px 4px #FB4F14 !important; /* Orange glow, !important to override base button shadow */
+                    outline: none !important; /* Prevent default browser focus outline, !important for specificity */
+                }
+                .active { /* Optional style for click feedback */
+                     transform: scale(0.95);
+                     opacity: 0.8;
+                }
+            `;
+            document.head.appendChild(styleSheet);
+        }
+    </script>
+</body>
+</html>

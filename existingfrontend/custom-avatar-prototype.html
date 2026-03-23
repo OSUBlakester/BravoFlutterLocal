@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Custom AAC Avatar System - Prototype</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="max-w-7xl mx-auto px-4 py-6">
+        
+        <!-- Header -->
+        <div class="text-center mb-8">
+            <h1 class="text-3xl font-bold text-gray-900 mb-2">
+                <i class="fas fa-user-plus text-blue-600 mr-3"></i>
+                Custom AAC Avatar System
+            </h1>
+            <p class="text-gray-600">Prototype - Full Body Avatar Generator for AAC Communication</p>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            
+            <!-- Left Panel: Avatar Customization -->
+            <div class="bg-white rounded-lg shadow-lg border p-6">
+                <h2 class="text-xl font-bold text-gray-900 mb-6">
+                    <i class="fas fa-sliders-h text-blue-600 mr-2"></i>
+                    Avatar Customization
+                </h2>
+                
+                <!-- Basic Appearance -->
+                <div class="mb-6">
+                    <h3 class="text-lg font-semibold mb-3">Basic Appearance</h3>
+                    <div class="grid grid-cols-2 gap-4">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Skin Tone</label>
+                            <select id="skinTone" class="w-full p-2 border rounded-lg">
+                                <option value="light">Light</option>
+                                <option value="medium">Medium</option>
+                                <option value="tan">Tan</option>
+                                <option value="dark">Dark</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Hair Style</label>
+                            <select id="hairStyle" class="w-full p-2 border rounded-lg">
+                                <option value="short">Short</option>
+                                <option value="medium">Medium</option>
+                                <option value="long">Long</option>
+                                <option value="curly">Curly</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Hair Color</label>
+                            <select id="hairColor" class="w-full p-2 border rounded-lg">
+                                <option value="brown">Brown</option>
+                                <option value="black">Black</option>
+                                <option value="blonde">Blonde</option>
+                                <option value="red">Red</option>
+                                <option value="gray">Gray</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Gender</label>
+                            <select id="gender" class="w-full p-2 border rounded-lg">
+                                <option value="neutral">Neutral</option>
+                                <option value="masculine">Masculine</option>
+                                <option value="feminine">Feminine</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Clothing</label>
+                            <select id="clothing" class="w-full p-2 border rounded-lg">
+                                <option value="casual">Casual</option>
+                                <option value="formal">Formal</option>
+                                <option value="sports">Sports</option>
+                                <option value="dress">Dress</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Text Overlay (for AAC) -->
+                <div class="mb-6">
+                    <h3 class="text-lg font-semibold mb-3">AAC Text Overlay</h3>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Text Overlay</label>
+                        <input type="text" id="textOverlay" class="w-full p-2 border rounded-lg" placeholder="Enter text for communication..." maxlength="20">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Control Buttons -->
+                <div class="flex gap-3">
+                    <button id="generateBtn" class="flex-1 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors">
+                        <i class="fas fa-sync-alt mr-2"></i>Generate Avatar
+                    </button>
+                    <button id="randomBtn" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors">
+                        <i class="fas fa-random mr-2"></i>Random
+                    </button>
+                </div>
+            </div>
+
+            <!-- Right Panel: Avatar Preview -->
+            <div class="bg-white rounded-lg shadow-lg border p-6">
+                <h2 class="text-xl font-bold text-gray-900 mb-6">
+                    <i class="fas fa-eye text-blue-600 mr-2"></i>
+                    Avatar Preview
+                </h2>
+                
+                <!-- Avatar Display -->
+                <div class="flex justify-center mb-6">
+                    <div id="avatarContainer" class="relative bg-gray-50 rounded-lg border-2 border-dashed border-gray-300 p-8 min-h-96 flex items-center justify-center">
+                        <div id="avatarDisplay"></div>
+                        <div id="loadingSpinner" class="hidden">
+                            <i class="fas fa-spinner fa-spin text-4xl text-gray-400"></i>
+                            <p class="text-gray-500 mt-2">Generating avatar...</p>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Avatar Info -->
+                <div id="avatarInfo" class="bg-gray-50 rounded-lg p-4 text-sm text-gray-600">
+                    <p><strong>Configuration:</strong> Default avatar - click "Generate Avatar" to customize</p>
+                </div>
+
+                <!-- AAC Variations Generator -->
+                <div class="mt-6">
+                    <button id="generateVariationsBtn" class="w-full bg-purple-600 hover:bg-purple-700 text-white px-4 py-3 rounded-lg transition-colors">
+                        <i class="fas fa-magic mr-2"></i>Generate AAC Communication Set
+                    </button>
+                    <p class="text-xs text-gray-500 mt-2">Generate emotions, body parts, actions, and family variations</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Generated Variations Preview -->
+        <div id="variationsSection" class="hidden mt-8 bg-white rounded-lg shadow-lg border p-6">
+            <h2 class="text-xl font-bold text-gray-900 mb-6">
+                <i class="fas fa-palette text-blue-600 mr-2"></i>
+                Generated AAC Communication Set
+            </h2>
+            <div id="variationsGrid" class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-4">
+                <!-- Variations will be inserted here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Load our custom JavaScript -->
+    <script src="/static/custom-avatar-prototype-clean.js"></script>
+</body>
+</html>

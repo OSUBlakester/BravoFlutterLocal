@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>User Diary Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <script src="/static/user_diary_admin.js" defer></script>
+    <style>
+        /* Custom base styles */
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+         /* Basic styling for form elements using Tailwind */
+        label {
+            @apply block text-sm font-medium text-gray-700 mb-1;
+        }
+        input[type="date"], textarea {
+            @apply mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm;
+        }
+        textarea {
+             min-height: 150px; /* Give text area more space */
+             resize: vertical;
+        }
+        button, .button-link { /* Style links like buttons */
+             @apply inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50;
+        }
+        .button-primary {
+             @apply bg-blue-600 hover:bg-blue-700 focus:ring-blue-500;
+        }
+         .button-secondary {
+             @apply bg-gray-600 hover:bg-gray-700 focus:ring-gray-500;
+         }
+         .button-success {
+             @apply bg-green-600 hover:bg-green-700 focus:ring-orange-500;
+         }
+         .button-danger {
+              @apply bg-red-600 hover:bg-red-700 focus:ring-red-500;
+         }
+        .button-link i, button i { /* Ensure icons in buttons have margin */
+             @apply mr-2;
+        }
+        /* Styling for diary entry list */
+        #diaryEntries h2 {
+             @apply text-xl font-semibold text-gray-800 mb-4 mt-8 pt-6 border-t;
+        }
+        .diary-entry {
+             @apply bg-gray-50 p-4 rounded-md border border-gray-200 mb-4 shadow-sm relative; /* Added relative positioning */
+        }
+         .diary-entry-content strong {
+             @apply font-semibold text-gray-700;
+         }
+         .diary-entry-content p {
+             @apply text-gray-600 mt-1 whitespace-pre-wrap; /* Preserve whitespace/newlines */
+         }
+         .diary-entry-delete-btn {
+             @apply absolute top-2 right-2 px-2 py-1 text-xs; /* Position delete button */
+         }
+         #hamburger-btn:hover {
+        background-color: #2D3748; /* Darker shade for hover */
+        }
+        .dropdown-content {
+            display: none; /* Hidden by default */
+            position: absolute;
+            background-color: #ffffff; /* White background for dropdown */
+            min-width: 260px; /* Adjust as needed */
+            box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
+            z-index: 1000; /* Ensure it's on top */
+            left: 0; /* Align to the left of the button */
+            border-radius: 5px;
+            border: 1px solid #ddd; /* Light border for the dropdown */
+        }
+        .dropdown-content a {
+            color: #333; /* Dark text for links */
+            padding: 10px 15px;
+            text-decoration: none;
+            display: block;
+            font-size: 14px; /* Standard font size for menu items */
+        }
+        .dropdown-content a:hover {
+            background-color: #f0f0f0; /* Hover effect for links */
+        }
+        .dropdown-content hr {
+            border: 0;
+            height: 1px;
+            background-color: #e0e0e0; /* Separator color */
+            margin: 5px 0;
+        }
+
+    </style>
+     </head>
+<body class="bg-gray-100">
+
+
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+
+    <script>
+        // --- DYNAMIC AUTHENTICATION & CONFIGURATION CONTEXT ---
+        (async () => {
+            // 1. Fetch Firebase config dynamically
+            let firebaseConfig;
+            try {
+                const response = await fetch('/api/frontend-config');
+                if (!response.ok) throw new Error(`Server error (${response.status})`);
+                firebaseConfig = await response.json();
+                if (!firebaseConfig.apiKey) throw new Error('Invalid config from server.');
+            } catch (error) {
+                console.error('Fatal: Could not load application configuration.', error);
+                document.body.innerHTML = `<div style="padding: 2rem; text-align: center; color: red; font-family: sans-serif;">Failed to load application configuration. Please refresh the page.</div>`;
+                return;
+            }
+
+            // 2. Initialize Firebase
+            firebase.initializeApp(firebaseConfig);
+            const auth = firebase.auth();
+            console.log(`Firebase initialized for project: ${firebaseConfig.projectId}`);
+
+            // 3. Check for logged-in user and set up context using onAuthStateChanged
+            auth.onAuthStateChanged(async (user) => {
+                if (user) {
+                    const currentAacUserId = sessionStorage.getItem("currentAacUserId");
+                    const tokenFromUser = await user.getIdToken();
+                    sessionStorage.setItem("firebaseIdToken", tokenFromUser);
+
+                    if (!currentAacUserId) {
+                        console.warn("No AAC User ID found in session. Redirecting to auth page for user selection.");
+                        window.location.href = 'auth.html';
+                        return;
+                    }
+
+                    window.authenticatedFetch = async (url, options = {}) => {
+                        const headers = options.headers || {};
+                        headers['Authorization'] = `Bearer ${tokenFromUser}`;
+                        headers['X-User-ID'] = currentAacUserId;
+                        
+                        // For admin access, include the target account ID
+                        const adminTargetAccountId = sessionStorage.getItem('adminTargetAccountId');
+                        if (adminTargetAccountId) {
+                            headers['X-Admin-Target-Account'] = adminTargetAccountId;
+                            console.log(`Setting admin target account header: ${adminTargetAccountId}`);
+                        }
+                        
+                        options.headers = headers;
+                        const response = await fetch(url, options);
+                        if (response.status === 401 || response.status === 403) {
+                            console.warn(`Auth failed (${response.status}). Redirecting to login.`);
+                            sessionStorage.clear(); window.location.href = 'auth.html'; throw new Error("Session expired.");
+                        }
+                        return response;
+                    };
+
+                    window.currentAacUserId = currentAacUserId;
+                    window.firebaseIdToken = tokenFromUser;
+                    window.adminContextInitializedByInlineScript = true;
+                    
+                    // Global function to update page title with profile name
+                    window.updatePageTitleWithProfile = async (baseTitle) => {
+                        try {
+                            const response = await window.authenticatedFetch('/api/account/users');
+                            if (!response.ok) return;
+                            
+                            const profiles = await response.json();
+                            const currentProfile = profiles.find(profile => profile.aac_user_id === currentAacUserId);
+                            
+                            if (currentProfile && currentProfile.display_name) {
+                                const titleElement = document.getElementById('dynamic-page-title');
+                                if (titleElement) {
+                                    titleElement.textContent = `${baseTitle} - ${currentProfile.display_name}`;
+                                }
+                            }
+                        } catch (error) {
+                            console.error('Error updating page title with profile:', error);
+                        }
+                    };
+                    
+                    document.dispatchEvent(new Event('adminUserContextReady'));
+                    console.log(`Admin context ready for AAC User ID: ${currentAacUserId}`);
+
+                } else {
+                    console.log("No Firebase user session found. Redirecting to auth.html.");
+                    sessionStorage.clear();
+                    window.location.href = 'auth.html';
+                }
+            });
+        })();
+    </script>
+
+    <div class="page-banner flex items-center justify-between bg-[#002244] text-[#FB4F14] px-4 py-2 shadow">
+        <div class="flex items-center gap-2">
+            <button onclick="window.navigateToHome ? window.navigateToHome() : window.location.href='gridpage.html?page=home'" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100 focus:outline-none focus:ring-2 focus:ring-orange-500" title="Home">
+                <i class="fas fa-home"></i>
+            </button>
+            <h1 id="dynamic-page-title" class="ml-2 text-xl font-semibold">User Diary Administration</h1>
+        </div>
+        <div class="admin-toolbar flex items-center gap-2">
+            <a href="admin_pages.html" title="Pages &amp; Buttons" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-th-large"></i></a>
+            <a href="admin_settings.html" title="Global Settings" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-cog"></i></a>
+            <a href="user_current_admin.html" title="User Current Location" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-map-marker-alt"></i></a>
+            <a href="user_info_admin.html" title="User Info &amp; Birthdays" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-info-circle"></i></a>
+            <a href="user_diary_admin.html" title="User Diary" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-book-open"></i></a>
+            <a href="audio_admin.html" title="Audio Devices" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-volume-up"></i></a>
+            <a href="favorites_admin.html" title="Event Sources" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-star"></i></a>
+            <a href="admin_audit_report.html" title="Activity Reports" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-clipboard-list"></i></a>
+            <span class="border-l border-white h-6 mx-1"></span>
+            <button id="switch-user-button" title="Switch User Profile" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-users"></i></button>
+            <button id="logout-button" title="Logout" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-sign-out-alt"></i></button>
+            <button id="help-icon" title="Help" aria-label="Help" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full ml-2 transition-colors duration-200 text-base hover:bg-orange-100 focus:outline-none focus:ring-2 focus:ring-orange-500">
+                <i class="fas fa-question-circle"></i>
+            </button>
+        </div>
+    </div>
+
+    <div class="container mx-auto mt-6 p-4">
+        <div class="bg-white p-6 rounded-lg shadow-lg">
+
+            <h2 class="text-2xl font-bold text-gray-800 mb-6 border-b pb-2">Add/Edit Diary Entry</h2>
+            <p class="text-sm text-gray-600 mb-4">Enter a date and the corresponding diary entry. Saving an entry for an existing date will overwrite the previous entry for that date.</p>
+
+            <div class="space-y-4 mb-6">
+                <div>
+                    <label for="date">Date:</label>
+                    <input type="date" id="date" name="date" required class="max-w-xs">
+                </div>
+
+                <div class="flex justify-start mb-4">
+                    <button type="button" id="dictationButton" class="bg-green-600 hover:bg-green-700 text-white font-semibold px-6 py-3 rounded-lg shadow-md transition-colors duration-200 flex items-center">
+                         <i class="fas fa-microphone-alt mr-2"></i> Start Dictation
+                    </button>
+                </div>
+
+                <div>
+                    <label for="entry">Entry:</label>
+                    <textarea id="entry" name="entry" placeholder="Enter diary details here..." required class="w-full"></textarea>
+                </div>
+            </div>
+
+            <div class="flex flex-wrap gap-4">
+                <button type="button" id="saveButton" class="bg-blue-600 hover:bg-blue-700 text-white font-bold px-8 py-4 rounded-lg shadow-lg transition-colors duration-200 text-lg flex items-center">
+                     <i class="fas fa-save mr-3 text-xl"></i> Save Entry
+                </button>
+            </div>
+             <p id="save-status" class="text-sm text-green-600 mt-4 h-4"></p> <div id="diaryEntries">
+                <h2>Diary Entries (Most Recent First)</h2>
+                <p class="text-gray-500" id="loading-entries">Loading entries...</p>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        // Update page title when admin context is ready
+        document.addEventListener('adminUserContextReady', async function() {
+            if (window.updatePageTitleWithProfile) {
+                await window.updatePageTitleWithProfile('User Diary Administration');
+            }
+        });
+    </script>
+
+</body>
+</html>

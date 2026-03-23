@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Network Connectivity Test</title>
+    <style>
+        body { 
+            font-family: Arial, sans-serif; 
+            margin: 40px; 
+            background: #f5f5f5;
+        }
+        .test-container { 
+            background: white; 
+            padding: 20px; 
+            border-radius: 8px; 
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            margin: 20px 0;
+        }
+        .test-result {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 4px;
+        }
+        .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
+        .testing { background: #fff3cd; color: #856404; border: 1px solid #ffeaa7; }
+        button {
+            background: #007bff;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 4px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        button:hover { background: #0056b3; }
+        .url-display { 
+            font-family: monospace; 
+            background: #f8f9fa; 
+            padding: 5px; 
+            border-radius: 3px;
+            word-break: break-all;
+        }
+    </style>
+</head>
+<body>
+    <h1>🚢 Cruise Ship Network Connectivity Test</h1>
+    <div class="info">
+        <strong>Current Location:</strong> <span id="currentUrl"></span><br>
+        <strong>User Agent:</strong> <span id="userAgent"></span><br>
+        <strong>Network Info:</strong> <span id="networkInfo"></span>
+    </div>
+
+    <button onclick="runAllTests()">🔄 Run All Tests</button>
+    <button onclick="clearResults()">🧹 Clear Results</button>
+
+    <div id="results"></div>
+
+    <div class="test-container">
+        <h3>Manual Tests</h3>
+        <button onclick="testSpecificUrl()">Test Custom URL</button>
+        <input type="text" id="customUrl" placeholder="Enter URL to test" style="width: 300px; margin-left: 10px;">
+        
+        <div style="margin-top: 15px;">
+            <button onclick="testFirebaseConfig()">Test Firebase Config</button>
+            <button onclick="testBackendAPI()">Test Backend API</button>
+            <button onclick="testPublicAPI()">Test Public API (httpbin.org)</button>
+        </div>
+    </div>
+
+    <script>
+        // Display basic info
+        document.getElementById('currentUrl').textContent = window.location.href;
+        document.getElementById('userAgent').textContent = navigator.userAgent;
+        
+        // Network info
+        let networkInfo = 'Unknown';
+        if ('connection' in navigator) {
+            const conn = navigator.connection;
+            networkInfo = `${conn.effectiveType || 'unknown'} (${conn.downlink || 'unknown'}Mbps)`;
+        }
+        document.getElementById('networkInfo').textContent = networkInfo;
+
+        function addResult(message, type = 'info') {
+            const results = document.getElementById('results');
+            const div = document.createElement('div');
+            div.className = `test-result ${type}`;
+            div.innerHTML = `[${new Date().toLocaleTimeString()}] ${message}`;
+            results.appendChild(div);
+            results.scrollTop = results.scrollHeight;
+        }
+
+        function clearResults() {
+            document.getElementById('results').innerHTML = '';
+        }
+
+        async function testConnection(url, description, options = {}) {
+            addResult(`Testing ${description}...`, 'testing');
+            
+            try {
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+                
+                const response = await fetch(url, {
+                    ...options,
+                    signal: controller.signal
+                });
+                
+                clearTimeout(timeoutId);
+                
+                const status = response.ok ? 'success' : 'error';
+                const message = `✅ ${description}: ${response.status} ${response.statusText}`;
+                addResult(message, status);
+                
+                return { success: response.ok, status: response.status, statusText: response.statusText };
+            } catch (error) {
+                let errorMsg = `❌ ${description}: ${error.message}`;
+                if (error.name === 'AbortError') {
+                    errorMsg = `⏰ ${description}: Timeout (>10s)`;
+                }
+                addResult(errorMsg, 'error');
+                return { success: false, error: error.message };
+            }
+        }
+
+        async function testFirebaseConfig() {
+            return await testConnection('/api/frontend-config', 'Firebase Config Endpoint');
+        }
+
+        async function testBackendAPI() {
+            return await testConnection('/api/account/users', 'Backend User API (will fail without auth - that\'s expected)');
+        }
+
+        async function testPublicAPI() {
+            return await testConnection('https://httpbin.org/get', 'External Public API (httpbin.org)');
+        }
+
+        async function testGoogleAPIs() {
+            addResult('🔄 Testing Google/Firebase Services...', 'testing');
+            
+            const tests = [
+                { url: 'https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js', name: 'Firebase CDN' },
+                { url: 'https://accounts.google.com/.well-known/openid_configuration', name: 'Google Auth' },
+                { url: 'https://www.googleapis.com/', name: 'Google APIs' }
+            ];
+
+            for (const test of tests) {
+                await testConnection(test.url, test.name);
+            }
+        }
+
+        async function testSpecificUrl() {
+            const url = document.getElementById('customUrl').value.trim();
+            if (!url) {
+                addResult('❌ Please enter a URL to test', 'error');
+                return;
+            }
+            await testConnection(url, `Custom URL: ${url}`);
+        }
+
+        async function runAllTests() {
+            clearResults();
+            addResult('🚀 Starting comprehensive network test...', 'info');
+            
+            // Test basic connectivity
+            addResult('📡 Testing basic connectivity...', 'info');
+            await testPublicAPI();
+            
+            // Test Google services
+            await testGoogleAPIs();
+            
+            // Test our Firebase config
+            addResult('🔥 Testing our Firebase integration...', 'info');
+            await testFirebaseConfig();
+            
+            // Test our backend (will fail without auth, but shows if connection works)
+            addResult('🖥️ Testing our backend API...', 'info');
+            await testBackendAPI();
+            
+            addResult('✅ All tests completed!', 'success');
+        }
+
+        // Auto-run tests on page load
+        window.addEventListener('load', () => {
+            setTimeout(runAllTests, 1000);
+        });
+    </script>
+</body>
+</html>

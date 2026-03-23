@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, ini        // Load Firebase config and initialize
+        async function initializeFirebase() {
+            try {
+                const response = await fetch('/api/frontend-config');
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                const config = await response.json();
+                
+                // Use the firebase_config from the response
+                firebaseConfig = config.firebase_config || config;
+                
+                // Validate that we have a valid API key
+                if (!firebaseConfig.apiKey || firebaseConfig.apiKey === '') {
+                    throw new Error('Invalid or missing Firebase API key');
+                }
+                
+                console.log('Firebase config loaded:', {
+                    apiKey: firebaseConfig.apiKey ? '[PRESENT]' : '[MISSING]',
+                    projectId: firebaseConfig.projectId,
+                    environment: config.environment
+                });
+                
+                const app = initializeApp(firebaseConfig);
+                auth = getAuth(app);  <title>AAC Image Creator - Global Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <style>
+        .image-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 1rem;
+        }
+        .image-card {
+            border: 2px solid #e5e7eb;
+            border-radius: 8px;
+            overflow: hidden;
+            transition: all 0.2s;
+            position: relative;
+        }
+        .image-card:hover {
+            border-color: #3b82f6;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+        }
+        .image-card.selected {
+            border-color: #10b981;
+            background-color: #f0fdf4;
+        }
+        .loading-spinner {
+            border: 4px solid #f3f4f6;
+            border-top: 4px solid #3b82f6;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        .step-indicator {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 2rem;
+        }
+        .step {
+            display: flex;
+            align-items: center;
+            flex: 1;
+            position: relative;
+        }
+        .step-number {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            margin-right: 10px;
+        }
+        .step.active .step-number {
+            background-color: #3b82f6;
+            color: white;
+        }
+        .step.completed .step-number {
+            background-color: #10b981;
+            color: white;
+        }
+        .step:not(.active):not(.completed) .step-number {
+            background-color: #e5e7eb;
+            color: #6b7280;
+        }
+        .step-line {
+            flex: 1;
+            height: 2px;
+            background-color: #e5e7eb;
+            margin: 0 20px;
+        }
+        .step.completed ~ .step .step-line {
+            background-color: #10b981;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        .tag-input {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.5rem;
+            align-items: center;
+            padding: 0.5rem;
+            border: 1px solid #d1d5db;
+            border-radius: 0.375rem;
+            min-height: 2.5rem;
+        }
+        .tag {
+            background-color: #3b82f6;
+            color: white;
+            padding: 0.25rem 0.5rem;
+            border-radius: 0.25rem;
+            font-size: 0.875rem;
+            display: flex;
+            align-items: center;
+            gap: 0.25rem;
+        }
+        .tag button {
+            background: none;
+            border: none;
+            color: white;
+            cursor: pointer;
+            font-size: 1rem;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <!-- Firebase Auth Configuration -->
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/9.0.0/firebase-app.js'
+        import { getAuth, onAuthStateChanged, signOut } from 'https://www.gstatic.com/firebasejs/9.0.0/firebase-auth.js'
+        
+        // Firebase configuration will be loaded dynamically
+        let firebaseConfig = {};
+        let auth = null;
+        let currentUser = null;
+        
+        // Load Firebase config and initialize
+        async function initializeFirebase() {
+            try {
+                const response = await fetch('/api/frontend-config');
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                const config = await response.json();
+                
+                // Use the config directly (not nested under firebase_config)
+                firebaseConfig = config;
+                
+                // Validate that we have a valid API key
+                if (!firebaseConfig.apiKey || firebaseConfig.apiKey === '') {
+                    throw new Error('Invalid or missing Firebase API key');
+                }
+                
+                const app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                
+                // Check authentication state
+                onAuthStateChanged(auth, (user) => {
+                    if (user && user.email === 'admin@talkwithbravo.com') {
+                        currentUser = user;
+                        document.getElementById('loading-auth').classList.add('hidden');
+                        document.getElementById('main-content').classList.remove('hidden');
+                        initializeImageCreator();
+                    } else {
+                        // Redirect to auth page or show access denied
+                        document.getElementById('loading-auth').classList.add('hidden');
+                        document.getElementById('access-denied').classList.remove('hidden');
+                    }
+                });
+                
+            } catch (error) {
+                console.error('Error initializing Firebase:', error);
+                document.getElementById('loading-auth').innerHTML = `
+                    <div class="text-red-600">
+                        <i class="fas fa-exclamation-triangle"></i>
+                        <p>Error loading application. Please refresh the page.</p>
+                    </div>
+                `;
+            }
+        }
+        
+        // Initialize Firebase when page loads
+        window.addEventListener('load', initializeFirebase);
+        
+        // Make auth available globally
+        window.getAuthToken = async () => {
+            if (currentUser) {
+                return await currentUser.getIdToken();
+            }
+            throw new Error('User not authenticated');
+        };
+        
+        window.signOutUser = () => {
+            signOut(auth).then(() => {
+                window.location.href = '/';
+            });
+        };
+    </script>
+
+    <!-- Loading Auth State -->
+    <div id="loading-auth" class="flex items-center justify-center min-h-screen">
+        <div class="text-center">
+            <div class="loading-spinner mx-auto mb-4"></div>
+            <p class="text-gray-600">Checking authentication...</p>
+        </div>
+    </div>
+
+    <!-- Access Denied -->
+    <div id="access-denied" class="hidden flex items-center justify-center min-h-screen">
+        <div class="bg-white rounded-lg shadow-md p-8 text-center max-w-md">
+            <div class="text-red-600 mb-4">
+                <i class="fas fa-shield-alt text-4xl"></i>
+            </div>
+            <h2 class="text-xl font-semibold text-gray-800 mb-2">Access Denied</h2>
+            <p class="text-gray-600 mb-4">This page is restricted to admin users only.</p>
+            <a href="/" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-md transition duration-200">
+                Go to Main App
+            </a>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div id="main-content" class="hidden container mx-auto p-6 max-w-7xl">
+        <!-- Header -->
+        <div class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <div class="flex justify-between items-start">
+                <div>
+                    <h1 class="text-3xl font-bold text-gray-800 mb-2">
+                        <i class="fas fa-images text-blue-600 mr-3"></i>
+                        AAC Image Creator
+                    </h1>
+                    <p class="text-gray-600">Global admin tool for generating and managing AAC pictograms</p>
+                </div>
+                <div class="flex gap-4">
+                    <button onclick="showImageBrowser()" class="bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded-md transition duration-200">
+                        <i class="fas fa-search mr-2"></i>
+                        Browse Images
+                    </button>
+                    <button onclick="window.signOutUser()" class="bg-gray-600 hover:bg-gray-700 text-white font-semibold py-2 px-4 rounded-md transition duration-200">
+                        <i class="fas fa-sign-out-alt mr-2"></i>
+                        Sign Out
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Step Indicator -->
+        <div class="step-indicator bg-white rounded-lg shadow-md p-6 mb-6">
+            <div class="step active" id="step-1">
+                <div class="step-number">1</div>
+                <span>Define Concept</span>
+                <div class="step-line"></div>
+            </div>
+            <div class="step" id="step-2">
+                <div class="step-number">2</div>
+                <span>Generate Subconcepts</span>
+                <div class="step-line"></div>
+            </div>
+            <div class="step" id="step-3">
+                <div class="step-number">3</div>
+                <span>Create Images</span>
+                <div class="step-line"></div>
+            </div>
+            <div class="step" id="step-4">
+                <div class="step-number">4</div>
+                <span>Review & Store</span>
+            </div>
+        </div>
+
+        <!-- Step 1: Concept Definition -->
+        <div id="step-1-panel" class="bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-xl font-semibold mb-4">Step 1: Define Your Concept</h2>
+            
+            <div class="grid md:grid-cols-2 gap-6">
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Main Concept Category
+                    </label>
+                    <input 
+                        type="text" 
+                        id="concept-input"
+                        placeholder="e.g., animals, food, emotions, activities, family members"
+                        class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                    <p class="text-sm text-gray-500 mt-1">Enter a broad category that will be broken into specific items</p>
+                </div>
+                
+                <div>
+                    <label class="block text-sm font-medium text-gray-700 mb-2">
+                        Number of Variations
+                    </label>
+                    <select id="variations-count" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="5">5 variations</option>
+                        <option value="8">8 variations</option>
+                        <option value="10" selected>10 variations</option>
+                        <option value="12">12 variations</option>
+                        <option value="15">15 variations</option>
+                        <option value="20">20 variations</option>
+                    </select>
+                    <p class="text-sm text-gray-500 mt-1">How many specific items to generate</p>
+                </div>
+            </div>
+            
+            <div class="mt-6">
+                <button 
+                    id="generate-subconcepts-btn"
+                    onclick="generateSubconcepts()"
+                    class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-6 rounded-md transition duration-200"
+                >
+                    <i class="fas fa-arrow-right mr-2"></i>
+                    Generate Subconcepts
+                </button>
+            </div>
+        </div>
+
+        <!-- Step 2: Subconcepts Review -->
+        <div id="step-2-panel" class="hidden bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-xl font-semibold mb-4">Step 2: Review and Edit Subconcepts</h2>
+            
+            <div class="mb-4">
+                <p class="text-gray-600 mb-3">Review the generated subconcepts. You can edit them or add new ones:</p>
+                <div id="subconcepts-container" class="grid md:grid-cols-2 lg:grid-cols-3 gap-3">
+                    <!-- Subconcepts will be loaded here -->
+                </div>
+            </div>
+            
+            <div class="flex gap-4">
+                <button 
+                    onclick="addCustomSubconcept()"
+                    class="bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded-md transition duration-200"
+                >
+                    <i class="fas fa-plus mr-2"></i>
+                    Add Custom
+                </button>
+                <button 
+                    onclick="generateImages()"
+                    class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-6 rounded-md transition duration-200"
+                >
+                    <i class="fas fa-arrow-right mr-2"></i>
+                    Generate Images
+                </button>
+            </div>
+        </div>
+
+        <!-- Step 3: Image Generation -->
+        <div id="step-3-panel" class="hidden bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-xl font-semibold mb-4">Step 3: Image Generation in Progress</h2>
+            
+            <div id="generation-progress" class="text-center">
+                <div class="loading-spinner mx-auto mb-4"></div>
+                <p class="text-gray-600 mb-2">Generating images... This may take several minutes.</p>
+                <p class="text-sm text-gray-500">Progress: <span id="progress-text">0/0</span></p>
+            </div>
+        </div>
+
+        <!-- Step 4: Review and Store -->
+        <div id="step-4-panel" class="hidden bg-white rounded-lg shadow-md p-6 mb-6">
+            <h2 class="text-xl font-semibold mb-4">Step 4: Review Generated Images</h2>
+            
+            <div class="mb-4">
+                <p class="text-gray-600 mb-3">Select the images you want to store in the global AAC database:</p>
+                <div class="flex gap-4 mb-4">
+                    <button onclick="selectAllImages()" class="bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-4 rounded-md transition duration-200">
+                        <i class="fas fa-check-double mr-2"></i>
+                        Select All
+                    </button>
+                    <button onclick="deselectAllImages()" class="bg-gray-600 hover:bg-gray-700 text-white font-semibold py-2 px-4 rounded-md transition duration-200">
+                        <i class="fas fa-times mr-2"></i>
+                        Deselect All
+                    </button>
+                </div>
+            </div>
+            
+            <div id="generated-images-container" class="image-grid mb-6">
+                <!-- Generated images will be loaded here -->
+            </div>
+            
+            <div class="flex gap-4">
+                <button 
+                    onclick="storeSelectedImages()"
+                    class="bg-green-600 hover:bg-green-700 text-white font-semibold py-2 px-6 rounded-md transition duration-200"
+                >
+                    <i class="fas fa-save mr-2"></i>
+                    Store Selected Images
+                </button>
+                <button 
+                    onclick="startOver()"
+                    class="bg-gray-600 hover:bg-gray-700 text-white font-semibold py-2 px-4 rounded-md transition duration-200"
+                >
+                    <i class="fas fa-redo mr-2"></i>
+                    Start Over
+                </button>
+            </div>
+        </div>
+
+        <!-- Image Browser Modal -->
+        <div id="image-browser-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div class="bg-white rounded-lg shadow-lg max-w-6xl w-full mx-4 max-h-[90vh] overflow-hidden">
+                <div class="p-6 border-b">
+                    <div class="flex justify-between items-center">
+                        <h3 class="text-xl font-semibold">Browse AAC Images</h3>
+                        <button onclick="closeImageBrowser()" class="text-gray-400 hover:text-gray-600">
+                            <i class="fas fa-times text-2xl"></i>
+                        </button>
+                    </div>
+                    
+                    <!-- Search Filters -->
+                    <div class="mt-4 grid md:grid-cols-3 gap-4">
+                        <input 
+                            type="text" 
+                            id="search-concept"
+                            placeholder="Filter by concept..."
+                            class="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                        <input 
+                            type="text" 
+                            id="search-tag"
+                            placeholder="Filter by tag..."
+                            class="px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                        >
+                        <button 
+                            onclick="searchImages()"
+                            class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-4 rounded-md transition duration-200"
+                        >
+                            <i class="fas fa-search mr-2"></i>
+                            Search
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="p-6 overflow-y-auto max-h-[60vh]">
+                    <div id="browser-images-container" class="image-grid">
+                        <!-- Existing images will be loaded here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/imagecreator.js"></script>
+</body>
+</html>

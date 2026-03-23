@@ -1,0 +1,59 @@
+<!-- Placeholder SVG for user management demo -->
+<svg width="500" height="380" xmlns="http://www.w3.org/2000/svg">
+  <rect width="500" height="380" fill="#f8fafc"/>
+  
+  <!-- Header -->
+  <rect x="10" y="10" width="480" height="40" fill="#10b981"/>
+  <text x="250" y="35" text-anchor="middle" fill="white" font-family="Arial" font-size="16" font-weight="bold">👥 User Management Dashboard</text>
+  
+  <!-- Search Bar -->
+  <rect x="20" y="70" width="300" height="30" fill="#ffffff" stroke="#d1d5db" rx="4"/>
+  <text x="30" y="90" fill="#9ca3af" font-family="Arial" font-size="12">🔍 Search users by name, email, or status...</text>
+  <rect x="330" y="70" width="80" height="30" fill="#3b82f6" rx="4"/>
+  <text x="370" y="90" text-anchor="middle" fill="white" font-family="Arial" font-size="12">Search</text>
+  
+  <!-- User List Header -->
+  <rect x="20" y="120" width="460" height="30" fill="#f3f4f6"/>
+  <text x="30" y="140" fill="#374151" font-family="Arial" font-size="11" font-weight="bold">User</text>
+  <text x="150" y="140" fill="#374151" font-family="Arial" font-size="11" font-weight="bold">Email</text>
+  <text x="280" y="140" fill="#374151" font-family="Arial" font-size="11" font-weight="bold">Status</text>
+  <text x="350" y="140" fill="#374151" font-family="Arial" font-size="11" font-weight="bold">Last Active</text>
+  <text x="440" y="140" fill="#374151" font-family="Arial" font-size="11" font-weight="bold">Actions</text>
+  
+  <!-- User Rows -->
+  <rect x="20" y="150" width="460" height="35" fill="#ffffff" stroke="#e5e7eb"/>
+  <circle cx="45" cy="167" r="12" fill="#ddd6fe"/>
+  <text x="45" y="172" text-anchor="middle" fill="#7c3aed" font-family="Arial" font-size="12" font-weight="bold">JD</text>
+  <text x="70" y="172" fill="#374151" font-family="Arial" font-size="11">John Doe</text>
+  <text x="150" y="172" fill="#6b7280" font-family="Arial" font-size="10">john@example.com</text>
+  <rect x="280" y="160" width="50" height="15" fill="#dcfce7" rx="8"/>
+  <text x="305" y="170" text-anchor="middle" fill="#16a34a" font-family="Arial" font-size="9">Active</text>
+  <text x="350" y="172" fill="#6b7280" font-family="Arial" font-size="10">2 hours ago</text>
+  <circle cx="450" cy="167" r="8" fill="#3b82f6"/>
+  <text x="450" y="171" text-anchor="middle" fill="white" font-family="Arial" font-size="8">✏️</text>
+  
+  <rect x="20" y="185" width="460" height="35" fill="#f9fafb" stroke="#e5e7eb"/>
+  <circle cx="45" cy="202" r="12" fill="#fecaca"/>
+  <text x="45" y="207" text-anchor="middle" fill="#dc2626" font-family="Arial" font-size="12" font-weight="bold">AS</text>
+  <text x="70" y="207" fill="#374151" font-family="Arial" font-size="11">Alice Smith</text>
+  <text x="150" y="207" fill="#6b7280" font-family="Arial" font-size="10">alice@example.com</text>
+  <rect x="280" y="195" width="50" height="15" fill="#fee2e2" rx="8"/>
+  <text x="305" y="205" text-anchor="middle" fill="#dc2626" font-family="Arial" font-size="9">Offline</text>
+  <text x="350" y="207" fill="#6b7280" font-family="Arial" font-size="10">1 day ago</text>
+  <circle cx="450" cy="202" r="8" fill="#3b82f6"/>
+  <text x="450" y="206" text-anchor="middle" fill="white" font-family="Arial" font-size="8">✏️</text>
+  
+  <!-- User Profile Panel -->
+  <rect x="20" y="240" width="460" height="120" fill="#ffffff" stroke="#d1d5db" rx="6"/>
+  <text x="30" y="260" fill="#374151" font-family="Arial" font-size="14" font-weight="bold">User Profile: John Doe</text>
+  <text x="30" y="280" fill="#6b7280" font-family="Arial" font-size="11">📧 Email: john@example.com</text>
+  <text x="30" y="295" fill="#6b7280" font-family="Arial" font-size="11">📱 Phone: +1 (555) 123-4567</text>
+  <text x="30" y="310" fill="#6b7280" font-family="Arial" font-size="11">🎂 Birthday: January 15, 1990</text>
+  <text x="30" y="325" fill="#6b7280" font-family="Arial" font-size="11">🔐 Permissions: Standard User</text>
+  <text x="30" y="340" fill="#6b7280" font-family="Arial" font-size="11">📊 Activity: 245 messages, 12 favorites</text>
+  
+  <rect x="350" y="280" width="80" height="25" fill="#3b82f6" rx="4"/>
+  <text x="390" y="297" text-anchor="middle" fill="white" font-family="Arial" font-size="11">Edit Profile</text>
+  <rect x="350" y="310" width="80" height="25" fill="#ef4444" rx="4"/>
+  <text x="390" y="327" text-anchor="middle" fill="white" font-family="Arial" font-size="11">Suspend</text>
+</svg>

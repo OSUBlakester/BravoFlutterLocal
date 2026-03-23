@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Enhanced Avatar Selector - Bravo AAC</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <!-- Header -->
+    <div class="bg-white shadow-sm border-b">
+        <div class="max-w-6xl mx-auto px-4 py-4">
+            <div class="flex justify-between items-center">
+                <h1 class="text-2xl font-bold text-gray-900">
+                    <i class="fas fa-user-circle text-blue-600 mr-2"></i>
+                    Enhanced Avatar Selector
+                </h1>
+                <div class="text-sm text-gray-600">
+                    Choose your expressive AAC avatar
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="max-w-6xl mx-auto px-4 py-6">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Avatar Preview Section -->
+            <div class="lg:col-span-1">
+                <div class="bg-white rounded-lg shadow-sm border p-6">
+                    <h2 class="text-lg font-semibold mb-4">Avatar Preview</h2>
+                    
+                    <!-- Avatar Style Selection -->
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Avatar Style</label>
+                        <select id="avatar-style" class="w-full p-2 border rounded-lg">
+                            <option value="avataaars">Avataaars (Classic)</option>
+                            <option value="open-peeps">Open Peeps (Expressive)</option>
+                            <option value="lorelei">Lorelei (Artistic)</option>
+                            <option value="adventurer">Adventurer (Detailed)</option>
+                            <option value="big-smile">Big Smile (Fun)</option>
+                        </select>
+                    </div>
+                    
+                    <div class="text-center">
+                        <div id="avatar-preview" class="mb-4">
+                            <img id="avatar-image" src="" alt="Avatar Preview" class="w-48 h-48 mx-auto rounded-full border-4 border-blue-100" style="display: none;">
+                            <div id="loading-spinner" class="w-48 h-48 mx-auto bg-gray-100 rounded-full flex items-center justify-center">
+                                <i class="fas fa-spinner fa-spin text-gray-400 text-2xl"></i>
+                            </div>
+                        </div>
+                        <button id="generate-random" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors">
+                            <i class="fas fa-dice mr-2"></i>Generate Random
+                        </button>
+                        <button id="save-avatar" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg ml-2 transition-colors" style="display: none;">
+                            <i class="fas fa-save mr-2"></i>Save Avatar
+                        </button>
+                    </div>
+                    
+                    <!-- AAC Preview Section -->
+                    <div id="aac-preview-container" class="mt-6 p-4 bg-blue-50 rounded-lg" style="display: none;">
+                        <h3 class="text-md font-medium mb-2">AAC Description:</h3>
+                        <div id="aac-preview-content" class="text-sm text-gray-700"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Configuration Section -->
+            <div class="lg:col-span-2">
+                <div class="bg-white rounded-lg shadow-sm border p-6">
+                    <h2 class="text-lg font-semibold mb-4">Customize Your Avatar</h2>
+                    
+                    <!-- Basic Settings -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6" id="basic-controls">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Seed (Name/ID)</label>
+                            <input type="text" id="avatar-seed" class="w-full p-2 border rounded-lg" placeholder="Enter name or ID">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Background Color</label>
+                            <select id="background-color" class="w-full p-2 border rounded-lg">
+                                <option value="transparent">Transparent</option>
+                                <option value="solid">Solid</option>
+                                <option value="gradientLinear">Linear Gradient</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Emotional Expressions -->
+                    <div class="mb-6">
+                        <h3 class="text-md font-medium mb-3">Quick Emotional Expressions</h3>
+                        <div class="grid grid-cols-3 md:grid-cols-6 gap-2" id="emotion-buttons">
+                            <button class="emotion-btn p-2 text-xs bg-yellow-100 hover:bg-yellow-200 rounded-lg transition-colors" data-mood="happy">😊 Happy</button>
+                            <button class="emotion-btn p-2 text-xs bg-blue-100 hover:bg-blue-200 rounded-lg transition-colors" data-mood="sad">😢 Sad</button>
+                            <button class="emotion-btn p-2 text-xs bg-red-100 hover:bg-red-200 rounded-lg transition-colors" data-mood="angry">😠 Angry</button>
+                            <button class="emotion-btn p-2 text-xs bg-purple-100 hover:bg-purple-200 rounded-lg transition-colors" data-mood="surprised">😲 Surprised</button>
+                            <button class="emotion-btn p-2 text-xs bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors" data-mood="neutral">😐 Neutral</button>
+                            <button class="emotion-btn p-2 text-xs bg-green-100 hover:bg-green-200 rounded-lg transition-colors" data-mood="excited">🤗 Excited</button>
+                        </div>
+                    </div>
+
+                    <!-- Generate Variations Button -->
+                    <div class="text-center">
+                        <button id="generate-variations" class="bg-purple-600 hover:bg-purple-700 text-white px-6 py-3 rounded-lg text-lg font-medium transition-colors">
+                            <i class="fas fa-magic mr-2"></i>Generate AAC Avatar Set
+                        </button>
+                        <p class="text-sm text-gray-500 mt-2">Creates emotions, family members, and AAC responses</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Generated Variations -->
+        <div id="variations-container" style="display: none;">
+            <div class="mt-8 bg-white rounded-lg shadow-sm border p-6">
+                <div class="flex justify-between items-center mb-6">
+                    <div>
+                        <h2 class="text-xl font-bold text-gray-900">
+                            <span id="variations-count">0</span> Avatar Variations Generated
+                        </h2>
+                        <p class="text-gray-600">Your personalized avatar set with enhanced emotional expressions, family members, and AAC responses. Each avatar maintains consistent characteristics while showing clear emotional differences.</p>
+                    </div>
+                    <button id="download-all-btn" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors">
+                        <i class="fas fa-download mr-2"></i>Download All
+                    </button>
+                </div>
+                <div id="variations-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                    <!-- Generated variations will appear here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/enhanced-avatar-selector.js"></script>
+</body>
+</html>

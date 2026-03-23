@@ -1,0 +1,1167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Jokes Database Manager - Bravo AAC</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            display: none;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            padding: 30px;
+        }
+
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 30px;
+            border-bottom: 2px solid #eee;
+        }
+
+        .tab-btn {
+            padding: 12px 24px;
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 16px;
+            color: #666;
+            border-bottom: 3px solid transparent;
+            transition: all 0.3s;
+            font-weight: 500;
+        }
+
+        .tab-btn.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+        }
+
+        .tab-btn:hover {
+            color: #667eea;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 600;
+        }
+
+        input[type="text"],
+        textarea,
+        select {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #eee;
+            border-radius: 6px;
+            font-family: inherit;
+            font-size: 14px;
+            transition: border-color 0.3s;
+        }
+
+        input[type="text"]:focus,
+        textarea:focus,
+        select:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        textarea {
+            min-height: 100px;
+            resize: vertical;
+        }
+
+        .tags-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .tag {
+            background: #667eea;
+            color: white;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .tag button {
+            background: none;
+            border: none;
+            color: white;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .button-group {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s;
+            font-size: 14px;
+        }
+
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: #5568d3;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(102, 126, 234, 0.4);
+        }
+
+        .btn-secondary {
+            background: #f0f0f0;
+            color: #333;
+        }
+
+        .btn-secondary:hover {
+            background: #e0e0e0;
+        }
+
+        .btn-delete {
+            background: #dc3545;
+            color: white;
+        }
+
+        .btn-delete:hover {
+            background: #c82333;
+        }
+
+        .btn-edit {
+            background: #ffc107;
+            color: #333;
+        }
+
+        .btn-edit:hover {
+            background: #ffb800;
+        }
+
+        .jokes-list {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+            max-height: 600px;
+            overflow-y: auto;
+        }
+
+        .joke-card {
+            background: #f9f9f9;
+            border: 2px solid #eee;
+            border-radius: 8px;
+            padding: 15px;
+            transition: all 0.3s;
+        }
+
+        .joke-card:hover {
+            border-color: #667eea;
+            box-shadow: 0 5px 15px rgba(102, 126, 234, 0.1);
+        }
+
+        .joke-text {
+            font-size: 15px;
+            color: #333;
+            margin-bottom: 10px;
+            line-height: 1.5;
+        }
+
+        .joke-meta {
+            display: flex;
+            gap: 15px;
+            font-size: 12px;
+            color: #666;
+            margin-bottom: 10px;
+        }
+
+        .joke-tags {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 5px;
+            margin-bottom: 10px;
+        }
+
+        .joke-tag {
+            background: #e3f2fd;
+            color: #1976d2;
+            padding: 3px 8px;
+            border-radius: 4px;
+            font-size: 11px;
+        }
+
+        .joke-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .joke-actions button {
+            padding: 6px 12px;
+            font-size: 12px;
+        }
+
+        #filterTag {
+            height: 120px;
+        }
+
+        .filter-info {
+            font-size: 12px;
+            color: #666;
+            margin-top: 5px;
+            font-style: italic;
+        }
+
+        .alert {
+            padding: 15px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+            display: none;
+        }
+
+        .alert.show {
+            display: block;
+        }
+
+        .alert-success {
+            background: #d4edda;
+            border-left: 4px solid #28a745;
+            color: #155724;
+        }
+
+        .alert-error {
+            background: #f8d7da;
+            border-left: 4px solid #dc3545;
+            color: #721c24;
+        }
+
+        .alert-info {
+            background: #d1ecf1;
+            border-left: 4px solid #17a2b8;
+            color: #0c5460;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 20px;
+            color: #667eea;
+        }
+
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            width: 30px;
+            height: 30px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .checkbox-group {
+            display: flex;
+            gap: 20px;
+            margin-top: 10px;
+        }
+
+        .checkbox-group label {
+            display: flex;
+            align-items: center;
+            margin-bottom: 0;
+            gap: 8px;
+        }
+
+        input[type="checkbox"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+
+        .file-input-wrapper {
+            position: relative;
+            overflow: hidden;
+            display: inline-block;
+        }
+
+        .file-input-wrapper input[type="file"] {
+            position: absolute;
+            left: -9999px;
+        }
+
+        .file-input-label {
+            display: block;
+            padding: 12px 24px;
+            background: #667eea;
+            color: white;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            transition: all 0.3s;
+        }
+
+        .file-input-label:hover {
+            background: #5568d3;
+        }
+
+        .stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 32px;
+            font-weight: bold;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            opacity: 0.9;
+            margin-top: 5px;
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal.show {
+            display: flex;
+        }
+
+        .modal-content {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            max-width: 600px;
+            width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #eee;
+            padding-bottom: 15px;
+        }
+
+        .modal-header h2 {
+            margin: 0;
+            color: #333;
+        }
+
+        .close-btn {
+            background: none;
+            border: none;
+            font-size: 28px;
+            color: #999;
+            cursor: pointer;
+            padding: 0;
+            width: 32px;
+            height: 32px;
+            line-height: 28px;
+        }
+
+        .close-btn:hover {
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>
+            <i class="fas fa-laugh"></i>
+            Jokes Database Manager
+        </h1>
+
+        <div class="alert" id="alert"></div>
+
+        <!-- Edit Joke Modal -->
+        <div id="editModal" class="modal" onclick="if(event.target === this) closeEditModal()">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2>Edit Joke</h2>
+                    <button class="close-btn" onclick="closeEditModal()">&times;</button>
+                </div>
+                <form onsubmit="saveJokeEdit(event)">
+                    <input type="hidden" id="editJokeId">
+                    <div class="form-group">
+                        <label for="editJokeText">Joke Text</label>
+                        <textarea id="editJokeText" required></textarea>
+                    </div>
+                    <div class="form-group">
+                        <label for="editJokeSummary">Summary (5 words or less - for button label)</label>
+                        <input type="text" id="editJokeSummary" placeholder="e.g., Turkey ghost">
+                    </div>
+                    <div class="form-group">
+                        <label for="editJokeTags">Tags (comma-separated)</label>
+                        <input type="text" id="editJokeTags" placeholder="e.g., dad_joke, clean, food">
+                    </div>
+                    <div class="form-group">
+                        <label>
+                            <input type="checkbox" id="editJokeEnabled" checked>
+                            Enabled
+                        </label>
+                    </div>
+                    <div class="button-group">
+                        <button type="submit" class="btn-primary">
+                            <i class="fas fa-save"></i> Save Changes
+                        </button>
+                        <button type="button" onclick="closeEditModal()" class="btn-secondary">
+                            <i class="fas fa-times"></i> Cancel
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div class="tabs">
+            <button class="tab-btn active" onclick="switchTab('add')">
+                <i class="fas fa-plus"></i> Add Joke
+            </button>
+            <button class="tab-btn" onclick="switchTab('import')">
+                <i class="fas fa-upload"></i> Import
+            </button>
+            <button class="tab-btn" onclick="switchTab('manage')">
+                <i class="fas fa-cog"></i> Manage
+            </button>
+            <button class="tab-btn" onclick="switchTab('stats')">
+                <i class="fas fa-chart-bar"></i> Stats
+            </button>
+        </div>
+
+        <!-- ADD TAB -->
+        <div id="add" class="tab-content active">
+            <form onsubmit="handleAddJoke(event)">
+                <div class="form-group">
+                    <label for="jokeText">Joke Text *</label>
+                    <textarea id="jokeText" required placeholder="Enter the full joke text..."></textarea>
+                </div>
+
+                <div class="form-group">
+                    <label>
+                        <input type="checkbox" id="autoTag" checked>
+                        Auto-tag this joke using AI
+                    </label>
+                </div>
+
+                <div id="manualTagsInput" class="form-group" style="display: none;">
+                    <label for="manualTags">Manual Tags (comma-separated)</label>
+                    <input type="text" id="manualTags" placeholder="e.g., dad_joke, food, clean">
+                </div>
+
+                <div class="form-group">
+                    <div id="tagPreview" class="tags-container"></div>
+                </div>
+
+                <div class="button-group">
+                    <button type="submit" class="btn-primary">
+                        <i class="fas fa-save"></i> Add Joke
+                    </button>
+                    <button type="reset" class="btn-secondary">
+                        <i class="fas fa-redo"></i> Clear
+                    </button>
+                </div>
+            </form>
+        </div>
+
+        <!-- IMPORT TAB -->
+        <div id="import" class="tab-content">
+            <div class="form-group">
+                <label>Import from CSV or Text File</label>
+                <p style="color: #666; font-size: 14px; margin-bottom: 10px;">
+                    Format: One joke per line. Optionally add tags: "Joke text,tag1,tag2,tag3"
+                </p>
+                <textarea id="csvContent" placeholder="Paste CSV content here or use file upload..."></textarea>
+            </div>
+
+            <div class="file-input-wrapper">
+                <input type="file" id="fileInput" accept=".csv,.txt" onchange="handleFileUpload(event)">
+                <label for="fileInput" class="file-input-label">
+                    <i class="fas fa-file-upload"></i> Choose File
+                </label>
+            </div>
+
+            <div class="button-group" style="margin-top: 20px;">
+                <button id="importBtn" onclick="handleImportCSV()" class="btn-primary">
+                    <i class="fas fa-upload"></i> Import Jokes
+                </button>
+                <button onclick="document.getElementById('csvContent').value = ''; document.getElementById('fileInput').value = '';" class="btn-secondary">
+                    <i class="fas fa-redo"></i> Clear
+                </button>
+            </div>
+
+            <div id="importStatus" style="margin-top: 15px; padding: 10px; border-radius: 5px; display: none;">
+                <span id="importStatusText"></span>
+            </div>
+
+            <button onclick="handleImportIcanhazdadjoke()" class="btn-secondary" style="width: 100%; margin-top: 20px;">
+                <i class="fas fa-cloud-download-alt"></i> Import from icanhazdadjoke.com (~300 jokes)
+            </button>
+
+            <button onclick="handleCleanupQuotes()" class="btn-secondary" style="width: 100%; margin-top: 10px; background: #f57c00;">
+                <i class="fas fa-magic"></i> Clean Up Quotes (Fix Existing Jokes)
+            </button>
+        </div>
+
+        <!-- MANAGE TAB -->
+        <div id="manage" class="tab-content">
+            <div class="form-group">
+                <label for="filterTag">Filter by Tags (Multi-Select)</label>
+                <select id="filterTag" multiple onchange="filterJokes()">
+                    <!-- Options will be populated dynamically -->
+                </select>
+                <p class="filter-info">Hold Ctrl/Cmd to select multiple tags. Shows jokes matching ANY selected tag.</p>
+            </div>
+
+            <button onclick="loadAllJokes()" class="btn-secondary" style="margin-bottom: 20px;">
+                <i class="fas fa-sync-alt"></i> Refresh List
+            </button>
+
+            <div id="jokesList" class="jokes-list"></div>
+        </div>
+
+        <!-- STATS TAB -->
+        <div id="stats" class="tab-content">
+            <div id="statsContainer" class="stats"></div>
+            <div style="text-align: center;">
+                <button onclick="loadStats()" class="btn-primary">
+                    <i class="fas fa-sync-alt"></i> Refresh Stats
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+
+    <script>
+        let firebaseIdToken = null;
+        let currentAacUserId = null;
+
+        // Initialize Firebase and check authentication
+        (async () => {
+            try {
+                // Fetch Firebase config dynamically
+                const response = await fetch('/api/frontend-config');
+                if (!response.ok) throw new Error(`Server error (${response.status})`);
+                const configData = await response.json();
+                const firebaseConfig = configData.firebase_config || configData;
+                if (!firebaseConfig || !firebaseConfig.apiKey) throw new Error('Invalid config from server.');
+
+                // Initialize Firebase
+                firebase.initializeApp(firebaseConfig);
+                const auth = firebase.auth();
+
+                // Check for logged-in user
+                auth.onAuthStateChanged(async (user) => {
+                    if (user) {
+                        firebaseIdToken = await user.getIdToken();
+                        sessionStorage.setItem('firebaseIdToken', firebaseIdToken);
+                        console.log('Firebase user authenticated:', user.email);
+                        
+                        // Get AAC User ID from sessionStorage
+                        currentAacUserId = sessionStorage.getItem("currentAacUserId");
+                        if (!currentAacUserId) {
+                            console.warn("No AAC User ID found in session. Redirecting to auth page for user selection.");
+                            window.location.href = '/static/auth.html';
+                            return;
+                        }
+                        
+                        initializeInterface();
+                    } else {
+                        console.log('No Firebase user found, redirecting to auth...');
+                        window.location.href = '/';
+                    }
+                });
+            } catch (error) {
+                console.error('Failed to initialize Firebase:', error);
+                window.location.href = '/';
+            }
+        })();
+
+        function initializeInterface() {
+            // Page is now ready to use
+            document.body.style.display = 'block';
+        }
+
+        function showAlert(message, type = 'success') {
+            const alertEl = document.getElementById('alert');
+            alertEl.className = `alert show alert-${type}`;
+            alertEl.textContent = message;
+            setTimeout(() => alertEl.classList.remove('show'), 5000);
+        }
+
+        // Helper function to add required headers to all API requests
+        function getAuthHeaders() {
+            const headers = {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${firebaseIdToken}`,
+                'X-User-ID': currentAacUserId
+            };
+            
+            // For admin access, include the target account ID if set
+            const adminTargetAccountId = sessionStorage.getItem('adminTargetAccountId');
+            if (adminTargetAccountId) {
+                headers['X-Admin-Target-Account'] = adminTargetAccountId;
+            }
+            
+            return headers;
+        }
+
+        function switchTab(tabName) {
+            // Hide all tabs
+            document.querySelectorAll('.tab-content').forEach(el => {
+                el.classList.remove('active');
+            });
+            document.querySelectorAll('.tab-btn').forEach(el => {
+                el.classList.remove('active');
+            });
+
+            // Show selected tab
+            document.getElementById(tabName).classList.add('active');
+            event.target.closest('.tab-btn').classList.add('active');
+
+            if (tabName === 'manage') {
+                loadAllJokes();
+            } else if (tabName === 'stats') {
+                loadStats();
+            }
+        }
+
+        async function handleAddJoke(e) {
+            e.preventDefault();
+
+            const jokeText = document.getElementById('jokeText').value.trim();
+            const autoTag = document.getElementById('autoTag').checked;
+            const manualTags = document.getElementById('manualTags').value
+                .split(',')
+                .map(t => t.trim())
+                .filter(t => t);
+
+            if (!jokeText) {
+                showAlert('Please enter a joke', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/jokes/add', {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({
+                        text: jokeText,
+                        tags: manualTags.length > 0 ? manualTags : null,
+                        auto_tag: autoTag
+                    })
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    showAlert('Joke added successfully!', 'success');
+                    document.getElementById('jokeText').value = '';
+                    document.getElementById('manualTags').value = '';
+                } else {
+                    showAlert(`Error: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                showAlert(`Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function handleImportCSV() {
+            const content = document.getElementById('csvContent').value.trim();
+            if (!content) {
+                showAlert('Please enter or upload CSV content', 'error');
+                return;
+            }
+
+            const importBtn = document.getElementById('importBtn');
+            const importStatus = document.getElementById('importStatus');
+            const importStatusText = document.getElementById('importStatusText');
+
+            try {
+                // Show loading state
+                importBtn.disabled = true;
+                importBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Importing...';
+                importStatus.style.display = 'block';
+                importStatus.style.background = '#e3f2fd';
+                importStatus.style.color = '#1976d2';
+                importStatusText.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing jokes, please wait...';
+
+                const response = await fetch('/api/jokes/import', {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({ csv_content: content })
+                });
+
+                const data = await response.json();
+                
+                // Reset button
+                importBtn.disabled = false;
+                importBtn.innerHTML = '<i class="fas fa-upload"></i> Import Jokes';
+
+                if (data.success) {
+                    importStatus.style.background = '#e8f5e9';
+                    importStatus.style.color = '#2e7d32';
+                    
+                    let message = `<i class="fas fa-check-circle"></i> Successfully imported ${data.imported_count} jokes!`;
+                    if (data.errors && data.errors.length > 0) {
+                        message += ` <br><span style="color: #f57c00;"><i class="fas fa-exclamation-triangle"></i> ${data.errors.length} rows had errors (check console)</span>`;
+                        console.log('Import errors:', data.errors);
+                    }
+                    importStatusText.innerHTML = message;
+                    
+                    showAlert(`Imported ${data.imported_count} jokes!`, 'success');
+                    document.getElementById('csvContent').value = '';
+                    document.getElementById('fileInput').value = '';
+                    
+                    // Hide status after 10 seconds
+                    setTimeout(() => {
+                        importStatus.style.display = 'none';
+                    }, 10000);
+                } else {
+                    importStatus.style.background = '#ffebee';
+                    importStatus.style.color = '#c62828';
+                    importStatusText.innerHTML = `<i class="fas fa-times-circle"></i> Error: ${data.error}`;
+                    showAlert(`Error: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                importBtn.disabled = false;
+                importBtn.innerHTML = '<i class="fas fa-upload"></i> Import Jokes';
+                importStatus.style.display = 'block';
+                importStatus.style.background = '#ffebee';
+                importStatus.style.color = '#c62828';
+                importStatusText.innerHTML = `<i class="fas fa-times-circle"></i> Error: ${error.message}`;
+                showAlert(`Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function handleImportIcanhazdadjoke() {
+            if (!confirm('This will import ~300 jokes from icanhazdadjoke.com. Continue?')) {
+                return;
+            }
+
+            const importStatus = document.getElementById('importStatus');
+            const importStatusText = document.getElementById('importStatusText');
+
+            try {
+                // Show loading state
+                importStatus.style.display = 'block';
+                importStatus.style.background = '#e3f2fd';
+                importStatus.style.color = '#1976d2';
+                importStatusText.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Importing from icanhazdadjoke.com, this may take a minute...';
+
+                const response = await fetch('/api/jokes/import-icanhazdadjoke', {
+                    method: 'POST',
+                    headers: getAuthHeaders()
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    importStatus.style.background = '#e8f5e9';
+                    importStatus.style.color = '#2e7d32';
+                    importStatusText.innerHTML = `<i class="fas fa-check-circle"></i> Successfully imported ${data.imported_count} jokes from icanhazdadjoke!`;
+                    showAlert(`Imported ${data.imported_count} jokes from icanhazdadjoke!`, 'success');
+                    
+                    // Hide status after 10 seconds
+                    setTimeout(() => {
+                        importStatus.style.display = 'none';
+                    }, 10000);
+                } else {
+                    importStatus.style.background = '#ffebee';
+                    importStatus.style.color = '#c62828';
+                    importStatusText.innerHTML = `<i class="fas fa-times-circle"></i> Error: ${data.error}`;
+                    showAlert(`Error: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                importStatus.style.display = 'block';
+                importStatus.style.background = '#ffebee';
+                importStatus.style.color = '#c62828';
+                importStatusText.innerHTML = `<i class="fas fa-times-circle"></i> Error: ${error.message}`;
+                showAlert(`Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function handleCleanupQuotes() {
+            if (!confirm('This will clean up extra quotes from all jokes in the database. This is safe but may take a minute. Continue?')) {
+                return;
+            }
+
+            const importStatus = document.getElementById('importStatus');
+            const importStatusText = document.getElementById('importStatusText');
+
+            try {
+                // Show loading state
+                importStatus.style.display = 'block';
+                importStatus.style.background = '#fff3e0';
+                importStatus.style.color = '#e65100';
+                importStatusText.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Cleaning up quotes from all jokes, please wait...';
+
+                const response = await fetch('/api/jokes/cleanup-quotes', {
+                    method: 'POST',
+                    headers: getAuthHeaders()
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    importStatus.style.background = '#e8f5e9';
+                    importStatus.style.color = '#2e7d32';
+                    importStatusText.innerHTML = `<i class="fas fa-check-circle"></i> Successfully cleaned ${data.cleaned_count} out of ${data.total_checked} jokes!`;
+                    showAlert(`Cleaned up ${data.cleaned_count} jokes!`, 'success');
+                    
+                    // Hide status after 10 seconds
+                    setTimeout(() => {
+                        importStatus.style.display = 'none';
+                    }, 10000);
+                } else {
+                    importStatus.style.background = '#ffebee';
+                    importStatus.style.color = '#c62828';
+                    importStatusText.innerHTML = `<i class="fas fa-times-circle"></i> Error: ${data.error}`;
+                    showAlert(`Error: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                importStatus.style.display = 'block';
+                importStatus.style.background = '#ffebee';
+                importStatus.style.color = '#c62828';
+                importStatusText.innerHTML = `<i class="fas fa-times-circle"></i> Error: ${error.message}`;
+                showAlert(`Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function loadAllJokes() {
+            try {
+                const response = await fetch('/api/jokes?include_disabled=false', {
+                    headers: getAuthHeaders()
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    window.allJokes = data.jokes; // Store globally for filtering
+                    populateTagFilter(data.jokes);
+                    filterJokes(); // Re-apply current filter
+                } else {
+                    showAlert(`Error: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                showAlert(`Error: ${error.message}`, 'error');
+            }
+        }
+
+        function populateTagFilter(jokes) {
+            // Extract all unique tags from jokes
+            const allTags = new Set();
+            jokes.forEach(joke => {
+                if (joke.tags && Array.isArray(joke.tags)) {
+                    joke.tags.forEach(tag => allTags.add(tag));
+                }
+            });
+
+            // Sort tags alphabetically
+            const sortedTags = Array.from(allTags).sort();
+
+            // Populate the select element
+            const filterSelect = document.getElementById('filterTag');
+            filterSelect.innerHTML = '<option value="">-- All Jokes --</option>';
+            
+            sortedTags.forEach(tag => {
+                const option = document.createElement('option');
+                option.value = tag;
+                option.textContent = tag;
+                filterSelect.appendChild(option);
+            });
+
+            console.log(`📊 Found ${sortedTags.length} unique tags`);
+        }
+
+        function displayJokes(jokes) {
+            const container = document.getElementById('jokesList');
+            container.innerHTML = '';
+
+            if (jokes.length === 0) {
+                container.innerHTML = '<p style="text-align: center; color: #999;">No jokes found</p>';
+                return;
+            }
+
+            jokes.forEach(joke => {
+                const card = document.createElement('div');
+                card.className = 'joke-card';
+                card.innerHTML = `
+                    <div class="joke-text">"${joke.text}"</div>
+                    ${joke.summary ? `<div style="color: #666; font-style: italic; margin: 8px 0; font-size: 0.9em;">Summary: "${joke.summary}"</div>` : ''}
+                    <div class="joke-meta">
+                        <span><strong>Source:</strong> ${joke.source || 'manual'}</span>
+                        <span><strong>Added:</strong> ${new Date(joke.createdAt?.toDate?.() || joke.createdAt).toLocaleDateString()}</span>
+                        ${joke.use_count ? `<span><strong>Used:</strong> ${joke.use_count} times</span>` : ''}
+                    </div>
+                    <div class="joke-tags">
+                        ${joke.tags.map(tag => `<span class="joke-tag">${tag}</span>`).join('')}
+                    </div>
+                    <div class="joke-actions">
+                        <button onclick="editJoke('${joke.id}')" class="btn-edit">
+                            <i class="fas fa-edit"></i> Edit
+                        </button>
+                        <button onclick="deleteJoke('${joke.id}')" class="btn-delete">
+                            <i class="fas fa-trash"></i> Delete
+                        </button>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        function filterJokes() {
+            const filterSelect = document.getElementById('filterTag');
+            const selectedTags = Array.from(filterSelect.selectedOptions).map(opt => opt.value).filter(v => v);
+            
+            if (!window.allJokes) {
+                console.warn('No jokes loaded yet');
+                return;
+            }
+
+            let filteredJokes;
+            
+            if (selectedTags.length === 0) {
+                // No filter selected - show all jokes
+                filteredJokes = window.allJokes;
+            } else {
+                // Filter jokes that have ANY of the selected tags
+                filteredJokes = window.allJokes.filter(joke => {
+                    return joke.tags && joke.tags.some(tag => selectedTags.includes(tag));
+                });
+            }
+
+            console.log(`🔍 Filtering: ${selectedTags.length} tags selected, showing ${filteredJokes.length}/${window.allJokes.length} jokes`);
+            displayJokes(filteredJokes);
+        }
+
+        function editJoke(jokeId) {
+            // Find the joke in our loaded jokes
+            const joke = window.allJokes.find(j => j.id === jokeId);
+            if (!joke) {
+                showAlert('Joke not found', 'error');
+                return;
+            }
+
+            // Populate the edit form
+            document.getElementById('editJokeId').value = jokeId;
+            document.getElementById('editJokeText').value = joke.text;
+            document.getElementById('editJokeSummary').value = joke.summary || '';
+            document.getElementById('editJokeTags').value = joke.tags ? joke.tags.join(', ') : '';
+            document.getElementById('editJokeEnabled').checked = joke.enabled !== false;
+
+            // Show the modal
+            document.getElementById('editModal').classList.add('show');
+        }
+
+        function closeEditModal() {
+            document.getElementById('editModal').classList.remove('show');
+        }
+
+        async function saveJokeEdit(event) {
+            event.preventDefault();
+
+            const jokeId = document.getElementById('editJokeId').value;
+            const text = document.getElementById('editJokeText').value.trim();
+            const summary = document.getElementById('editJokeSummary').value.trim();
+            const tagsInput = document.getElementById('editJokeTags').value.trim();
+            const enabled = document.getElementById('editJokeEnabled').checked;
+
+            // Parse tags
+            const tags = tagsInput ? tagsInput.split(',').map(t => t.trim()).filter(t => t) : [];
+
+            if (!text) {
+                showAlert('Joke text is required', 'error');
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/jokes/${jokeId}`, {
+                    method: 'PUT',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({
+                        text: text,
+                        summary: summary || null,
+                        tags: tags,
+                        enabled: enabled
+                    })
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    showAlert('Joke updated successfully!', 'success');
+                    closeEditModal();
+                    loadAllJokes(); // Refresh the list
+                } else {
+                    showAlert(`Error: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                showAlert(`Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function deleteJoke(jokeId) {
+            if (!confirm('Are you sure you want to delete this joke?')) {
+                return;
+            }
+
+            try {
+                const response = await fetch(`/api/jokes/${jokeId}?retire=true`, {
+                    method: 'DELETE',
+                    headers: getAuthHeaders()
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    showAlert('Joke deleted successfully', 'success');
+                    loadAllJokes();
+                } else {
+                    showAlert(`Error: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                showAlert(`Error: ${error.message}`, 'error');
+            }
+        }
+
+        function handleFileUpload(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                document.getElementById('csvContent').value = event.target.result;
+            };
+            reader.readAsText(file);
+        }
+
+        async function loadStats() {
+            try {
+                const response = await fetch('/api/jokes?include_disabled=false', {
+                    headers: {
+                        'Authorization': `Bearer ${firebaseIdToken}`
+                    }
+                });
+
+                const data = await response.json();
+                if (data.success) {
+                    const jokes = data.jokes;
+                    const stats = {
+                        total: jokes.length,
+                        clean: jokes.filter(j => j.tags.includes('clean')).length,
+                        nsfw: jokes.filter(j => j.tags.includes('nsfw')).length,
+                        dadJokes: jokes.filter(j => j.tags.includes('dad_joke')).length
+                    };
+
+                    const statsContainer = document.getElementById('statsContainer');
+                    statsContainer.innerHTML = `
+                        <div class="stat-card">
+                            <div class="stat-number">${stats.total}</div>
+                            <div class="stat-label">Total Jokes</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-number">${stats.clean}</div>
+                            <div class="stat-label">Clean</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-number">${stats.nsfw}</div>
+                            <div class="stat-label">NSFW</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-number">${stats.dadJokes}</div>
+                            <div class="stat-label">Dad Jokes</div>
+                        </div>
+                    `;
+                } else {
+                    showAlert(`Error: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                showAlert(`Error: ${error.message}`, 'error');
+            }
+        }
+
+        // Update manual tags input visibility
+        document.getElementById('autoTag')?.addEventListener('change', (e) => {
+            document.getElementById('manualTagsInput').style.display = e.target.checked ? 'none' : 'block';
+        });
+
+        // Close modal on Escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                closeEditModal();
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Scraping Help</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .help-container {
+            max-width: 900px;
+            margin: auto;
+            padding: 2rem;
+            border-radius: 0.75rem;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+        }
+        .article-card {
+            margin-bottom: 1.5rem;
+            padding: 1.5rem;
+            border-radius: 0.75rem;
+            background-color: white;
+            box-shadow: 0 2px 4px -1px rgba(0, 0, 0, 0.06), 0 1px 2px -1px rgba(0, 0, 0, 0.04);
+        }
+        .article-title {
+            font-size: 1.25rem;
+            font-weight: 500;
+            margin-bottom: 0.75rem;
+            color: #1f2937;
+        }
+        .article-content {
+            font-size: 1rem;
+            line-height: 1.5rem;
+            color: #4b5563;
+        }
+        .code-block {
+            margin: 1rem 0;
+            padding: 1rem;
+            background-color: #f3f4f6;
+            border-radius: 0.375rem;
+            overflow-x: auto;
+            font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+            font-size: 0.875rem;
+            line-height: 1.5rem;
+            color: #1e293b;
+        }
+        .help-button {
+            margin-bottom: 1rem;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen flex items-start justify-center py-10">
+    <div class="help-container">
+        <h1 class="text-2xl font-semibold mb-4 text-gray-800">Web Scraping Help Page</h1>
+        <a href="favorites_admin.html" class="inline-flex items-center px-4 py-2 border border-gray-300 rounded-md shadow-sm text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 help-button">
+            ← Back to Main
+        </a>
+        <div class="article-card">
+            <h2 class="article-title">Finding the URL</h2>
+            <p class="article-content">
+                The URL is the web address of the page you want to scrape.  For example, if you want to scrape news from a specific technology section of a website, the URL would be the address of that technology section page.
+            </p>
+            <ol class="list-decimal list-inside mt-4">
+                <li class="mb-2">
+                    <span class="font-semibold">Open the website</span> in your web browser.
+                </li>
+                <li class="mb-2">
+                    <span class="font-semibold">Navigate</span> to the specific page you want to scrape (e.g., the technology news section).
+                </li>
+                <li class="mb-2">
+                    <span class="font-semibold">Copy the URL</span> from the address bar of your browser.
+                </li>
+            </ol>
+            <p class="article-content mt-4">
+                For example, to scrape technology news from example.com, you would go to <code class="text-sm">https://www.example.com/technology</code> and copy that URL.
+            </p>
+            <div class="code-block">
+                URL: https://www.example.com/technology
+            </div>
+        </div>
+
+        <div class="article-card">
+            <h2 class="article-title">Finding the CSS Selector</h2>
+            <p class="article-content">
+                CSS Selectors are patterns used to select HTML elements on a web page.  They help you pinpoint the exact elements you want to extract data from.
+            </p>
+            <ol class="list-decimal list-inside mt-4">
+                <li class="mb-2">
+                    <span class="font-semibold">Open the website</span> in your web browser.
+                </li>
+                <li class="mb-2">
+                    <span class="font-semibold">Right-click</span> on the element you want to select (e.g., a news article title) and choose <span class="font-semibold">"Inspect"</span> or <span class="font-semibold">"Inspect Element"</span>.  This will open the browser's developer tools.
+                </li>
+                <li class="mb-2">
+                    In the developer tools, the HTML code of the page will be displayed.  The element you right-clicked on will be highlighted.
+                </li>
+                <li class="mb-2">
+                    <span class="font-semibold">Right-click</span> on the highlighted HTML element in the developer tools and choose <span class="font-semibold">"Copy"</span> > <span class="font-semibold">"Copy Selector"</span>.
+                </li>
+            </ol>
+            <p class="article-content mt-4">
+                The copied selector is what you'll use in your web scraping tool.  For example, to select the title of the first article in a list, the CSS Selector might look like this:
+            </p>
+            <div class="code-block">
+                CSS Selector: .article-list .article:nth-child(1) .article-title
+            </div>
+             <p class="article-content mt-4">
+                Here's how this selector works:
+            </p>
+            <ul class="list-disc list-inside mt-4">
+                <li class="mb-2">
+                   <span class="font-semibold">.article-list</span> selects an HTML element with the class "article-list"
+                </li>
+                <li class="mb-2">
+                    <span class="font-semibold">.article:nth-child(1)</span> selects the first element with the class "article" inside the ".article-list" element
+                </li>
+                 <li class="mb-2">
+                    <span class="font-semibold">.article-title</span> selects the element with the class "article-title" inside the selected article.
+                </li>
+            </ul>
+        </div>
+
+        <div class="article-card">
+            <h2 class="article-title">Finding the XPath</h2>
+            <p class="article-content">
+                XPath is another language for finding elements in an HTML document.  It's more powerful than CSS selectors in some cases, especially for navigating complex HTML structures.
+            </p>
+            <ol class="list-decimal list-inside mt-4">
+                 <li class="mb-2">
+                    <span class="font-semibold">Open the website</span> in your web browser.
+                </li>
+                <li class="mb-2">
+                    <span class="font-semibold">Right-click</span> on the element you want to select and choose <span class="font-semibold">"Inspect"</span> or <span class="font-semibold">"Inspect Element"</span> to open the developer tools.
+                </li>
+                <li class="mb-2">
+                    In the developer tools, find the HTML element you're interested in.
+                </li>
+                <li class="mb-2">
+                    <span class="font-semibold">Right-click</span> on the HTML element and choose <span class="font-semibold">"Copy"</span> > <span class="font-semibold">"Copy XPath"</span>.  Some browsers may have slightly different wording, but the option will be similar.
+                </li>
+            </ol>
+            <p class="article-content mt-4">
+                Here's an example of an XPath that selects the same element as the CSS Selector example above:
+            </p>
+            <div class="code-block">
+                XPath: //*[@id="main-content"]//h2[1]/a
+            </div>
+            <p class="article-content mt-4">
+                Here's how this XPath works:
+            </p>
+            <ul class="list-disc list-inside mt-4">
+                <li class="mb-2">
+                    <span class="font-semibold">//</span> selects the current node
+                </li>
+                <li class="mb-2">
+                    <span class="font-semibold">[@id="main-content"]</span> selects the element with the id "main-content"
+                </li>
+                <li class="mb-2">
+                    <span class="font-semibold">//h2[1]</span> selects the first h2 element within the selected element
+                </li>
+                <li class="mb-2">
+                    <span class="font-semibold">/a</span> selects the 'a' tag within the first h2 element.
+                </li>
+            </ul>
+        </div>
+
+        <div class="article-card">
+            <h2 class="article-title">Finding Element Attributes</h2>
+            <p class="article-content">
+                Element attributes provide additional information about HTML elements.  You can use them to further specify which element you want to select.
+            </p>
+            <ol class="list-decimal list-inside mt-4">
+                <li class="mb-2">
+                    <span class="font-semibold">Open the website</span> in your web browser.
+                </li>
+                <li class="mb-2">
+                    <span class="font-semibold">Right-click</span> on the element you want to select and choose <span class="font-semibold">"Inspect"</span> or <span class="font-semibold">"Inspect Element"</span>.  This will open the browser's developer tools.
+                </li>
+                <li class="mb-2">
+                    In the developer tools, look at the HTML code for the element.  Attributes are specified within the opening tag of the element.
+                </li>
+                 <li class="mb-2">
+                    <span class="font-semibold">Right-click</span> on the highlighted HTML element in the developer tools and choose <span class="font-semibold">"Copy"</span>.  The exact wording might vary slightly between browsers (e.g., "Copy Element").
+                </li>
+            </ol>
+            <p class="article-content mt-4">
+               For example, if you inspect the title of a news article, you might see the following HTML:
+            </p>
+            <div class="code-block">
+                 <span class="text-blue-500">&lt;h2</span> <span class="text-green-500">class</span>=<span class="text-red-500">"article-title"</span> <span class="text-green-500">id</span>=<span class="text-red-500">"article-123"</span><span class="text-blue-500">&gt;</span>News Article Title<span class="text-blue-500">&lt;/h2&gt;</span>
+            </div>
+            <p class="article-content mt-4">
+                In this example, the `<h2` element has two attributes:
+            </p>
+            <ul class="list-disc list-inside mt-4">
+                <li class="mb-2">
+                    <span class="font-semibold">class</span> with the value <span class="font-semibold">"article-title"</span>
+                </li>
+                <li class="mb-2">
+                    <span class="font-semibold">id</span> with the value <span class="font-semibold">"article-123"</span>
+                </li>
+            </ul>
+            <p class="article-content mt-4">
+                You can use these attributes in your web scraping tool to target this specific element.  For example, you could use the ID "article-123" to select this title.
+            </p>
+        </div>
+    </div>
+    <script>
+        const backButton = document.querySelector('.help-button');
+        backButton.addEventListener('click', () => {
+            window.location.href = 'favorites_admin.html';
+        });
+    </script>
+</body>
+</html>

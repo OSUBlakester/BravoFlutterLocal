@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Professional Avatar System - DiceBear Integration</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .avatar-preview {
+            transition: all 0.3s ease;
+        }
+        .avatar-preview:hover {
+            transform: scale(1.05);
+        }
+        .loading-spinner {
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <!-- Header -->
+    <header class="bg-white shadow-lg border-b">
+        <div class="max-w-6xl mx-auto px-4 py-6">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center space-x-4">
+                    <div class="w-12 h-12 bg-gradient-to-r from-blue-500 to-purple-600 rounded-full flex items-center justify-center">
+                        <i class="fas fa-user-circle text-white text-2xl"></i>
+                    </div>
+                    <div>
+                        <h1 class="text-2xl font-bold text-gray-900">Professional Avatar Generator</h1>
+                        <p class="text-gray-600">Powered by DiceBear - 30+ Professional Styles</p>
+                    </div>
+                </div>
+                <div class="flex space-x-3">
+                    <button id="random-avatar-btn" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors">
+                        <i class="fas fa-dice mr-2"></i>Random Avatar
+                    </button>
+                    <button id="save-variations-btn" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg transition-colors">
+                        <i class="fas fa-save mr-2"></i>Generate All Variations
+                    </button>
+                </div>
+            </div>
+        </div>
+    </header>
+
+    <div class="max-w-7xl mx-auto px-4 py-8">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+            
+            <!-- Avatar Preview Section -->
+            <div class="lg:col-span-1">
+                <div class="bg-white rounded-lg shadow-lg p-6 sticky top-8">
+                    <div class="text-center">
+                        <div class="relative">
+                            <div id="loading-spinner" class="absolute inset-0 flex items-center justify-center bg-white bg-opacity-75 rounded-lg hidden">
+                                <i class="fas fa-spinner loading-spinner text-3xl text-blue-600"></i>
+                            </div>
+                            <div id="avatar-container" class="space-y-4">
+                                <div class="avatar-preview bg-gray-50 border-2 border-gray-200 rounded-lg p-4">
+                                    <img id="current-avatar" src="" alt="Avatar Preview" class="w-48 h-48 mx-auto rounded-full shadow-md">
+                                    <p id="current-style-name" class="mt-3 text-lg font-semibold text-gray-800"></p>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <!-- Style Selection -->
+                        <div class="mt-6">
+                            <label class="block text-sm font-semibold text-gray-700 mb-2">Avatar Style</label>
+                            <select id="avatar-style" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="open-peeps">Open Peeps (Full Body) ⭐ BEST</option>
+                                <option value="bottts">Bottts Robots (Full Body) ⭐</option>
+                                <option value="bottts-neutral">Bottts Robots Neutral (Full Body) ⭐</option>
+                                <option value="croodles">Croodles (Full Body Doodles) ⭐</option>
+                                <option value="croodles-neutral">Croodles Neutral (Full Body) ⭐</option>
+                                <option value="adventurer">Adventurer (Head/Bust)</option>
+                                <option value="adventurer-neutral">Adventurer Neutral (Head/Bust)</option>
+                                <option value="avataaars">Avataaars (Head/Bust Classic)</option>
+                                <option value="avataaars-neutral">Avataaars Neutral (Head/Bust)</option>
+                                <option value="personas">Personas (Head/Bust Professional)</option>
+                                <option value="big-ears">Big Ears (Head/Bust Cute)</option>
+                                <option value="big-ears-neutral">Big Ears Neutral (Head/Bust)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Customization Panel -->
+            <div class="lg:col-span-2">
+                <div class="bg-white rounded-lg shadow-lg p-6">
+                    <div class="flex items-center justify-between mb-6">
+                        <h2 class="text-xl font-bold text-gray-900">
+                            <i class="fas fa-sliders-h text-blue-600 mr-2"></i>
+                            Avatar Customization
+                        </h2>
+                        <div class="flex items-center space-x-2">
+                            <span class="text-sm text-gray-600">Seed:</span>
+                            <input id="avatar-seed" type="text" placeholder="Enter name or seed" 
+                                   class="px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+                        </div>
+                    </div>
+
+                    <!-- Basic Options -->
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        
+                        <!-- Hair Style -->
+                        <div>
+                            <label class="block text-sm font-semibold text-gray-700 mb-2">Hair Style</label>
+                            <select id="hair-style" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="">Random</option>
+                                <option value="long01">Long Hair 1</option>
+                                <option value="long02">Long Hair 2</option>
+                                <option value="long03">Long Hair 3</option>
+                                <option value="short01">Short Hair 1</option>
+                                <option value="short02">Short Hair 2</option>
+                                <option value="short03">Short Hair 3</option>
+                            </select>
+                        </div>
+
+                        <!-- Hair Color -->
+                        <div>
+                            <label class="block text-sm font-semibold text-gray-700 mb-2">Hair Color</label>
+                            <select id="hair-color" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="">Random</option>
+                                <option value="0e0e0e">Black</option>
+                                <option value="3c4043">Dark Brown</option>
+                                <option value="6c4e37">Brown</option>
+                                <option value="b38867">Light Brown</option>
+                                <option value="eed0a6">Blonde</option>
+                                <option value="d4af37">Golden</option>
+                                <option value="cc9966">Auburn</option>
+                                <option value="8b4513">Red</option>
+                                <option value="696969">Gray</option>
+                            </select>
+                        </div>
+
+                        <!-- Skin Color -->
+                        <div>
+                            <label class="block text-sm font-semibold text-gray-700 mb-2">Skin Tone</label>
+                            <select id="skin-color" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="">Random</option>
+                                <option value="f5deb3">Light</option>
+                                <option value="ddbea9">Fair</option>
+                                <option value="cb997e">Medium</option>
+                                <option value="a0695f">Olive</option>
+                                <option value="8d5524">Tan</option>
+                                <option value="6f4e37">Brown</option>
+                                <option value="3c1810">Dark</option>
+                            </select>
+                        </div>
+
+                        <!-- Clothing -->
+                        <div>
+                            <label class="block text-sm font-semibold text-gray-700 mb-2">Clothing Style</label>
+                            <select id="clothing-style" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="">Random</option>
+                                <option value="casual">Casual</option>
+                                <option value="formal">Formal</option>
+                                <option value="party">Party</option>
+                                <option value="winter">Winter</option>
+                            </select>
+                        </div>
+
+                        <!-- Clothing Color -->
+                        <div>
+                            <label class="block text-sm font-semibold text-gray-700 mb-2">Clothing Color</label>
+                            <select id="clothing-color" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="">Random</option>
+                                <option value="000000">Black</option>
+                                <option value="ffffff">White</option>
+                                <option value="ff0000">Red</option>
+                                <option value="0000ff">Blue</option>
+                                <option value="008000">Green</option>
+                                <option value="ffff00">Yellow</option>
+                                <option value="ffa500">Orange</option>
+                                <option value="800080">Purple</option>
+                                <option value="ffc0cb">Pink</option>
+                                <option value="808080">Gray</option>
+                            </select>
+                        </div>
+
+                        <!-- Accessories -->
+                        <div>
+                            <label class="block text-sm font-semibold text-gray-700 mb-2">Accessories</label>
+                            <select id="accessories" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="">None</option>
+                                <option value="glasses01">Glasses 1</option>
+                                <option value="glasses02">Glasses 2</option>
+                                <option value="sunglasses">Sunglasses</option>
+                                <option value="hat">Hat</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <!-- Emotional Expression Options -->
+                    <div class="mt-8 border-t pt-6">
+                        <h3 class="text-lg font-semibold text-gray-900 mb-4">
+                            <i class="fas fa-smile text-yellow-500 mr-2"></i>
+                            Expression & Mood
+                        </h3>
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                            <button class="emotion-btn px-3 py-2 border border-gray-300 rounded-md hover:bg-blue-50 hover:border-blue-300 transition-colors text-sm" data-emotion="happy">
+                                😊 Happy
+                            </button>
+                            <button class="emotion-btn px-3 py-2 border border-gray-300 rounded-md hover:bg-blue-50 hover:border-blue-300 transition-colors text-sm" data-emotion="sad">
+                                😢 Sad
+                            </button>
+                            <button class="emotion-btn px-3 py-2 border border-gray-300 rounded-md hover:bg-blue-50 hover:border-blue-300 transition-colors text-sm" data-emotion="excited">
+                                🤩 Excited
+                            </button>
+                            <button class="emotion-btn px-3 py-2 border border-gray-300 rounded-md hover:bg-blue-50 hover:border-blue-300 transition-colors text-sm" data-emotion="neutral">
+                                😐 Neutral
+                            </button>
+                            <button class="emotion-btn px-3 py-2 border border-gray-300 rounded-md hover:bg-blue-50 hover:border-blue-300 transition-colors text-sm" data-emotion="surprised">
+                                😲 Surprised
+                            </button>
+                            <button class="emotion-btn px-3 py-2 border border-gray-300 rounded-md hover:bg-blue-50 hover:border-blue-300 transition-colors text-sm" data-emotion="angry">
+                                😠 Angry
+                            </button>
+                            <button class="emotion-btn px-3 py-2 border border-gray-300 rounded-md hover:bg-blue-50 hover:border-blue-300 transition-colors text-sm" data-emotion="confused">
+                                😕 Confused
+                            </button>
+                            <button class="emotion-btn px-3 py-2 border border-gray-300 rounded-md hover:bg-blue-50 hover:border-blue-300 transition-colors text-sm" data-emotion="thinking">
+                                🤔 Thinking
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Preview Grid Section -->
+        <div id="variations-preview" class="mt-8 bg-white rounded-lg shadow-lg p-6 hidden">
+            <div class="flex items-center justify-between mb-6">
+                <h2 class="text-xl font-bold text-gray-900">
+                    <i class="fas fa-palette text-blue-600 mr-2"></i>
+                    Avatar Variations Collection
+                </h2>
+                <span id="variations-count" class="bg-blue-100 text-blue-800 text-sm font-medium px-3 py-1 rounded-full">
+                    0 variations
+                </span>
+            </div>
+            <div id="variations-grid" class="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-8 gap-4 max-h-96 overflow-y-auto">
+                <!-- Variations will be populated here -->
+            </div>
+            <div class="mt-4 text-center">
+                <button id="download-all-btn" class="bg-green-600 hover:bg-green-700 text-white px-6 py-2 rounded-lg transition-colors">
+                    <i class="fas fa-download mr-2"></i>Download All Variations
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Debug Panel (for development) -->
+    <div id="debug-panel" class="fixed bottom-4 right-4 bg-gray-800 text-white p-4 rounded-lg shadow-lg max-w-sm text-xs hidden">
+        <div class="flex items-center justify-between mb-2">
+            <span class="font-semibold">Debug Info</span>
+            <button id="toggle-debug" class="text-gray-400 hover:text-white">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+        <div id="debug-content">
+            Current API URL: <span id="debug-url" class="font-mono break-all"></span>
+        </div>
+    </div>
+
+    <script src="/static/dicebear-simple.js"></script>
+</body>
+</html>

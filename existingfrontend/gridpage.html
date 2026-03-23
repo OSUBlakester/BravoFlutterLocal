@@ -1,0 +1,2316 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Dynamic Grid Page</title>
+    <title>Grid Page - v2.0</title> <!-- Will be updated by JavaScript -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link rel="stylesheet" href="/static/splash-screen.css">
+    <link rel="stylesheet" href="/static/mood-selection.css">
+    <style>
+        /* --- Basic Body Style --- */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 20px; /* Add padding around the "device" */
+            /* Darker background to make the app container pop */
+            background: #e2e8f0; 
+            min-height: 100vh;
+            box-sizing: border-box;
+            display: flex;
+            justify-content: center;
+        }
+
+        /* --- App Container (The "Phone/Tablet") --- */
+        #app-container {
+            width: 100%;
+            max-width: 1200px; /* Tablet/Desktop limit */
+            background-color: #f8fafc; /* Light blue-grey inside the app */
+            border-radius: 40px; /* Large rounded corners */
+            box-shadow: 
+                0 25px 50px -12px rgba(0, 0, 0, 0.25), /* Deep shadow */
+                0 0 0 1px rgba(0,0,0,0.05); /* Subtle border */
+            overflow: hidden; /* Clip content to corners */
+            min-height: calc(100vh - 40px); /* Full height minus body padding */
+            position: relative;
+            display: flex;
+            flex-direction: column;
+        }
+
+        /* --- Admin Toolbar Styles --- */
+        .admin-toolbar {
+            background-color: transparent;
+            padding: 0.5rem 1rem;
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            gap: 0.5rem;
+            flex-wrap: wrap;
+        }
+
+        /* --- Page Banner Styles --- */
+        .page-banner {
+            background-color: #002244; /* Solid navy blue like admin pages */
+            color: #FB4F14; /* Orange text */
+            padding: 0.5rem 1rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            position: sticky;
+            top: 0;
+            z-index: 50;
+        }
+        .page-banner h1 {
+            margin: 0;
+            font-size: 1.25rem;
+            font-weight: 600;
+            text-align: left;
+            color: #FB4F14; /* Orange text */
+        }
+        /* --- Original Styles --- */
+        #gridContainer {
+            display: grid;
+            /* grid-template-columns will be set dynamically by JavaScript based on gridColumns setting */
+            gap: 24px; /* Generous gap for "app icon" feel */
+            padding: 24px;
+            max-width: 1400px;
+            margin: 0 auto;
+            --button-font-size: 16px;
+        }
+
+        #gridContainer button {
+            position: relative;
+            padding: 12px;
+            font-size: var(--button-font-size);
+            font-weight: 600;
+            cursor: pointer;
+            
+            /* Mobile Icon Style */
+            background-color: #ffffff;
+            color: #1e293b;
+            border: 1px solid rgba(255,255,255,0.5); /* Subtle border */
+            border-radius: 24px; /* "Squircle" look */
+            
+            /* Deep shadow for pop/depth */
+            box-shadow: 
+                0 10px 15px -3px rgba(0, 0, 0, 0.08),
+                0 4px 6px -2px rgba(0, 0, 0, 0.04),
+                inset 0 0 0 1px rgba(255,255,255,0.5);
+                
+            text-align: center;
+            min-height: 100px; /* Square-ish aspect ratio preferred */
+            aspect-ratio: 1 / 1; /* Try to keep it square if content allows */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            
+            transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1); /* Bouncy spring transition */
+            word-wrap: break-word;
+            hyphens: auto;
+            line-height: 1.2;
+            overflow: hidden;
+        }
+        
+        /* Ensure aspect ratio doesn't break layout on small screens or weird content */
+        @supports not (aspect-ratio: 1 / 1) {
+            #gridContainer button {
+                height: 120px; 
+            }
+        }
+
+         #gridContainer button:hover {
+             transform: translateY(-6px) scale(1.02);
+             box-shadow: 
+                0 20px 25px -5px rgba(0, 0, 0, 0.1),
+                0 10px 10px -5px rgba(0, 0, 0, 0.04);
+             z-index: 10;
+         }
+
+         #gridContainer button:active {
+            transform: scale(0.95);
+            box-shadow: 0 2px 4px 0 rgba(0, 0, 0, 0.05);
+         }
+
+        /* Sight Word Button Styling - Text only changes */
+        .sight-word-button {
+            font-size: 2.2em !important;
+            font-weight: 900 !important;
+            color: #dc2626 !important; /* Red text */
+        }
+        .sight-word-button:hover {
+            color: #dc2626 !important;
+        }
+
+        /* Speech Bubble Tail - REMOVED */
+        /* Removed speech bubble tail/triangle to clean up button appearance */
+        #gridContainer button::before,
+        #gridContainer button::after {
+            display: none; /* Hide the speech bubble tail completely */
+        }
+
+
+        /* LLM button styling (if needed, keep separate) */
+        .llm-button {
+            padding: 10px 20px;
+            font-size: 16px;
+            background-color: #e0e0e0;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        .llm-button:hover {
+            background-color: #d0d0d0;
+        }
+
+        /* Text area styling */
+        #chat-history-container, #question-container {
+            width: 100%;
+            margin-bottom: 8px;
+            padding: 0 20px;
+            box-sizing: border-box;
+            max-width: 1400px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .input-wrapper {
+            position: relative;
+            width: 100%;
+            margin-top: 4px;
+        }
+
+        #speech-history, #question-display {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 6px;
+            border: 1px solid #cbd5e1;
+            border-radius: 6px;
+            font-family: inherit;
+            font-size: 0.75rem;
+            background-color: #ffffff;
+            box-shadow: inset 0 1px 2px rgba(0,0,0,0.05);
+            transition: border-color 0.2s, box-shadow 0.2s;
+            display: block;
+            resize: none; /* Fixed size based on rows */
+        }
+        
+        #speech-history {
+            padding-right: 24px; /* Space for clear button */
+        }
+
+        #question-display {
+            margin-top: 4px;
+        }
+        
+        #speech-history:focus, #question-display:focus {
+            outline: none;
+            border-color: #FB4F14;
+            box-shadow: 0 0 0 2px rgba(251, 79, 20, 0.1);
+        }
+
+        /* Clear button positioning */
+        #clear-history {
+            position: absolute;
+            right: 6px;
+            top: 6px; /* Align with top padding */
+            background-color: transparent;
+            color: #94a3b8;
+            border: none;
+            font-size: 0.6rem;
+            cursor: pointer;
+            padding: 4px;
+            border-radius: 50%;
+            transition: all 0.2s;
+            z-index: 10;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 18px;
+            height: 18px;
+        }
+        
+        #clear-history:hover {
+            background-color: #f1f5f9;
+            color: #ef4444;
+        }
+
+        /* Label styling for speech history and question */
+        #chat-history-container label, #question-container label {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: #1e293b; /* Darker gray */
+            margin-left: 2px;
+        }
+
+        /* Spinner styles (Original border spinner - kept for reference if needed) */
+        .spinner {
+          border: 16px solid #f3f3f3;
+          border-top: 16px solid #3498db;
+          border-radius: 50%;
+          width: 120px;
+          height: 120px;
+          animation: spin 2s linear infinite;
+        }
+
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+
+        /* Style for loading indicator */
+        #loading-indicator {
+            /* display: none; */ /* Initial hiding is done via inline style */
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.6); /* Semi-transparent background */
+            z-index: 1000; /* Ensure it's on top */
+
+            /* --- CSS for Centering Content --- */
+            display: flex; /* Use flexbox */
+            flex-direction: column; /* Stack spinner and text vertically */
+            align-items: center; /* Center horizontally */
+            justify-content: center; /* Center vertically */
+            /* --- End Centering --- */
+        }
+
+         #loading-indicator p { /* Style text below spinner */
+             color: white;
+             margin-top: 15px; /* More space */
+             font-size: 1.2em; /* Slightly larger text */
+         }
+
+         /* Class for image spinner */
+         .image-spinner {
+            width: 120px;  /* Spinner size */
+            height: 120px; /* Spinner size */
+            animation: spin 1.5s linear infinite; /* Apply the spin animation */
+         }
+
+         .highlight-listening {
+            /* Orange glow for highlighted state */
+            box-shadow: 0 0 10px 4px #FB4F14; /* Orange glow */
+            outline: none; /* Prevent default browser focus outline */
+            transition: box-shadow 0.2s ease-in-out; /* Keep existing transition if any, or add */
+        }
+
+        .box {
+            width: 100px;
+            margin: 50px auto;
+            border: 4px solid #002244;
+            padding: 20px;
+            text-align: center;
+            font-weight: 900;
+            color: #002244;
+            font-family: arial;
+            position: relative;
+        }
+
+
+        .sb1:before {
+            content: "";
+            width: 0px;
+            height: 0px;
+            position: absolute;
+            border-left: 10px solid #002244;
+            border-right: 10px solid transparent;
+            border-top: 10px solid #002244;
+            border-bottom: 10px solid transparent;
+            left: 20px;
+            bottom: -23px;
+            }
+
+            .sb1:after {
+            content: "";
+            width: 0px;
+            height: 0px;
+            position: absolute;
+            border-left: 10px solid #fff;
+            border-right: 10px solid transparent;
+            border-top: 10px solid #fff;
+            border-bottom: 10px solid transparent;
+            left: 24px;
+            bottom: -13px;
+            }
+
+    </style>
+</head>
+<body>
+    <div id="app-container">
+
+
+    <div class="page-banner">
+        <h1 id="dynamic-page-title">Grid Page</h1> <!-- This H1 will be updated by JavaScript -->
+        <div class="admin-toolbar">
+            <!-- Always visible lock icon -->
+            <button id="lock-icon" title="Admin Toolbar" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100">
+                <i class="fas fa-lock"></i>
+            </button>
+            <!-- Admin toolbar icons - initially hidden -->
+            <div id="admin-icons" class="hidden flex items-center gap-0.4rem">
+                <button id="lock-toolbar-button" title="Lock Admin Toolbar" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-lock"></i></button>
+                <span class="border-l border-white h-6 mx-1"></span> <!-- Separator -->
+                <a href="admin_pages.html" title="Pages & Buttons" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-th-large"></i></a>
+                <a href="admin_settings.html" title="Global Settings" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-cog"></i></a>
+                <a href="user_current_admin.html" title="User Current Location" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-map-marker-alt"></i></a>
+                <a href="user_info_admin.html" title="User Info & Birthdays" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-info-circle"></i></a>
+                <a href="user_diary_admin.html" title="User Diary" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-book-open"></i></a>
+                <a href="audio_admin.html" title="Audio Devices" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-volume-up"></i></a>
+                <a href="favorites_admin.html" title="Favorites Topics" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-star"></i></a>
+                <a href="admin_audit_report.html" title="Activity Reports" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-clipboard-list"></i></a>
+                <span class="border-l border-white h-6 mx-1"></span> <!-- Separator -->
+                <button id="switch-user-button" title="Switch User Profile" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-users"></i></button>
+                <button id="logout-button" title="Logout" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-sign-out-alt"></i></button>
+            </div>
+            <!-- Help icon, always visible, to the right of admin toolbar -->
+            <button id="help-icon" title="Help" aria-label="Help" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full ml-2 transition-colors duration-200 text-base hover:bg-orange-100 focus:outline-none focus:ring-2 focus:ring-orange-500">
+                <i class="fas fa-question-circle"></i>
+            </button>
+        </div>
+    <!-- Help Modal -->
+    <div id="help-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white p-8 rounded-2xl shadow-2xl w-[90vw] h-[90vh] max-w-5xl max-h-[90vh] mx-2 relative flex flex-col">
+            <button id="help-modal-close" class="absolute top-4 right-6 text-gray-500 hover:text-red-500 text-3xl font-bold focus:outline-none" aria-label="Close Help">&times;</button>
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-2xl font-bold text-gray-800">Help &amp; Support</h2>
+            </div>
+            
+            <!-- Help Topics Grid -->
+            <div id="help-topics-menu" class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                <!-- Bravo Guide -->
+                <button id="help-bravo-guide" class="help-topic-btn bg-gradient-to-br from-blue-500 to-blue-600 text-white p-6 rounded-xl shadow-lg hover:shadow-xl transition-all transform hover:-translate-y-1">
+                    <i class="fas fa-book-open text-4xl mb-3"></i>
+                    <h3 class="text-xl font-bold mb-2">Bravo Guide</h3>
+                    <p class="text-sm opacity-90">Learn about Bravo's interface and features</p>
+                </button>
+                
+                <!-- New User Setup -->
+                <button id="help-user-setup" class="help-topic-btn bg-gradient-to-br from-green-500 to-green-600 text-white p-6 rounded-xl shadow-lg hover:shadow-xl transition-all transform hover:-translate-y-1">
+                    <i class="fas fa-user-plus text-4xl mb-3"></i>
+                    <h3 class="text-xl font-bold mb-2">New User Setup</h3>
+                    <p class="text-sm opacity-90">Step-by-step guide to set up a new user</p>
+                </button>
+                
+                <!-- Contact Support -->
+                <button id="help-contact-support" class="help-topic-btn bg-gradient-to-br from-orange-500 to-orange-600 text-white p-6 rounded-xl shadow-lg hover:shadow-xl transition-all transform hover:-translate-y-1">
+                    <i class="fas fa-headset text-4xl mb-3"></i>
+                    <h3 class="text-xl font-bold mb-2">Contact Support</h3>
+                    <p class="text-sm opacity-90">Get help or request a new feature</p>
+                </button>
+            </div>
+            
+            <!-- Help Content Area -->
+            <div id="help-modal-content" class="overflow-y-auto flex-1 px-4 py-2 hidden">
+                <button id="help-back-btn" class="mb-4 text-blue-600 hover:text-blue-800 font-semibold flex items-center">
+                    <i class="fas fa-arrow-left mr-2"></i>Back to Topics
+                </button>
+                <div id="help-content-display"></div>
+            </div>
+    <!-- Contact Support Modal -->
+    <div id="contact-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white p-8 rounded-2xl shadow-2xl w-[90vw] max-w-md mx-2 relative flex flex-col">
+            <button id="contact-modal-close" class="absolute top-4 right-6 text-gray-500 hover:text-red-500 text-3xl font-bold focus:outline-none" aria-label="Close Contact">&times;</button>
+            <h3 class="text-lg font-semibold mb-4">Contact Support</h3>
+            <form id="contact-support-form" class="space-y-2" method="POST" action="https://formspree.io/f/myzpzero">
+                <input type="text" id="support-name" name="name" placeholder="Your Name" class="w-full px-3 py-2 border border-gray-300 rounded-md" required>
+                <input type="email" id="support-email" name="email" placeholder="Your Email" class="w-full px-3 py-2 border border-gray-300 rounded-md" required>
+                <textarea id="support-message" name="message" placeholder="How can we help you?" class="w-full px-3 py-2 border border-gray-300 rounded-md" rows="3" required></textarea>
+                <button type="submit" class="w-full bg-green-600 text-white py-2 rounded-md hover:bg-green-700">Send to Support</button>
+            </form>
+            <div id="support-success" class="hidden text-green-600 mt-2">Thank you! Your message has been sent.</div>
+            <div id="support-error" class="hidden text-red-600 mt-2">There was an error sending your message. Please try again or email admin@talkwithbravo.com.</div>
+        </div>
+    </div>
+        </div>
+    </div>
+    </div>
+
+    <!-- PIN Modal -->
+    <div id="pin-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full mx-4">
+            <h3 class="text-lg font-semibold text-gray-800 mb-4">Enter Admin PIN</h3>
+            <input type="text" id="pin-input" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500" placeholder="Enter PIN" maxlength="10">
+            <div class="flex justify-end space-x-3 mt-4">
+                <button id="pin-cancel" class="px-4 py-2 text-gray-600 bg-gray-200 rounded-md hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-500">Cancel</button>
+                <button id="pin-submit" class="px-4 py-2 text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500">Submit</button>
+            </div>
+            <p id="pin-error" class="text-red-500 text-sm mt-2 hidden">Incorrect PIN. Please try again.</p>
+        </div>
+    </div>
+
+    <div id="chat-history-container">
+        <label for="speech-history">Speech History:</label>
+        <div class="input-wrapper">
+            <textarea id="speech-history" readonly rows="3"></textarea>
+            <button id="clear-history" title="Clear History">
+                <i class="fas fa-times"></i>
+            </button>
+        </div>
+    </div>
+
+    <div id="question-container">
+        <label for="question-display">Question:</label>
+        <textarea id="question-display" readonly rows="1"></textarea>
+    </div>
+
+    <div id="gridContainer">
+        </div>
+
+    <div id="loading-indicator" style="display: none;">
+            <img src="/static/images/speech_bubble_spinner.png" alt="Loading..."
+                 class="image-spinner">
+             <p>Loading...</p>
+    </div>
+    </div> <!-- End of app-container -->
+
+
+    <script src="/static/splash-screen.js"></script>
+    <script src="/static/avatar-selector.js"></script>
+    <script src="/static/mood-selection.js"></script>
+    <script src="/static/sight-word-service.js"></script>
+    <script src="/static/gridpage.js"></script>
+    <script>
+    // --- Help Modal Logic ---
+    const helpIcon = document.getElementById('help-icon');
+    const helpModal = document.getElementById('help-modal');
+    const helpModalClose = document.getElementById('help-modal-close');
+    const helpTopicsMenu = document.getElementById('help-topics-menu');
+    const helpModalContent = document.getElementById('help-modal-content');
+    const helpContentDisplay = document.getElementById('help-content-display');
+    const helpBackBtn = document.getElementById('help-back-btn');
+    
+    const contactModal = document.getElementById('contact-modal');
+    const contactModalClose = document.getElementById('contact-modal-close');
+    const contactForm = document.getElementById('contact-support-form');
+    const supportSuccess = document.getElementById('support-success');
+    const supportError = document.getElementById('support-error');
+
+    // Help content for each topic
+    const helpTopics = {
+        'bravo-guide': {
+            title: 'Bravo Guide',
+            icon: 'fa-book-open',
+            color: 'blue',
+            content: `
+                <h3 class="text-2xl font-bold text-blue-700 mb-4">Welcome to Bravo AAC!</h3>
+                
+                <div class="space-y-6">
+                    <section class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                        <h4 class="font-semibold text-lg text-gray-800 mb-3 flex items-center">
+                            <i class="fas fa-info-circle mr-2 text-blue-600"></i>About Bravo
+                        </h4>
+                        <p class="text-gray-700 mb-3">Bravo is an Augmentative and Alternative Communication (AAC) application that uses artificial intelligence to help users communicate effectively. The AI generates personalized communication options based on context, user preferences, and conversational needs.</p>
+                        <p class="text-gray-700">Whether you're expressing basic needs, having conversations, or sharing complex thoughts, Bravo adapts to support your unique communication style.</p>
+                    </section>
+
+                    <section class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                        <h4 class="font-semibold text-lg text-gray-800 mb-3 flex items-center">
+                            <i class="fas fa-th mr-2 text-blue-600"></i>Grid Interface
+                        </h4>
+                        <p class="text-gray-700 mb-3">The main screen displays buttons in a grid layout. The grid is primarily designed for <strong>Auditory Scanning</strong>, which highlights and prompts each option one at a time until you select an option. Once an option is selected, Bravo will either announce the options, move to another page, or both.</p>
+                        <p class="text-gray-700 mb-2">A <strong>Tap Interface</strong> is also available for users who prefer direct touch selection. To switch between interfaces:</p>
+                        <ul class="list-disc list-inside text-gray-700 ml-4 space-y-1">
+                            <li>Access the Admin toolbar (lock icon in top-right)</li>
+                            <li>Go to User Settings</li>
+                            <li>Select your preferred interface mode</li>
+                        </ul>
+                    </section>
+
+                    <section class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                        <h4 class="font-semibold text-lg text-gray-800 mb-3 flex items-center">
+                            <i class="fas fa-history mr-2 text-blue-600"></i>Speech History
+                        </h4>
+                        <p class="text-gray-700">Located at the top of the screen, the Speech History displays what you've communicated during your current session.</p>
+                    </section>
+
+                    <section class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                        <h4 class="font-semibold text-lg text-gray-800 mb-3 flex items-center">
+                            <i class="fas fa-question-circle mr-2 text-blue-600"></i>Question Display
+                        </h4>
+                        <p class="text-gray-700 mb-3">The Question box will highlight when Bravo hears the selected wake word (just like your smart device) to indicate that it is listening for a question.</p>
+                        <p class="text-gray-700">The Question box will then show the question it heard while Bravo generates options to respond, facilitating natural conversation flow and providing communication opportunities.</p>
+                    </section>
+
+                    <section class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                        <h4 class="font-semibold text-lg text-gray-800 mb-3 flex items-center">
+                            <i class="fas fa-th-large mr-2 text-blue-600"></i>Button Grid
+                        </h4>
+                        <p class="text-gray-700 mb-2">The main grid displays communication buttons. Each button can:</p>
+                        <ul class="list-disc list-inside text-gray-700 ml-4 space-y-1">
+                            <li><strong>Speak a word or phrase</strong> - Adds to your message</li>
+                            <li><strong>Navigate to another page</strong> - Access more specific vocabulary</li>
+                        </ul>
+                        <p class="text-gray-700 mt-3 mb-2">Buttons may include:</p>
+                        <ul class="list-disc list-inside text-gray-700 ml-4 space-y-1">
+                            <li><strong>Images</strong> - Visual symbols representing the word/action</li>
+                            <li><strong>Text labels</strong> - Clear text descriptions</li>
+                            <li><strong>Colors</strong> - Category coding (e.g., green for actions, blue for people)</li>
+                        </ul>
+                        <p class="text-gray-700 mt-3">In Auditory Scanning mode, buttons are highlighted sequentially and spoken aloud until you activate your switch to make a selection.</p>
+                    </section>
+
+                    <section class="bg-blue-50 border border-blue-200 rounded-lg p-4">
+                        <h4 class="font-semibold text-lg text-gray-800 mb-3 flex items-center">
+                            <i class="fas fa-lock mr-2 text-blue-600"></i>Admin Toolbar & Lock
+                        </h4>
+                        <p class="text-gray-700 mb-2">Located in the top-right corner, the Admin toolbar provides access to settings and customization:</p>
+                        <ul class="list-disc list-inside text-gray-700 ml-4 space-y-1">
+                            <li><strong>Lock Icon (🔒)</strong> - Tap to unlock and access admin features</li>
+                            <li><strong>PIN Protection</strong> - Requires admin PIN to prevent accidental changes</li>
+                            <li><strong>Settings Access</strong> - Configure voice, display, scanning, and user preferences</li>
+                            <li><strong>Page Management</strong> - Edit button layouts, add vocabulary, and organize pages</li>
+                            <li><strong>User Management</strong> - Switch between users or manage user profiles</li>
+                        </ul>
+                        <p class="text-gray-700 mt-3">When locked, the admin features are hidden to keep the interface clean and prevent unintended modifications during communication.</p>
+                    </section>
+                </div>
+            `
+        },
+        'user-setup': {
+            title: 'New User Setup Guide',
+            icon: 'fa-user-plus',
+            color: 'green',
+            content: `
+                <h3 class="text-2xl font-bold text-green-700 mb-4">Setting Up a New User</h3>
+                
+                <div class="space-y-4">
+                    <div class="bg-blue-50 border-l-4 border-blue-400 p-4">
+                        <p class="text-gray-700">A new Bravo account is created with default settings for pages, buttons, voices, wake word, and other settings. All of these settings can be easily changed to customize the experience for the user.</p>
+                    </div>
+
+                    <div class="bg-yellow-50 border-l-4 border-yellow-400 p-4">
+                        <p class="text-sm font-semibold text-yellow-800">
+                            <i class="fas fa-info-circle mr-2"></i>
+                            You'll need the Admin PIN to access these settings. <a href="mailto:admin@talkwithbravo.com" class="text-blue-600 hover:text-blue-800 underline">Contact Bravo</a> if you don't have it.
+                        </p>
+                    </div>
+
+                    <!-- Access Admin Toolbar - First Step -->
+                    <div class="bg-gradient-to-r from-purple-50 to-purple-100 border-l-4 border-purple-500 rounded-lg shadow-sm p-4">
+                        <div class="flex items-center">
+                            <div class="flex-shrink-0">
+                                <i class="fas fa-lock-open text-purple-600 text-2xl mr-3"></i>
+                            </div>
+                            <div class="flex-1">
+                                <div class="font-bold text-lg text-gray-900">First: Access Admin Toolbar</div>
+                                <div class="text-sm text-gray-700 mt-1">Tap the lock icon (🔒) in the top-right corner and enter the Admin PIN when prompted.</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Legend -->
+                    <div class="bg-gray-50 border border-gray-300 rounded-lg p-4">
+                        <h4 class="font-semibold text-gray-900 mb-3 flex items-center">
+                            <i class="fas fa-info-circle text-gray-600 mr-2"></i>Admin Toolbar Pages Icons Key
+                        </h4>
+                        <div class="grid grid-cols-2 md:grid-cols-2 gap-3 text-sm">
+                            <div class="flex items-center">
+                                <i class="fas fa-cog text-purple-600 text-lg mr-2"></i>
+                                <span class="text-gray-700">User Settings</span>
+                            </div>
+                            <div class="flex items-center">
+                                <i class="fas fa-info-circle text-orange-600 text-lg mr-2"></i>
+                                <span class="text-gray-700">User Info</span>
+                            </div>
+                            <div class="flex items-center">
+                                <i class="fas fa-th text-rose-600 text-lg mr-2"></i>
+                                <span class="text-gray-700">Page Management</span>
+                            </div>
+                            <div class="flex items-center">
+                                <i class="fas fa-book-open text-blue-600 text-lg mr-2"></i>
+                                <span class="text-gray-700">Diary Settings</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- High Priority Settings -->
+                    <div class="bg-white border-l-4 border-yellow-500 rounded-lg shadow-sm p-4">
+                        <h4 class="font-bold text-lg text-gray-900 mb-3 flex items-center">
+                            <i class="fas fa-star text-yellow-500 mr-2"></i>High Priority Settings
+                        </h4>
+                        <p class="text-sm text-gray-600 mb-4">Complete these essential settings first:</p>
+                        
+                        <div class="space-y-3">
+                            <!-- Wake Word -->
+                            <div class="setup-task-item cursor-pointer" onclick="toggleTaskDetails(this)">
+                                <div class="flex items-start p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition">
+                                    <div class="flex-shrink-0 mt-1">
+                                        <i class="fas fa-cog text-purple-600 text-lg"></i>
+                                    </div>
+                                    <div class="ml-3 flex-1">
+                                        <div class="flex items-center justify-between">
+                                            <div class="font-semibold text-gray-900">Configure Wake Word - User Settings</div>
+                                            <div class="flex items-center space-x-2">
+                                                <button onclick="event.stopPropagation(); startInteractiveGuide('configure-wake-word');" class="px-3 py-1 bg-purple-500 text-white text-xs rounded-lg hover:bg-purple-600 transition flex items-center">
+                                                    <i class="fas fa-route mr-1"></i>Guide Me
+                                                </button>
+                                                <i class="fas fa-chevron-down text-gray-400 transition-transform"></i>
+                                            </div>
+                                        </div>
+                                        <div class="task-details hidden mt-2">
+                                            <div class="text-sm text-gray-700 mt-2 space-y-2">
+                                                <p><strong>Purpose:</strong> The Wake Word is used to prompt Bravo to listen for a question from someone nearby. When Bravo hears the wake word, it will activate the microphone and wait for a question.</p>
+                                                <p><strong>Default Value:</strong> "Hey Friend"</p>
+                                                <p><strong>Requirements:</strong> The wake word must be exactly 2 words. You can change one or both words to customize it for your user.</p>
+                                                <p class="font-semibold text-gray-900 mt-3">Steps:</p>
+                                                <ol class="list-decimal list-inside ml-2 space-y-1">
+                                                    <li>Navigate to <strong>Admin Toolbar → User Settings → AI Settings</strong></li>
+                                                    <li>Locate the <strong>Wake Word</strong> section</li>
+                                                    <li>Change one or both words as desired</li>
+                                                    <li>Click <strong>Save Global Settings</strong> at the bottom of the page</li>
+                                                </ol>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Interface -->
+                            <div class="setup-task-item cursor-pointer" onclick="toggleTaskDetails(this)">
+                                <div class="flex items-start p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition">
+                                    <div class="flex-shrink-0 mt-1">
+                                        <i class="fas fa-cog text-purple-600 text-lg"></i>
+                                    </div>
+                                    <div class="ml-3 flex-1">
+                                        <div class="flex items-center justify-between">
+                                            <div class="font-semibold text-gray-900">Set Interface Mode - User Settings</div>
+                                            <div class="flex items-center space-x-2">
+                                                <button onclick="event.stopPropagation(); startInteractiveGuide('set-interface-mode');" class="px-3 py-1 bg-purple-500 text-white text-xs rounded-lg hover:bg-purple-600 transition flex items-center">
+                                                    <i class="fas fa-route mr-1"></i>Guide Me
+                                                </button>
+                                                <i class="fas fa-chevron-down text-gray-400 transition-transform"></i>
+                                            </div>
+                                        </div>
+                                        <div class="task-details hidden mt-2">
+                                            <div class="text-sm text-gray-700 mt-2 space-y-2">
+                                                <p><strong>Purpose:</strong> Choose how the user will interact with Bravo's communication grid.</p>
+                                                <p><strong>Auditory Scanning:</strong> Buttons are highlighted and spoken to the personal speaker one at a time. The user activates a switch or button when they hear the option they want.</p>
+                                                <p><strong>Tap Interface:</strong> The user directly taps or touches buttons on the screen to make selections.</p>
+                                                <p class="font-semibold text-gray-900 mt-3">Steps:</p>
+                                                <ol class="list-decimal list-inside ml-2 space-y-1">
+                                                    <li>Navigate to <strong>Admin Toolbar → User Settings</strong></li>
+                                                    <li>Find the <strong>Interface Mode</strong> option</li>
+                                                    <li>Select either "Auditory Scanning" or "Tap Interface"</li>
+                                                    <li>Click <strong>Save Global Settings</strong> at the bottom of the page</li>
+                                                </ol>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- AI Options -->
+                            <div class="setup-task-item cursor-pointer" onclick="toggleTaskDetails(this)">
+                                <div class="flex items-start p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition">
+                                    <div class="flex-shrink-0 mt-1">
+                                        <i class="fas fa-cog text-purple-600 text-lg"></i>
+                                    </div>
+                                    <div class="ml-3 flex-1">
+                                        <div class="flex items-center justify-between">
+                                            <div class="font-semibold text-gray-900">Set Number of AI Options - User Settings</div>
+                                            <div class="flex items-center space-x-2">
+                                                <button onclick="event.stopPropagation(); startInteractiveGuide('set-ai-options');" class="px-3 py-1 bg-purple-500 text-white text-xs rounded-lg hover:bg-purple-600 transition flex items-center">
+                                                    <i class="fas fa-route mr-1"></i>Guide Me
+                                                </button>
+                                                <i class="fas fa-chevron-down text-gray-400 transition-transform"></i>
+                                            </div>
+                                        </div>
+                                        <div class="task-details hidden mt-2">
+                                            <div class="text-sm text-gray-700 mt-2 space-y-2">
+                                                <p><strong>Purpose:</strong> Control how many communication option buttons appear on the Grid page and Freestyle page.</p>
+                                                <p><strong>AI Options:</strong> These are buttons with AI-generated phrases based on context and the user's interests.</p>
+                                                <p><strong>Freestyle Options:</strong> These are buttons that appear on the Freestyle page for quick access to commonly used phrases.</p>
+                                                <p><strong>Default:</strong> 10 AI Options and 20 Freestyle options</p>
+                                                <p class="font-semibold text-gray-900 mt-3">Steps:</p>
+                                                <ol class="list-decimal list-inside ml-2 space-y-1">
+                                                    <li>Navigate to <strong>Admin Toolbar → User Settings → AI Settings</strong></li>
+                                                    <li>Find the <strong>Number of Options</strong> or <strong>Grid Size</strong> setting</li>
+                                                    <li>Adjust the number for AI options and Freestyle options separately</li>
+                                                    <li>Click <strong>Save Global Settings</strong> at the bottom of the page</li>
+                                                </ol>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Voice -->
+                            <div class="setup-task-item cursor-pointer" onclick="toggleTaskDetails(this)">
+                                <div class="flex items-start p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition">
+                                    <div class="flex-shrink-0 mt-1">
+                                        <i class="fas fa-cog text-purple-600 text-lg"></i>
+                                    </div>
+                                    <div class="ml-3 flex-1">
+                                        <div class="flex items-center justify-between">
+                                            <div class="font-semibold text-gray-900">Select Text to Speech Voice - User Settings</div>
+                                            <div class="flex items-center space-x-2">
+                                                <button onclick="event.stopPropagation(); startInteractiveGuide('select-voice');" class="px-3 py-1 bg-purple-500 text-white text-xs rounded-lg hover:bg-purple-600 transition flex items-center">
+                                                    <i class="fas fa-route mr-1"></i>Guide Me
+                                                </button>
+                                                <i class="fas fa-chevron-down text-gray-400 transition-transform"></i>
+                                            </div>
+                                        </div>
+                                        <div class="task-details hidden mt-2">
+                                            <div class="text-sm text-gray-700 mt-2 space-y-2">
+                                                <p><strong>Purpose:</strong> Choose the voice that Bravo uses to speak words, phrases, and sentences selected by the user.</p>
+                                                <p><strong>Voice Options:</strong> Multiple voice options are available with different genders, accents, and speaking styles.</p>
+                                                <p><strong>Adjustable Settings:</strong> Speech rate (speed) and volume can all be customized.</p>
+                                                <p class="font-semibold text-gray-900 mt-3">Steps:</p>
+                                                <ol class="list-decimal list-inside ml-2 space-y-1">
+                                                    <li>Navigate to <strong>Admin Toolbar → User Settings</strong></li>
+                                                    <li>Find the <strong>Voice</strong> or <strong>Text-to-Speech</strong> section</li>
+                                                    <li>Select a voice from the dropdown menu (you can preview each voice)</li>
+                                                    <li>Adjust speech rate and volume using the sliders</li>
+                                                    <li>Click <strong>Save Global Settings</strong> at the bottom of the page</li>
+                                                </ol>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Scanning Speed -->
+                            <div class="setup-task-item cursor-pointer" onclick="toggleTaskDetails(this)">
+                                <div class="flex items-start p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition">
+                                    <div class="flex-shrink-0 mt-1">
+                                        <i class="fas fa-cog text-purple-600 text-lg"></i>
+                                    </div>
+                                    <div class="ml-3 flex-1">
+                                        <div class="flex items-center justify-between">
+                                            <div class="font-semibold text-gray-900">Configure Scanning Speed - User Settings</div>
+                                            <div class="flex items-center space-x-2">
+                                                <button onclick="event.stopPropagation(); startInteractiveGuide('configure-scanning-speed');" class="px-3 py-1 bg-purple-500 text-white text-xs rounded-lg hover:bg-purple-600 transition flex items-center">
+                                                    <i class="fas fa-route mr-1"></i>Guide Me
+                                                </button>
+                                                <i class="fas fa-chevron-down text-gray-400 transition-transform"></i>
+                                            </div>
+                                        </div>
+                                        <div class="task-details hidden mt-2">
+                                            <div class="text-sm text-gray-700 mt-2 space-y-2">
+                                                <p><strong>Purpose:</strong> Control how quickly buttons are highlighted and announced during Auditory Scanning, and how many times the system cycles through all options.</p>
+                                                <p><strong>Scan Speed:</strong> The delay (in milliseconds) between each button highlight. Slower speeds give more time to react; faster speeds make navigation quicker.</p>
+                                                <p><strong>Loop Limit:</strong> How many complete cycles through all buttons before scanning pauses until switch is used. A value of 0 will have no limit.</p>
+                                                <p class="font-semibold text-gray-900 mt-3">Steps:</p>
+                                                <ol class="list-decimal list-inside ml-2 space-y-1">
+                                                    <li>Navigate to <strong>Admin Toolbar → User Settings</strong></li>
+                                                    <li>Find the <strong>Scanning</strong> or <strong>Auditory Scanning</strong> section</li>
+                                                    <li>Enter the <strong>Scan Speed</strong> in the input field (try 2000-3000 milliseconds to start)</li>
+                                                    <li>Set the <strong>Loop Limit</strong> (typically 2-3 loops)</li>
+                                                    <li>Click <strong>Save Global Settings</strong> at the bottom of the page</li>
+                                                </ol>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- User Narrative -->
+                            <div class="setup-task-item cursor-pointer" onclick="toggleTaskDetails(this)">
+                                <div class="flex items-start p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition">
+                                    <div class="flex-shrink-0 mt-1">
+                                        <i class="fas fa-info-circle text-orange-600 text-lg"></i>
+                                    </div>
+                                    <div class="ml-3 flex-1">
+                                        <div class="flex items-center justify-between">
+                                            <div class="font-semibold text-gray-900">Create User Narrative - User Info</div>
+                                            <div class="flex items-center space-x-2">
+                                                <button onclick="event.stopPropagation(); startInteractiveGuide('create-user-narrative');" class="px-3 py-1 bg-orange-500 text-white text-xs rounded-lg hover:bg-orange-600 transition flex items-center">
+                                                    <i class="fas fa-route mr-1"></i>Guide Me
+                                                </button>
+                                                <i class="fas fa-chevron-down text-gray-400 transition-transform"></i>
+                                            </div>
+                                        </div>
+                                        <div class="task-details hidden mt-2">
+                                            <div class="text-sm text-gray-700 mt-2 space-y-2">
+                                                <p><strong>Purpose:</strong> Build a complete user story including their name, birthday, and personal narrative to help Bravo provide personalized and age-appropriate communication.</p>
+                                                <p><strong>How to Complete:</strong> You can use the <strong>Audio Interview</strong> button to have Bravo ask questions and automatically fill in all information, or you can manually enter each item separately.</p>
+                                                <p><strong>What to Include:</strong></p>
+                                                <ul class="list-disc list-inside ml-2 space-y-1 text-sm">
+                                                    <li><strong>User Name:</strong> The user's preferred name (first name, nickname, or full name)</li>
+                                                    <li><strong>Birthday:</strong> Date of birth for age-appropriate content and birthday reminders</li>
+                                                    <li><strong>User Narrative:</strong> A full user story including hobbies, favorite topics, likes, dislikes, personality traits, history, family members, pets, favorite places, and anything else important to the user</li>
+                                                </ul>
+                                                <p><strong>Impact:</strong> The more complete the narrative, the better Bravo can tailor communication options to the user's life and personality.</p>
+                                                <p class="font-semibold text-gray-900 mt-3">Steps Using Audio Interview:</p>
+                                                <ol class="list-decimal list-inside ml-2 space-y-1">
+                                                    <li>Navigate to <strong>Admin Toolbar → User Info</strong></li>
+                                                    <li>Click the <strong>Start Audio Interview</strong> button at the top of the page</li>
+                                                    <li>Follow Bravo's prompts to answer questions about the user</li>
+                                                    <li>Review the automatically populated information</li>
+                                                    <li>Click <strong>Save User Name, Info & Birthday</strong> button</li>
+                                                </ol>
+                                                <p class="font-semibold text-gray-900 mt-3">Steps for Manual Entry:</p>
+                                                <ol class="list-decimal list-inside ml-2 space-y-1">
+                                                    <li>Navigate to <strong>Admin Toolbar → User Info</strong></li>
+                                                    <li>Enter the user's <strong>Name</strong> in the Personal Details section</li>
+                                                    <li>Select the user's <strong>Birthday</strong> using the date picker</li>
+                                                    <li>Type or dictate the user's <strong>Narrative</strong> in the text field, including personality, history, favorites, and interests</li>
+                                                    <li>Click <strong>Save User Name, Info & Birthday</strong> button</li>
+                                                </ol>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Medium Priority Settings -->
+                    <div class="bg-white border-l-4 border-blue-500 rounded-lg shadow-sm p-4">
+                        <h4 class="font-bold text-lg text-gray-900 mb-3 flex items-center">
+                            <i class="fas fa-adjust text-blue-500 mr-2"></i>Medium Priority Settings
+                        </h4>
+                        <p class="text-sm text-gray-600 mb-4">Configure these to enhance the experience:</p>
+                        
+                        <div class="space-y-3">
+                            <!-- Auto Clean -->
+                            <div class="setup-task-item cursor-pointer" onclick="toggleTaskDetails(this)">
+                                <div class="flex items-start p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition">
+                                    <div class="flex-shrink-0 mt-1">
+                                        <i class="fas fa-cog text-purple-600 text-lg"></i>
+                                    </div>
+                                    <div class="ml-3 flex-1">
+                                        <div class="flex items-center justify-between">
+                                            <div class="font-semibold text-gray-900">Auto Clean Freestyle - User Settings</div>
+                                            <div class="flex items-center gap-2">
+                                                <button onclick="event.stopPropagation(); startInteractiveGuide('configure-auto-clean');" class="px-3 py-1 bg-purple-500 text-white text-xs rounded hover:bg-purple-600 transition">
+                                                    <i class="fas fa-route mr-1"></i>Guide Me
+                                                </button>
+                                                <i class="fas fa-chevron-down text-gray-400 transition-transform"></i>
+                                            </div>
+                                        </div>
+                                        <div class="task-details hidden mt-2">
+                                            <div class="text-sm text-gray-700 mt-2 space-y-2">
+                                                <p><strong>Purpose:</strong> Automatically enhances Freestyle input to make it more conversational.</p>
+                                                <p class="font-semibold text-gray-900 mt-3">Steps:</p>
+                                                <ol class="list-decimal list-inside ml-2 space-y-1">
+                                                    <li>Navigate to <strong>Admin Toolbar → User Settings → Freestyle</strong></li>
+                                                    <li>Enable or configure the <strong>Auto Clean</strong> option</li>
+                                                    <li>Click <strong>Save Global Settings</strong> at the bottom of the page</li>
+                                                </ol>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Splash Screen -->
+                            <div class="setup-task-item cursor-pointer" onclick="toggleTaskDetails(this)">
+                                <div class="flex items-start p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition">
+                                    <div class="flex-shrink-0 mt-1">
+                                        <i class="fas fa-cog text-purple-600 text-lg"></i>
+                                    </div>
+                                    <div class="ml-3 flex-1">
+                                        <div class="flex items-center justify-between">
+                                            <div class="font-semibold text-gray-900">Display Splash Screen - User Settings</div>
+                                            <div class="flex items-center gap-2">
+                                                <button onclick="event.stopPropagation(); startInteractiveGuide('configure-splash-screen');" class="px-3 py-1 bg-purple-500 text-white text-xs rounded hover:bg-purple-600 transition">
+                                                    <i class="fas fa-route mr-1"></i>Guide Me
+                                                </button>
+                                                <i class="fas fa-chevron-down text-gray-400 transition-transform"></i>
+                                            </div>
+                                        </div>
+                                        <div class="task-details hidden mt-2">
+                                            <div class="text-sm text-gray-700 mt-2 space-y-2">
+                                                <p><strong>Purpose:</strong> Show a large temporary window showing the user's selected communication. This makes it easier to notify those nearby that the user is communicating and what they are saying.</p>
+                                                <p class="font-semibold text-gray-900 mt-3">Steps:</p>
+                                                <ol class="list-decimal list-inside ml-2 space-y-1">
+                                                    <li>Navigate to <strong>Admin Toolbar → User Settings → Display</strong></li>
+                                                    <li>Enable the <strong>Splash Screen</strong> option</li>
+                                                    <li>Adjust the <strong>Display Time</strong> to control how long the splash screen appears</li>
+                                                    <li>Click <strong>Save Global Settings</strong> at the bottom of the page</li>
+                                                </ol>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Sight Words -->
+                            <div class="setup-task-item cursor-pointer" onclick="toggleTaskDetails(this)">
+                                <div class="flex items-start p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition">
+                                    <div class="flex-shrink-0 mt-1">
+                                        <i class="fas fa-cog text-purple-600 text-lg"></i>
+                                    </div>
+                                    <div class="ml-3 flex-1">
+                                        <div class="flex items-center justify-between">
+                                            <div class="font-semibold text-gray-900">Sight Word Logic - User Settings</div>
+                                            <div class="flex items-center gap-2">
+                                                <button onclick="event.stopPropagation(); startInteractiveGuide('configure-sight-words');" class="px-3 py-1 bg-purple-500 text-white text-xs rounded hover:bg-purple-600 transition">
+                                                    <i class="fas fa-route mr-1"></i>Guide Me
+                                                </button>
+                                                <i class="fas fa-chevron-down text-gray-400 transition-transform"></i>
+                                            </div>
+                                        </div>
+                                        <div class="task-details hidden mt-2">
+                                            <div class="text-sm text-gray-700 mt-2 space-y-2">
+                                                <p><strong>Purpose:</strong> Choose to assign pictures to words that are typically recognized by sight. You can also select a different grade level of sight words.</p>
+                                                <p class="font-semibold text-gray-900 mt-3">Steps:</p>
+                                                <ol class="list-decimal list-inside ml-2 space-y-1">
+                                                    <li>Navigate to <strong>Admin Toolbar → User Settings → Spelling</strong></li>
+                                                    <li>Select <strong>Sight Words Grade Level</strong></li>
+                                                    <li>Click <strong>Save Global Settings</strong> at the bottom of the page</li>
+                                                </ol>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Letter Order -->
+                            <div class="setup-task-item cursor-pointer" onclick="toggleTaskDetails(this)">
+                                <div class="flex items-start p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition">
+                                    <div class="flex-shrink-0 mt-1">
+                                        <i class="fas fa-cog text-purple-600 text-lg"></i>
+                                    </div>
+                                    <div class="ml-3 flex-1">
+                                        <div class="flex items-center justify-between">
+                                            <div class="font-semibold text-gray-900">Spell Letter Order - User Settings</div>
+                                            <div class="flex items-center gap-2">
+                                                <button onclick="event.stopPropagation(); startInteractiveGuide('configure-letter-order');" class="px-3 py-1 bg-purple-500 text-white text-xs rounded hover:bg-purple-600 transition">
+                                                    <i class="fas fa-route mr-1"></i>Guide Me
+                                                </button>
+                                                <i class="fas fa-chevron-down text-gray-400 transition-transform"></i>
+                                            </div>
+                                        </div>
+                                        <div class="task-details hidden mt-2">
+                                            <div class="text-sm text-gray-700 mt-2 space-y-2">
+                                                <p><strong>Purpose:</strong> Set how letters are arranged on spelling page (alphabetical, QWERTY keyboard layout, or frequency-based).</p>
+                                                <p class="font-semibold text-gray-900 mt-3">Steps:</p>
+                                                <ol class="list-decimal list-inside ml-2 space-y-1">
+                                                    <li>Navigate to <strong>Admin Toolbar → User Settings → Spelling</strong></li>
+                                                    <li>Select the desired <strong>Letter Order</strong> option</li>
+                                                    <li>Click <strong>Save Global Settings</strong> at the bottom of the page</li>
+                                                </ol>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Family -->
+                            <div class="setup-task-item cursor-pointer" onclick="toggleTaskDetails(this)">
+                                <div class="flex items-start p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition">
+                                    <div class="flex-shrink-0 mt-1">
+                                        <i class="fas fa-info-circle text-orange-600 text-lg"></i>
+                                    </div>
+                                    <div class="ml-3 flex-1">
+                                        <div class="flex items-center justify-between">
+                                            <div class="font-semibold text-gray-900">Family and Friends Info - User Info</div>
+                                            <div class="flex items-center gap-2">
+                                                <button onclick="event.stopPropagation(); startInteractiveGuide('add-family-friends');" class="px-3 py-1 bg-orange-500 text-white text-xs rounded hover:bg-orange-600 transition">
+                                                    <i class="fas fa-route mr-1"></i>Guide Me
+                                                </button>
+                                                <i class="fas fa-chevron-down text-gray-400 transition-transform"></i>
+                                            </div>
+                                        </div>
+                                        <div class="task-details hidden mt-2">
+                                            <div class="text-sm text-gray-700 mt-2 space-y-2">
+                                                <p><strong>Purpose:</strong> Add names and relationships of family members and friends for more personalized communication suggestions.</p>
+                                                <p class="font-semibold text-gray-900 mt-3">Steps:</p>
+                                                <ol class="list-decimal list-inside ml-2 space-y-1">
+                                                    <li>Navigate to <strong>Admin Toolbar → User Info → Family & Friends</strong></li>
+                                                    <li>Add family members and friends with their names and relationships</li>
+                                                    <li>Click <strong>Save Friends and Family</strong> button at the end of the section</li>
+                                                </ol>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Pages -->
+                            <div class="setup-task-item cursor-pointer" onclick="toggleTaskDetails(this)">
+                                <div class="flex items-start p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition">
+                                    <div class="flex-shrink-0 mt-1">
+                                        <i class="fas fa-th text-rose-600 text-lg"></i>
+                                    </div>
+                                    <div class="ml-3 flex-1">
+                                        <div class="flex items-center justify-between">
+                                            <div class="font-semibold text-gray-900">Customize Pages and Buttons - Page Management</div>
+                                            <div class="flex items-center gap-2">
+                                                <button onclick="event.stopPropagation(); startInteractiveGuide('customize-pages');" class="px-3 py-1 bg-rose-500 text-white text-xs rounded hover:bg-rose-600 transition">
+                                                    <i class="fas fa-route mr-1"></i>Guide Me
+                                                </button>
+                                                <i class="fas fa-chevron-down text-gray-400 transition-transform"></i>
+                                            </div>
+                                        </div>
+                                        <div class="task-details hidden mt-2">
+                                            <div class="text-sm text-gray-700 mt-2 space-y-2">
+                                                <p><strong>Purpose:</strong> Edit communication pages and buttons to customize labels, images, and content for the user's specific needs.</p>
+                                                <p><strong>Note:</strong> There is a feature available to import pages and buttons from other devices.</p>
+                                                <p class="font-semibold text-gray-900 mt-3">Steps to Edit Pages and Buttons Directly:</p>
+                                                <ol class="list-decimal list-inside ml-2 space-y-1">
+                                                    <li>Navigate to <strong>Admin Toolbar → Page Management</strong></li>
+                                                    <li>Select pages and buttons to customize</li>
+                                                    <li>Edit labels, add images, or modify content as needed</li>
+                                                    <li>Changes are saved automatically</li>
+                                                </ol>
+                                                <p class="font-semibold text-gray-900 mt-3">Steps to Migrate User Data from Other Devices:</p>
+                                                <ol class="list-decimal list-inside ml-2 space-y-1">
+                                                    <li>Navigate to <strong>Admin Toolbar → Page Management</strong></li>
+                                                    <li>Use the import feature to transfer pages and buttons from another device</li>
+                                                    <li>Follow the migration wizard to complete the transfer</li>
+                                                </ol>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Lower Priority Settings -->
+                    <div class="bg-white border-l-4 border-gray-400 rounded-lg shadow-sm p-4">
+                        <h4 class="font-bold text-lg text-gray-900 mb-3 flex items-center">
+                            <i class="fas fa-ellipsis-h text-gray-500 mr-2"></i>Lower Priority Settings
+                        </h4>
+                        <p class="text-sm text-gray-600 mb-4">Optional settings for further personalization:</p>
+                        
+                        <div class="space-y-3">
+                            <!-- Locations -->
+                            <div class="setup-task-item cursor-pointer" onclick="toggleTaskDetails(this)">
+                                <div class="flex items-start p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition">
+                                    <div class="flex-shrink-0 mt-1">
+                                        <i class="fas fa-map-marker-alt text-gray-600 text-lg"></i>
+                                    </div>
+                                    <div class="ml-3 flex-1">
+                                        <div class="flex items-center justify-between">
+                                            <div class="font-semibold text-gray-900">Favorite Locations - User Current Location</div>
+                                            <i class="fas fa-chevron-down text-gray-400 transition-transform"></i>
+                                        </div>
+                                        <div class="task-details hidden mt-2">
+                                            <div class="text-sm text-gray-700 mt-2 space-y-2">
+                                                <p><strong>Purpose:</strong> Bravo uses the user's current location to provide context-aware communication suggestions. Adding favorite locations makes it easier to quickly load locations that may be repeated frequently, such as home, school, grandparents' house, or favorite restaurants.</p>
+                                                <p class="font-semibold text-gray-900 mt-3">Steps:</p>
+                                                <ol class="list-decimal list-inside ml-2 space-y-1">
+                                                    <li>Navigate to <strong>Admin Toolbar → User Current Location</strong></li>
+                                                    <li>Add favorite locations with names and descriptions</li>
+                                                    <li>Click <strong>Add to Favorites</strong> button to save the location</li>
+                                                </ol>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Diary -->
+                            <div class="setup-task-item cursor-pointer" onclick="toggleTaskDetails(this)">
+                                <div class="flex items-start p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition">
+                                    <div class="flex-shrink-0 mt-1">
+                                        <i class="fas fa-book-open text-gray-600 text-lg"></i>
+                                    </div>
+                                    <div class="ml-3 flex-1">
+                                        <div class="flex items-center justify-between">
+                                            <div class="font-semibold text-gray-900">Diary Entries - Diary Settings</div>
+                                            <i class="fas fa-chevron-down text-gray-400 transition-transform"></i>
+                                        </div>
+                                        <div class="task-details hidden mt-2">
+                                            <div class="text-sm text-gray-700 mt-2 space-y-2">
+                                                <p><strong>Purpose:</strong> Enable the user to discuss past and future events by logging diary entries.</p>
+                                                <p><strong>How It Works:</strong> The admin selects a date (past, present, or future) and includes a short narrative about the event for the user. Input can be typed directly or entered using dictation.</p>
+                                                <p class="font-semibold text-gray-900 mt-3">Steps:</p>
+                                                <ol class="list-decimal list-inside ml-2 space-y-1">
+                                                    <li>Navigate to <strong>Admin Toolbar → Diary Settings</strong></li>
+                                                    <li>Select a date for the entry (past, present, or future)</li>
+                                                    <li>Type or use dictation to enter a short narrative about the event</li>
+                                                    <li>Click <strong>Save Entry</strong> when done</li>
+                                                </ol>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Completion Message -->
+                    <div class="bg-green-50 border border-green-300 rounded-lg p-4">
+                        <p class="text-gray-700 flex items-center">
+                            <i class="fas fa-check-circle text-green-600 text-xl mr-3"></i>
+                            <span><strong>Setup Complete!</strong> The user can now start communicating with Bravo. Remember that all settings can be adjusted anytime as the user's needs evolve.</span>
+                        </p>
+                    </div>
+                </div>
+            `
+        }
+    };
+
+    // Show help modal
+    helpIcon.addEventListener('click', () => {
+        helpModal.classList.remove('hidden');
+        showTopicsMenu();
+    });
+    
+    // Check for URL parameter to auto-open help
+    const urlParams = new URLSearchParams(window.location.search);
+    const openHelp = urlParams.get('openHelp');
+    const keepUnlocked = urlParams.get('keepUnlocked');
+    
+    // Keep admin toolbar unlocked if requested
+    if (keepUnlocked === 'true') {
+        const adminIcons = document.getElementById('admin-icons');
+        const lockButton = document.getElementById('lock-icon');
+        
+        // Show admin icons using style.display to match the unlockToolbar function
+        if (adminIcons) {
+            adminIcons.style.display = 'flex';
+        }
+        
+        // Hide the lock button
+        if (lockButton) {
+            lockButton.style.display = 'none';
+        }
+    }
+    
+    if (openHelp) {
+        helpModal.classList.remove('hidden');
+        if (openHelp === 'user-setup') {
+            showHelpTopic('user-setup');
+        } else {
+            showTopicsMenu();
+        }
+        // Clean up URL
+        window.history.replaceState({}, document.title, window.location.pathname + window.location.hash);
+    }
+
+    // Close help modal
+    helpModalClose.addEventListener('click', () => {
+        helpModal.classList.add('hidden');
+        showTopicsMenu();
+    });
+
+    // Show topics menu
+    function showTopicsMenu() {
+        helpTopicsMenu.classList.remove('hidden');
+        helpModalContent.classList.add('hidden');
+    }
+
+    // Show specific help topic
+    function showHelpTopic(topicKey) {
+        const topic = helpTopics[topicKey];
+        if (!topic) return;
+
+        helpTopicsMenu.classList.add('hidden');
+        helpModalContent.classList.remove('hidden');
+        helpContentDisplay.innerHTML = topic.content;
+    }
+
+    // Back to topics
+    helpBackBtn.addEventListener('click', () => {
+        showTopicsMenu();
+    });
+
+    // Toggle task details in setup checklist
+    function toggleTaskDetails(taskElement) {
+        const details = taskElement.querySelector('.task-details');
+        const chevron = taskElement.querySelector('.fa-chevron-down');
+        
+        if (details.classList.contains('hidden')) {
+            details.classList.remove('hidden');
+            chevron.style.transform = 'rotate(180deg)';
+        } else {
+            details.classList.add('hidden');
+            chevron.style.transform = 'rotate(0deg)';
+        }
+    }
+
+    // Topic button handlers
+    document.getElementById('help-bravo-guide').addEventListener('click', () => {
+        showHelpTopic('bravo-guide');
+    });
+
+    document.getElementById('help-user-setup').addEventListener('click', () => {
+        showHelpTopic('user-setup');
+    });
+
+    document.getElementById('help-contact-support').addEventListener('click', (e) => {
+        e.stopPropagation();
+        contactModal.classList.remove('hidden');
+    });
+
+    // Close contact modal
+    contactModalClose.addEventListener('click', () => {
+        contactModal.classList.add('hidden');
+    });
+
+    // Handle contact form submission
+    contactForm.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        supportSuccess.classList.add('hidden');
+        supportError.classList.add('hidden');
+        
+        try {
+            const formData = new FormData(contactForm);
+            const response = await fetch(contactForm.action, {
+                method: 'POST',
+                body: formData,
+                headers: {
+                    'Accept': 'application/json'
+                }
+            });
+            
+            if (response.ok) {
+                supportSuccess.classList.remove('hidden');
+                contactForm.reset();
+                setTimeout(() => {
+                    contactModal.classList.add('hidden');
+                    supportSuccess.classList.add('hidden');
+                }, 3000);
+            } else {
+                supportError.classList.remove('hidden');
+            }
+        } catch (error) {
+            console.error('Error submitting form:', error);
+            supportError.classList.remove('hidden');
+        }
+    });
+
+    // --- Contact Support Form Logic (Formspree AJAX) ---
+    if (contactForm) {
+        contactForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            const formData = new FormData(contactForm);
+            fetch('https://formspree.io/f/myzpzero', {
+                method: 'POST',
+                headers: {
+                    'Accept': 'application/json'
+                },
+                body: formData
+            })
+            .then(response => {
+                if (response.ok) {
+                    if (supportSuccess) supportSuccess.classList.remove('hidden');
+                    if (supportError) supportError.classList.add('hidden');
+                    contactForm.reset();
+                } else {
+                    return response.json().then(data => { throw data; });
+                }
+            })
+            .catch(() => {
+                if (supportSuccess) supportSuccess.classList.add('hidden');
+                if (supportError) supportError.classList.remove('hidden');
+            });
+        });
+    }
+    </script>
+
+    <!-- Interactive Step-by-Step Guide Window -->
+    <div id="interactive-guide" class="fixed bg-white rounded-lg shadow-2xl border-2 border-blue-500 hidden" style="width: 400px; max-height: 600px; z-index: 9999;">
+        <!-- Draggable Header -->
+        <div id="guide-header" class="bg-gradient-to-r from-blue-500 to-blue-600 text-white p-4 rounded-t-lg cursor-move flex justify-between items-center">
+            <div>
+                <h3 id="guide-title" class="font-bold text-lg">Setup Guide</h3>
+                <p id="guide-progress" class="text-sm opacity-90">Step 1 of 4</p>
+            </div>
+            <button id="guide-close" class="text-white hover:text-gray-200 text-2xl font-bold focus:outline-none" aria-label="Close Guide">&times;</button>
+        </div>
+        
+        <!-- Guide Content -->
+        <div class="p-6 overflow-y-auto" style="max-height: 400px;">
+            <div id="guide-content" class="space-y-4">
+                <!-- Dynamic content will be inserted here -->
+            </div>
+        </div>
+        
+        <!-- Guide Controls -->
+        <div class="border-t border-gray-200 p-4 flex justify-between items-center bg-gray-50 rounded-b-lg">
+            <button id="guide-prev" class="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400 transition disabled:opacity-50 disabled:cursor-not-allowed">
+                <i class="fas fa-arrow-left mr-2"></i>Previous
+            </button>
+            <div id="guide-step-indicator" class="flex space-x-2">
+                <!-- Step dots will be inserted here -->
+            </div>
+            <button id="guide-next" class="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition">
+                Next<i class="fas fa-arrow-right ml-2"></i>
+            </button>
+        </div>
+    </div>
+
+    <style>
+        /* Interactive Guide Styles */
+        #interactive-guide {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+        }
+        
+        #interactive-guide.dragging {
+            cursor: move;
+        }
+        
+        .guide-step-icon {
+            width: 80px;
+            height: 80px;
+            margin: 0 auto 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            border-radius: 50%;
+            color: white;
+            font-size: 2rem;
+        }
+        
+        .guide-highlight-target {
+            animation: pulse-highlight 2s infinite;
+            position: relative;
+        }
+        
+        @keyframes pulse-highlight {
+            0%, 100% { box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.7); }
+            50% { box-shadow: 0 0 0 15px rgba(59, 130, 246, 0); }
+        }
+        
+        .step-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background-color: #d1d5db;
+            transition: all 0.3s;
+        }
+        
+        .step-dot.active {
+            background-color: #3b82f6;
+            transform: scale(1.3);
+        }
+        
+        .step-dot.completed {
+            background-color: #10b981;
+        }
+    </style>
+
+    <script>
+    // Interactive Guide System
+    const interactiveGuide = {
+        currentTask: null,
+        currentStep: 0,
+        guideData: {
+            'configure-wake-word': {
+                title: 'Configure Wake Word',
+                steps: [
+                    {
+                        title: 'Unlock Admin Toolbar',
+                        icon: 'fa-unlock',
+                        content: `
+                            <p class="text-gray-700 mb-3">First, we need to unlock the Admin toolbar to access settings.</p>
+                            <div class="bg-blue-50 border-l-4 border-blue-500 p-3 mb-3">
+                                <p class="text-sm"><i class="fas fa-info-circle text-blue-500 mr-2"></i>Look for the <strong>lock icon</strong> in the top-left corner</p>
+                            </div>
+                            <p class="text-sm text-gray-600">Click the lock icon <i class="fas fa-lock text-gray-600"></i> to unlock it. When unlocked, it will show <i class="fas fa-unlock-alt text-green-500"></i></p>
+                        `,
+                        action: function() {
+                            const lockButton = document.getElementById('lock-icon');
+                            if (lockButton) {
+                                lockButton.classList.add('guide-highlight-target');
+                            }
+                        },
+                        cleanup: function() {
+                            const lockButton = document.getElementById('lock-icon');
+                            if (lockButton) {
+                                lockButton.classList.remove('guide-highlight-target');
+                            }
+                        }
+                    },
+                    {
+                        title: 'Open User Settings',
+                        icon: 'fa-cog',
+                        content: `
+                            <p class="text-gray-700 mb-3">Now, open the User Settings page.</p>
+                            <div class="bg-blue-50 border-l-4 border-blue-500 p-3 mb-3">
+                                <p class="text-sm"><i class="fas fa-info-circle text-blue-500 mr-2"></i>Click the <strong>gear icon</strong> <i class="fas fa-cog text-blue-600"></i> in the Admin toolbar</p>
+                            </div>
+                            <p class="text-sm text-gray-600">This will open the User Settings page where you can configure the wake word.</p>
+                        `,
+                        action: function() {
+                            const settingsLink = document.querySelector('a[href="admin_settings.html"]');
+                            if (settingsLink) {
+                                settingsLink.classList.add('guide-highlight-target');
+                            }
+                        },
+                        cleanup: function() {
+                            const settingsLink = document.querySelector('a[href="admin_settings.html"]');
+                            if (settingsLink) {
+                                settingsLink.classList.remove('guide-highlight-target');
+                            }
+                        }
+                    },
+                    {
+                        title: 'Navigate to AI Settings',
+                        icon: 'fa-robot',
+                        content: `
+                            <p class="text-gray-700 mb-3">On the User Settings page, scroll to the AI Settings section.</p>
+                            <div class="bg-blue-50 border-l-4 border-blue-500 p-3 mb-3">
+                                <p class="text-sm"><i class="fas fa-info-circle text-blue-500 mr-2"></i>Look for the <strong>"Wake Word"</strong> setting</p>
+                            </div>
+                            <p class="text-sm text-gray-600">You'll see two input fields for the wake word (it must be exactly 2 words).</p>
+                        `,
+                        action: function() {
+                            // This step is on admin_settings.html, not gridpage
+                            // Highlighting handled by admin_settings.html guide
+                        },
+                        cleanup: function() {
+                            // Cleanup handled by admin_settings.html guide
+                        }
+                    },
+                    {
+                        title: 'Set Your Wake Word',
+                        icon: 'fa-edit',
+                        content: `
+                            <p class="text-gray-700 mb-3">Enter your custom wake word.</p>
+                            <div class="bg-yellow-50 border-l-4 border-yellow-500 p-3 mb-3">
+                                <p class="text-sm"><i class="fas fa-exclamation-triangle text-yellow-600 mr-2"></i><strong>Requirements:</strong> Must be exactly 2 words</p>
+                            </div>
+                            <p class="text-sm text-gray-600 mb-2"><strong>Default:</strong> "Hey Friend"</p>
+                            <p class="text-sm text-gray-600 mb-3"><strong>Examples:</strong> "Hey Bravo", "Hello Assistant", "Hi Helper"</p>
+                        `,
+                        action: function() {
+                            // This step is on admin_settings.html, not gridpage
+                            // Highlighting handled by admin_settings.html guide
+                        },
+                        cleanup: function() {
+                            // Cleanup handled by admin_settings.html guide
+                        }
+                    },
+                    {
+                        title: 'Save Your Settings',
+                        icon: 'fa-save',
+                        content: `
+                            <p class="text-gray-700 mb-3">Now save your wake word configuration.</p>
+                            <div class="bg-blue-50 border-l-4 border-blue-500 p-3 mb-3">
+                                <p class="text-sm"><i class="fas fa-info-circle text-blue-500 mr-2"></i>Scroll to the bottom of the page</p>
+                            </div>
+                            <p class="text-gray-700 mb-3">Click the <strong>"Save Global Settings"</strong> button to apply your changes.</p>
+                            <p class="text-sm text-green-600"><i class="fas fa-check-circle mr-1"></i>You should see a success message confirming your settings were saved!</p>
+                        `,
+                        action: function() {
+                            // This step is on admin_settings.html, not gridpage
+                            // Highlighting handled by admin_settings.html guide
+                        },
+                        cleanup: function() {
+                            // Cleanup handled by admin_settings.html guide
+                        }
+                    }
+                ]
+            },
+            'set-interface-mode': {
+                title: 'Set Interface Mode',
+                steps: [
+                    {
+                        title: 'Unlock Admin Toolbar',
+                        icon: 'fa-unlock',
+                        content: `
+                            <p class="text-gray-700 mb-3">First, unlock the Admin toolbar to access settings.</p>
+                            <div class="bg-blue-50 border-l-4 border-blue-500 p-3 mb-3">
+                                <p class="text-sm"><i class="fas fa-info-circle text-blue-500 mr-2"></i>Click the <strong>lock icon</strong> in the top-left corner</p>
+                            </div>
+                        `,
+                        action: function() {
+                            const lockButton = document.getElementById('lock-icon');
+                            if (lockButton) lockButton.classList.add('guide-highlight-target');
+                        },
+                        cleanup: function() {
+                            const lockButton = document.getElementById('lock-icon');
+                            if (lockButton) lockButton.classList.remove('guide-highlight-target');
+                        }
+                    },
+                    {
+                        title: 'Open User Settings',
+                        icon: 'fa-cog',
+                        content: `
+                            <p class="text-gray-700 mb-3">Click the gear icon <i class="fas fa-cog text-blue-600"></i> to open User Settings.</p>
+                        `,
+                        action: function() {
+                            const settingsLink = document.querySelector('a[href="admin_settings.html"]');
+                            if (settingsLink) settingsLink.classList.add('guide-highlight-target');
+                        },
+                        cleanup: function() {
+                            const settingsLink = document.querySelector('a[href="admin_settings.html"]');
+                            if (settingsLink) settingsLink.classList.remove('guide-highlight-target');
+                        }
+                    },
+                    {
+                        title: 'Choose Interface Mode',
+                        icon: 'fa-mouse-pointer',
+                        content: `
+                            <p class="text-gray-700 mb-3">Select how the user will interact with Bravo.</p>
+                            <div class="space-y-2 mb-3">
+                                <div class="bg-purple-50 border-l-4 border-purple-500 p-2">
+                                    <p class="text-sm font-semibold text-purple-700">Auditory Scanning</p>
+                                    <p class="text-xs text-gray-600">Buttons are highlighted and spoken one at a time</p>
+                                </div>
+                                <div class="bg-green-50 border-l-4 border-green-500 p-2">
+                                    <p class="text-sm font-semibold text-green-700">Tap Interface</p>
+                                    <p class="text-xs text-gray-600">User directly taps buttons on screen</p>
+                                </div>
+                            </div>
+                            <p class="text-sm text-gray-600">Select your preferred mode.</p>
+                        `,
+                        action: function() {
+                            // This step is on admin_settings.html, not gridpage
+                            // Highlighting handled by admin_settings.html guide
+                        },
+                        cleanup: function() {
+                            // Cleanup handled by admin_settings.html guide
+                        }
+                    },
+                    {
+                        title: 'Save Your Settings',
+                        icon: 'fa-save',
+                        content: `
+                            <p class="text-gray-700 mb-3">Now save your interface mode configuration.</p>
+                            <div class="bg-blue-50 border-l-4 border-blue-500 p-3 mb-3">
+                                <p class="text-sm"><i class="fas fa-info-circle text-blue-500 mr-2"></i>Scroll to the bottom of the page</p>
+                            </div>
+                            <p class="text-gray-700 mb-3">Click the <strong>"Save Global Settings"</strong> button to apply your changes.</p>
+                            <p class="text-sm text-green-600"><i class="fas fa-check-circle mr-1"></i>You should see a success message confirming your settings were saved!</p>
+                        `,
+                        action: function() {
+                            // This step is on admin_settings.html, not gridpage
+                            // Highlighting handled by admin_settings.html guide
+                        },
+                        cleanup: function() {
+                            // Cleanup handled by admin_settings.html guide
+                        }
+                    }
+                ]
+            },
+            'set-ai-options': {
+                title: 'Set Number of AI Options',
+                steps: [
+                    {
+                        title: 'Unlock Admin Toolbar',
+                        icon: 'fa-unlock',
+                        content: `<p class="text-gray-700 mb-3">First, unlock the Admin toolbar to access settings.</p>`,
+                        action: function() {
+                            const lockButton = document.getElementById('lock-icon');
+                            if (lockButton) lockButton.classList.add('guide-highlight-target');
+                        },
+                        cleanup: function() {
+                            const lockButton = document.getElementById('lock-icon');
+                            if (lockButton) lockButton.classList.remove('guide-highlight-target');
+                        }
+                    },
+                    {
+                        title: 'Open User Settings',
+                        icon: 'fa-cog',
+                        content: `<p class="text-gray-700 mb-3">Click the gear icon to open User Settings.</p>`,
+                        action: function() {
+                            const settingsLink = document.querySelector('a[href="admin_settings.html"]');
+                            if (settingsLink) settingsLink.classList.add('guide-highlight-target');
+                        },
+                        cleanup: function() {
+                            const settingsLink = document.querySelector('a[href="admin_settings.html"]');
+                            if (settingsLink) settingsLink.classList.remove('guide-highlight-target');
+                        }
+                    },
+                    {
+                        title: 'Navigate to AI Settings',
+                        icon: 'fa-robot',
+                        content: `<p class="text-gray-700 mb-3">Scroll to the AI Settings section.</p>`,
+                        action: function() {},
+                        cleanup: function() {}
+                    },
+                    {
+                        title: 'Set AI Options Count',
+                        icon: 'fa-list-ol',
+                        content: `<p class="text-gray-700 mb-3">Configure how many AI-generated options appear on the Grid page.</p>`,
+                        action: function() {},
+                        cleanup: function() {}
+                    },
+                    {
+                        title: 'Save Your Settings',
+                        icon: 'fa-save',
+                        content: `<p class="text-gray-700 mb-3">Click Save to apply your changes.</p>`,
+                        action: function() {},
+                        cleanup: function() {}
+                    }
+                ]
+            },
+            'select-voice': {
+                title: 'Select Text to Speech Voice',
+                steps: [
+                    {
+                        title: 'Unlock Admin Toolbar',
+                        icon: 'fa-unlock',
+                        content: `<p class="text-gray-700 mb-3">First, unlock the Admin toolbar.</p>`,
+                        action: function() {
+                            const lockButton = document.getElementById('lock-icon');
+                            if (lockButton) lockButton.classList.add('guide-highlight-target');
+                        },
+                        cleanup: function() {
+                            const lockButton = document.getElementById('lock-icon');
+                            if (lockButton) lockButton.classList.remove('guide-highlight-target');
+                        }
+                    },
+                    {
+                        title: 'Open User Settings',
+                        icon: 'fa-cog',
+                        content: `<p class="text-gray-700 mb-3">Click the gear icon to open User Settings.</p>`,
+                        action: function() {
+                            const settingsLink = document.querySelector('a[href="admin_settings.html"]');
+                            if (settingsLink) settingsLink.classList.add('guide-highlight-target');
+                        },
+                        cleanup: function() {
+                            const settingsLink = document.querySelector('a[href="admin_settings.html"]');
+                            if (settingsLink) settingsLink.classList.remove('guide-highlight-target');
+                        }
+                    },
+                    {
+                        title: 'Find Voice Settings',
+                        icon: 'fa-volume-up',
+                        content: `<p class="text-gray-700 mb-3">Scroll to the Text-to-Speech or Voice section.</p>`,
+                        action: function() {},
+                        cleanup: function() {}
+                    },
+                    {
+                        title: 'Select Voice',
+                        icon: 'fa-microphone',
+                        content: `<p class="text-gray-700 mb-3">Choose a voice from the dropdown and preview it.</p>`,
+                        action: function() {},
+                        cleanup: function() {}
+                    },
+                    {
+                        title: 'Save Your Settings',
+                        icon: 'fa-save',
+                        content: `<p class="text-gray-700 mb-3">Click Save to apply your voice selection.</p>`,
+                        action: function() {},
+                        cleanup: function() {}
+                    }
+                ]
+            },
+            'configure-scanning-speed': {
+                title: 'Configure Scanning Speed',
+                steps: [
+                    {
+                        title: 'Unlock Admin Toolbar',
+                        icon: 'fa-unlock',
+                        content: `<p class="text-gray-700 mb-3">First, unlock the Admin toolbar.</p>`,
+                        action: function() {
+                            const lockButton = document.getElementById('lock-icon');
+                            if (lockButton) lockButton.classList.add('guide-highlight-target');
+                        },
+                        cleanup: function() {
+                            const lockButton = document.getElementById('lock-icon');
+                            if (lockButton) lockButton.classList.remove('guide-highlight-target');
+                        }
+                    },
+                    {
+                        title: 'Open User Settings',
+                        icon: 'fa-cog',
+                        content: `<p class="text-gray-700 mb-3">Click the gear icon to open User Settings.</p>`,
+                        action: function() {
+                            const settingsLink = document.querySelector('a[href="admin_settings.html"]');
+                            if (settingsLink) settingsLink.classList.add('guide-highlight-target');
+                        },
+                        cleanup: function() {
+                            const settingsLink = document.querySelector('a[href="admin_settings.html"]');
+                            if (settingsLink) settingsLink.classList.remove('guide-highlight-target');
+                        }
+                    },
+                    {
+                        title: 'Find Scanning Settings',
+                        icon: 'fa-tachometer-alt',
+                        content: `<p class="text-gray-700 mb-3">Locate the Scanning or Auditory Scanning section.</p>`,
+                        action: function() {},
+                        cleanup: function() {}
+                    },
+                    {
+                        title: 'Adjust Speed & Loop',
+                        icon: 'fa-sliders-h',
+                        content: `<p class="text-gray-700 mb-3">Set the scan speed (2-3 seconds recommended) and loop limit.</p>`,
+                        action: function() {},
+                        cleanup: function() {}
+                    },
+                    {
+                        title: 'Save Your Settings',
+                        icon: 'fa-save',
+                        content: `<p class="text-gray-700 mb-3">Click Save to apply your scanning configuration.</p>`,
+                        action: function() {},
+                        cleanup: function() {}
+                    }
+                ]
+            },
+            'create-user-narrative': {
+                title: 'Create User Narrative',
+                steps: [
+                    {
+                        title: 'Unlock Admin Toolbar',
+                        icon: 'fa-unlock',
+                        content: `<p class="text-gray-700 mb-3">First, unlock the Admin toolbar.</p>`,
+                        action: function() {
+                            const lockButton = document.getElementById('lock-icon');
+                            if (lockButton) lockButton.classList.add('guide-highlight-target');
+                        },
+                        cleanup: function() {
+                            const lockButton = document.getElementById('lock-icon');
+                            if (lockButton) lockButton.classList.remove('guide-highlight-target');
+                        }
+                    },
+                    {
+                        title: 'Navigate to User Info Page',
+                        icon: 'fa-info-circle',
+                        content: `<p class="text-gray-700 mb-3">Click the User Info icon in the admin toolbar. The guide will close when you navigate.</p>`,
+                        action: function() {
+                            const userInfoLink = document.querySelector('a[href="user_info_admin.html"]');
+                            if (userInfoLink) userInfoLink.classList.add('guide-highlight-target');
+                        },
+                        cleanup: function() {
+                            const userInfoLink = document.querySelector('a[href="user_info_admin.html"]');
+                            if (userInfoLink) userInfoLink.classList.remove('guide-highlight-target');
+                        }
+                    },
+                    {
+                        title: 'Choose Entry Method',
+                        icon: 'fa-microphone',
+                        content: `<p class="text-gray-700 mb-3">Choose Audio Interview or Manual Entry to create the narrative.</p>`,
+                        action: function() {},
+                        cleanup: function() {}
+                    },
+                    {
+                        title: 'Complete User Information',
+                        icon: 'fa-user-edit',
+                        content: `<p class="text-gray-700 mb-3">Fill in Name, Birthday, and complete Narrative.</p>`,
+                        action: function() {},
+                        cleanup: function() {}
+                    },
+                    {
+                        title: 'Save User Information',
+                        icon: 'fa-save',
+                        content: `<p class="text-gray-700 mb-3">Click Save to store the user's information.</p>`,
+                        action: function() {},
+                        cleanup: function() {}
+                    }
+                ]
+            },
+            
+            // Medium Priority Task Guides
+            'configure-auto-clean': {
+                title: 'Auto Clean Freestyle',
+                steps: [
+                    {
+                        title: 'Unlock Admin Toolbar',
+                        icon: 'fa-unlock',
+                        content: `<p class="text-gray-700 mb-3">First, unlock the Admin toolbar.</p>`,
+                        action: function() {
+                            const lockButton = document.getElementById('lock-icon');
+                            if (lockButton) lockButton.classList.add('guide-highlight-target');
+                        },
+                        cleanup: function() {
+                            const lockButton = document.getElementById('lock-icon');
+                            if (lockButton) lockButton.classList.remove('guide-highlight-target');
+                        }
+                    },
+                    {
+                        title: 'Navigate to User Settings',
+                        icon: 'fa-cog',
+                        content: `<p class="text-gray-700 mb-3">Click the gear icon to open User Settings. The detailed guide will continue there.</p>
+                        <p class="text-sm text-blue-600 mt-2"><i class="fas fa-info-circle mr-1"></i>The guide will automatically continue when you reach the settings page.</p>`,
+                        action: function() {
+                            const settingsLink = document.querySelector('a[href="admin_settings.html"]');
+                            if (settingsLink) {
+                                settingsLink.classList.add('guide-highlight-target');
+                                
+                                // Update localStorage to indicate we're continuing this guide on admin_settings
+                                const savedGuide = localStorage.getItem('activeGuide');
+                                if (savedGuide) {
+                                    try {
+                                        const guideState = JSON.parse(savedGuide);
+                                        // Save the task index so admin_settings knows which task to continue
+                                        localStorage.setItem('continueGuideOnSettings', JSON.stringify({
+                                            taskId: guideState.taskId,
+                                            taskIndex: guideState.taskIndex
+                                        }));
+                                    } catch (e) {
+                                        console.error('Error saving continuation state:', e);
+                                    }
+                                }
+                            }
+                        },
+                        cleanup: function() {
+                            const settingsLink = document.querySelector('a[href="admin_settings.html"]');
+                            if (settingsLink) settingsLink.classList.remove('guide-highlight-target');
+                        }
+                    }
+                ]
+            },
+            'configure-splash-screen': {
+                title: 'Display Splash Screen',
+                steps: [
+                    {
+                        title: 'Unlock Admin Toolbar',
+                        icon: 'fa-unlock',
+                        content: `<p class="text-gray-700 mb-3">First, unlock the Admin toolbar.</p>`,
+                        action: function() {
+                            const lockButton = document.getElementById('lock-icon');
+                            if (lockButton) lockButton.classList.add('guide-highlight-target');
+                        },
+                        cleanup: function() {
+                            const lockButton = document.getElementById('lock-icon');
+                            if (lockButton) lockButton.classList.remove('guide-highlight-target');
+                        }
+                    },
+                    {
+                        title: 'Navigate to User Settings',
+                        icon: 'fa-cog',
+                        content: `<p class="text-gray-700 mb-3">Click the gear icon to open User Settings. The detailed guide will continue there.</p>`,
+                        action: function() {
+                            const settingsLink = document.querySelector('a[href="admin_settings.html"]');
+                            if (settingsLink) settingsLink.classList.add('guide-highlight-target');
+                        },
+                        cleanup: function() {
+                            const settingsLink = document.querySelector('a[href="admin_settings.html"]');
+                            if (settingsLink) settingsLink.classList.remove('guide-highlight-target');
+                        }
+                    }
+                ]
+            },
+            'configure-sight-words': {
+                title: 'Sight Word Logic',
+                steps: [
+                    {
+                        title: 'Unlock Admin Toolbar',
+                        icon: 'fa-unlock',
+                        content: `<p class="text-gray-700 mb-3">First, unlock the Admin toolbar.</p>`,
+                        action: function() {
+                            const lockButton = document.getElementById('lock-icon');
+                            if (lockButton) lockButton.classList.add('guide-highlight-target');
+                        },
+                        cleanup: function() {
+                            const lockButton = document.getElementById('lock-icon');
+                            if (lockButton) lockButton.classList.remove('guide-highlight-target');
+                        }
+                    },
+                    {
+                        title: 'Navigate to User Settings',
+                        icon: 'fa-cog',
+                        content: `<p class="text-gray-700 mb-3">Click the gear icon to open User Settings. The detailed guide will continue there.</p>`,
+                        action: function() {
+                            const settingsLink = document.querySelector('a[href="admin_settings.html"]');
+                            if (settingsLink) settingsLink.classList.add('guide-highlight-target');
+                        },
+                        cleanup: function() {
+                            const settingsLink = document.querySelector('a[href="admin_settings.html"]');
+                            if (settingsLink) settingsLink.classList.remove('guide-highlight-target');
+                        }
+                    }
+                ]
+            },
+            'configure-letter-order': {
+                title: 'Spell Letter Order',
+                steps: [
+                    {
+                        title: 'Unlock Admin Toolbar',
+                        icon: 'fa-unlock',
+                        content: `<p class="text-gray-700 mb-3">First, unlock the Admin toolbar.</p>`,
+                        action: function() {
+                            const lockButton = document.getElementById('lock-icon');
+                            if (lockButton) lockButton.classList.add('guide-highlight-target');
+                        },
+                        cleanup: function() {
+                            const lockButton = document.getElementById('lock-icon');
+                            if (lockButton) lockButton.classList.remove('guide-highlight-target');
+                        }
+                    },
+                    {
+                        title: 'Navigate to User Settings',
+                        icon: 'fa-cog',
+                        content: `<p class="text-gray-700 mb-3">Click the gear icon to open User Settings. The detailed guide will continue there.</p>`,
+                        action: function() {
+                            const settingsLink = document.querySelector('a[href="admin_settings.html"]');
+                            if (settingsLink) settingsLink.classList.add('guide-highlight-target');
+                        },
+                        cleanup: function() {
+                            const settingsLink = document.querySelector('a[href="admin_settings.html"]');
+                            if (settingsLink) settingsLink.classList.remove('guide-highlight-target');
+                        }
+                    }
+                ]
+            },
+            'add-family-friends': {
+                title: 'Family and Friends Info',
+                steps: [
+                    {
+                        title: 'Unlock Admin Toolbar',
+                        icon: 'fa-unlock',
+                        content: `<p class="text-gray-700 mb-3">First, unlock the Admin toolbar.</p>`,
+                        action: function() {
+                            const lockButton = document.getElementById('lock-icon');
+                            if (lockButton) lockButton.classList.add('guide-highlight-target');
+                        },
+                        cleanup: function() {
+                            const lockButton = document.getElementById('lock-icon');
+                            if (lockButton) lockButton.classList.remove('guide-highlight-target');
+                        }
+                    },
+                    {
+                        title: 'Navigate to User Info',
+                        icon: 'fa-info-circle',
+                        content: `<p class="text-gray-700 mb-3">Click the User Info icon in the admin toolbar. The detailed guide will continue there.</p>`,
+                        action: function() {
+                            const userInfoLink = document.querySelector('a[href="user_info_admin.html"]');
+                            if (userInfoLink) userInfoLink.classList.add('guide-highlight-target');
+                        },
+                        cleanup: function() {
+                            const userInfoLink = document.querySelector('a[href="user_info_admin.html"]');
+                            if (userInfoLink) userInfoLink.classList.remove('guide-highlight-target');
+                        }
+                    }
+                ]
+            },
+            'customize-pages': {
+                title: 'Customize Pages and Buttons',
+                steps: [
+                    {
+                        title: 'Unlock Admin Toolbar',
+                        icon: 'fa-unlock',
+                        content: `<p class="text-gray-700 mb-3">First, unlock the Admin toolbar.</p>`,
+                        action: function() {
+                            const lockButton = document.getElementById('lock-icon');
+                            if (lockButton) lockButton.classList.add('guide-highlight-target');
+                        },
+                        cleanup: function() {
+                            const lockButton = document.getElementById('lock-icon');
+                            if (lockButton) lockButton.classList.remove('guide-highlight-target');
+                        }
+                    },
+                    {
+                        title: 'Navigate to Page Management',
+                        icon: 'fa-th',
+                        content: `<p class="text-gray-700 mb-3">Click the Page Management icon in the admin toolbar. You can then customize pages and buttons.</p>`,
+                        action: function() {
+                            const pageLink = document.querySelector('a[href*="page" i][href*="edit" i], a[href*="page" i][href*="manage" i]');
+                            if (pageLink) pageLink.classList.add('guide-highlight-target');
+                        },
+                        cleanup: function() {
+                            const pageLink = document.querySelector('a[href*="page" i][href*="edit" i], a[href*="page" i][href*="manage" i]');
+                            if (pageLink) pageLink.classList.remove('guide-highlight-target');
+                        }
+                    }
+                ]
+            }
+        },
+        
+        init: function() {
+            this.guideWindow = document.getElementById('interactive-guide');
+            this.guideContent = document.getElementById('guide-content');
+            this.guideTitle = document.getElementById('guide-title');
+            this.guideProgress = document.getElementById('guide-progress');
+            this.guidePrev = document.getElementById('guide-prev');
+            this.guideNext = document.getElementById('guide-next');
+            this.guideClose = document.getElementById('guide-close');
+            this.guideStepIndicator = document.getElementById('guide-step-indicator');
+            this.guideHeader = document.getElementById('guide-header');
+            
+            // Make window draggable
+            this.makeDraggable();
+            
+            // Event listeners
+            this.guidePrev.addEventListener('click', () => this.previousStep());
+            this.guideNext.addEventListener('click', () => this.nextStep());
+            this.guideClose.addEventListener('click', () => this.close());
+        },
+        
+        makeDraggable: function() {
+            let isDragging = false;
+            let currentX, currentY, initialX, initialY;
+            
+            this.guideHeader.addEventListener('mousedown', (e) => {
+                isDragging = true;
+                initialX = e.clientX - this.guideWindow.offsetLeft;
+                initialY = e.clientY - this.guideWindow.offsetTop;
+                this.guideWindow.classList.add('dragging');
+            });
+            
+            document.addEventListener('mousemove', (e) => {
+                if (isDragging) {
+                    e.preventDefault();
+                    currentX = e.clientX - initialX;
+                    currentY = e.clientY - initialY;
+                    this.guideWindow.style.left = currentX + 'px';
+                    this.guideWindow.style.top = currentY + 'px';
+                    this.guideWindow.style.bottom = 'auto';
+                    this.guideWindow.style.right = 'auto';
+                }
+            });
+            
+            document.addEventListener('mouseup', () => {
+                isDragging = false;
+                this.guideWindow.classList.remove('dragging');
+            });
+        },
+        
+        start: function(taskId) {
+            const task = this.guideData[taskId];
+            if (!task) {
+                console.error('Task not found:', taskId);
+                return;
+            }
+            
+            this.currentTask = taskId;
+            this.currentStep = 0;
+            this.guideTitle.textContent = task.title;
+            
+            // Calculate task index based on task ID
+            const setupTasks = [
+                { id: 'configure-wake-word' },
+                { id: 'set-interface-mode' },
+                { id: 'set-ai-options' },
+                { id: 'select-voice' },
+                { id: 'configure-scanning-speed' },
+                { id: 'create-user-narrative' },
+                // Medium Priority
+                { id: 'configure-auto-clean' },
+                { id: 'configure-splash-screen' },
+                { id: 'configure-sight-words' },
+                { id: 'configure-letter-order' },
+                { id: 'add-family-friends' },
+                { id: 'customize-pages' }
+            ];
+            const taskIndex = setupTasks.findIndex(t => t.id === taskId);
+            
+            // Save to localStorage for cross-page persistence, including taskIndex
+            localStorage.setItem('activeGuide', JSON.stringify({
+                taskId: taskId,
+                stepIndex: 0,
+                taskIndex: taskIndex !== -1 ? taskIndex : 0
+            }));
+            
+            // For medium priority tasks (index 6+), also save continuation state
+            if (taskIndex >= 6) {
+                // Family and Friends goes to user_info_admin.html, others go to admin_settings.html
+                if (taskId === 'add-family-friends') {
+                    localStorage.setItem('continueGuideOnUserInfo', JSON.stringify({
+                        taskId: taskId,
+                        taskIndex: taskIndex
+                    }));
+                    console.log('Saved continuation state for user_info_admin:', taskId, 'at index:', taskIndex);
+                } else {
+                    localStorage.setItem('continueGuideOnSettings', JSON.stringify({
+                        taskId: taskId,
+                        taskIndex: taskIndex
+                    }));
+                    console.log('Saved continuation state for admin_settings:', taskId, 'at index:', taskIndex);
+                }
+            }
+            
+            // Hide help modal
+            const helpModal = document.getElementById('help-modal');
+            if (helpModal) {
+                helpModal.classList.add('hidden');
+            }
+            
+            // Show guide window
+            this.guideWindow.classList.remove('hidden');
+            
+            // Create step indicators
+            this.renderStepIndicators();
+            
+            // Show first step
+            this.showStep();
+        },
+        
+        renderStepIndicators: function() {
+            const task = this.guideData[this.currentTask];
+            this.guideStepIndicator.innerHTML = task.steps.map((_, index) => 
+                `<div class="step-dot ${index === 0 ? 'active' : ''}" data-step="${index}"></div>`
+            ).join('');
+        },
+        
+        showStep: function() {
+            const task = this.guideData[this.currentTask];
+            const step = task.steps[this.currentStep];
+            
+            // Update progress
+            this.guideProgress.textContent = `Step ${this.currentStep + 1} of ${task.steps.length}`;
+            
+            // Update content
+            this.guideContent.innerHTML = `
+                <div class="guide-step-icon">
+                    <i class="fas ${step.icon}"></i>
+                </div>
+                <h4 class="text-xl font-bold text-gray-800 mb-3 text-center">${step.title}</h4>
+                ${step.content}
+            `;
+            
+            // Update buttons
+            this.guidePrev.disabled = this.currentStep === 0;
+            this.guideNext.textContent = this.currentStep === task.steps.length - 1 
+                ? 'Complete' 
+                : 'Next';
+            this.guideNext.innerHTML = this.currentStep === task.steps.length - 1
+                ? 'Complete<i class="fas fa-check ml-2"></i>'
+                : 'Next<i class="fas fa-arrow-right ml-2"></i>';
+            
+            // Update step indicators
+            const dots = this.guideStepIndicator.querySelectorAll('.step-dot');
+            dots.forEach((dot, index) => {
+                dot.classList.remove('active', 'completed');
+                if (index < this.currentStep) {
+                    dot.classList.add('completed');
+                } else if (index === this.currentStep) {
+                    dot.classList.add('active');
+                }
+            });
+            
+            // Execute step action if defined
+            if (step.action) {
+                step.action();
+            }
+        },
+        
+        nextStep: function() {
+            const task = this.guideData[this.currentTask];
+            const currentStepData = task.steps[this.currentStep];
+            
+            // Cleanup current step
+            if (currentStepData.cleanup) {
+                currentStepData.cleanup();
+            }
+            
+            if (this.currentStep < task.steps.length - 1) {
+                this.currentStep++;
+                
+                // Update localStorage
+                localStorage.setItem('activeGuide', JSON.stringify({
+                    taskId: this.currentTask,
+                    stepIndex: this.currentStep
+                }));
+                
+                this.showStep();
+            } else {
+                // Completed all steps
+                this.complete();
+            }
+        },
+        
+        previousStep: function() {
+            const currentStepData = this.guideData[this.currentTask].steps[this.currentStep];
+            
+            // Cleanup current step
+            if (currentStepData.cleanup) {
+                currentStepData.cleanup();
+            }
+            
+            if (this.currentStep > 0) {
+                this.currentStep--;
+                
+                // Update localStorage
+                localStorage.setItem('activeGuide', JSON.stringify({
+                    taskId: this.currentTask,
+                    stepIndex: this.currentStep
+                }));
+                
+                this.showStep();
+            }
+        },
+        
+        complete: function() {
+            // Cleanup last step
+            const task = this.guideData[this.currentTask];
+            const lastStep = task.steps[this.currentStep];
+            if (lastStep.cleanup) {
+                lastStep.cleanup();
+            }
+            
+            // Clear localStorage
+            localStorage.removeItem('activeGuide');
+            
+            // Show completion message
+            this.guideContent.innerHTML = `
+                <div class="text-center">
+                    <div class="guide-step-icon bg-gradient-to-br from-green-500 to-green-600">
+                        <i class="fas fa-check-circle"></i>
+                    </div>
+                    <h4 class="text-xl font-bold text-gray-800 mb-3">Great Job!</h4>
+                    <p class="text-gray-700 mb-4">You've completed the "${task.title}" setup.</p>
+                    <button onclick="interactiveGuide.returnToGuide()" class="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition">
+                        <i class="fas fa-arrow-left mr-2"></i>Return to New User Setup
+                    </button>
+                </div>
+            `;
+            
+            this.guidePrev.disabled = true;
+            this.guideNext.style.display = 'none';
+            
+            // Update all step indicators to completed
+            const dots = this.guideStepIndicator.querySelectorAll('.step-dot');
+            dots.forEach(dot => {
+                dot.classList.remove('active');
+                dot.classList.add('completed');
+            });
+        },
+        
+        close: function() {
+            // Cleanup current step
+            if (this.currentTask) {
+                const task = this.guideData[this.currentTask];
+                const currentStepData = task.steps[this.currentStep];
+                if (currentStepData && currentStepData.cleanup) {
+                    currentStepData.cleanup();
+                }
+            }
+            
+            // Clear localStorage
+            localStorage.removeItem('activeGuide');
+            
+            this.guideWindow.classList.add('hidden');
+            this.guideNext.style.display = 'block';
+        },
+        
+        returnToGuide: function() {
+            this.close();
+            const helpModal = document.getElementById('help-modal');
+            if (helpModal) {
+                helpModal.classList.remove('hidden');
+                // Show the New User Setup topic content
+                if (typeof showHelpTopic === 'function') {
+                    showHelpTopic('user-setup');
+                }
+            }
+        }
+    };
+    
+    // Initialize guide system when page loads
+    document.addEventListener('DOMContentLoaded', () => {
+        // Small delay to ensure all elements are ready
+        setTimeout(() => {
+            interactiveGuide.init();
+            
+            // Check if there's an active guide to resume
+            const savedGuide = localStorage.getItem('activeGuide');
+            if (savedGuide) {
+                try {
+                    const guideState = JSON.parse(savedGuide);
+                    console.log('Resuming guide on gridpage:', guideState);
+                    // Resume the guide
+                    interactiveGuide.currentTask = guideState.taskId;
+                    interactiveGuide.currentStep = guideState.stepIndex;
+                    const task = interactiveGuide.guideData[guideState.taskId];
+                    if (task) {
+                        interactiveGuide.guideTitle.textContent = task.title;
+                        interactiveGuide.guideWindow.classList.remove('hidden');
+                        interactiveGuide.renderStepIndicators();
+                        interactiveGuide.showStep();
+                    }
+                } catch (e) {
+                    console.error('Error resuming guide:', e);
+                    localStorage.removeItem('activeGuide');
+                }
+            }
+        }, 300);
+    });
+    
+    // Function to start a guide from the help modal - MUST be global
+    window.startInteractiveGuide = function(taskId) {
+        interactiveGuide.start(taskId);
+    };
+    </script>
+    
+</body>
+</html>

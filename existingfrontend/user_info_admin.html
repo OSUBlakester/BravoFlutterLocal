@@ -1,0 +1,1700 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>User Information & Friends & Family Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    
+    <!-- Firebase SDK -->
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+    
+    <!-- Ensure mood-selection.js is loaded for mood options -->
+    <script src="/static/interactive-guide.js"></script>
+    <script src="/static/user-info-admin-guide.js"></script>
+    <script src="/static/mood-selection.js" defer></script>
+    <script src="/static/interview-questions.js" defer></script>
+    <script src="/static/family-friends-interview-questions.js" defer></script>
+    <script src="/static/family-friends-interview-system.js" defer></script>
+    <script src="/static/user_info_admin.js" defer></script>
+    <style>
+        /* Custom base styles */
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+         /* Basic styling for form elements using Tailwind */
+        label {
+            @apply block text-sm font-medium text-gray-700 mb-1;
+        }
+        input[type="text"], input[type="date"], input[type="month-day"], /* Custom type idea */
+        textarea {
+            @apply mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm;
+        }
+         textarea {
+             min-height: 150px; /* Adjusted height */
+             resize: vertical;
+        }
+        button, .button-link {
+             @apply inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white focus:outline-none focus:ring-2 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed;
+        }
+        .button-primary {
+             @apply bg-blue-600 hover:bg-blue-700 focus:ring-blue-500;
+        }
+         .button-secondary {
+             @apply bg-gray-600 hover:bg-gray-700 focus:ring-gray-500;
+         }
+         .button-danger {
+              @apply bg-red-600 hover:bg-red-700 focus:ring-red-500;
+         }
+         .button-success {
+              @apply bg-green-600 hover:bg-green-700 focus:ring-orange-500;
+         }
+        .button-link i, button i {
+             @apply mr-2;
+        }
+        /* Audio Interview Styles */
+        .interview-log-entry {
+            @apply mb-3 p-3 bg-white rounded border border-gray-200;
+        }
+        .interview-log-entry.question {
+            @apply border-l-4 border-l-blue-500;
+        }
+        .interview-log-entry.answer {
+            @apply border-l-4 border-l-green-500 ml-4;
+        }
+        .interview-log-entry.skipped {
+            @apply border-l-4 border-l-gray-400 ml-4;
+        }
+
+        /* Table styling */
+        table {
+            @apply min-w-full divide-y divide-gray-200 mt-4;
+        }
+        thead {
+            @apply bg-gray-50;
+        }
+        th {
+            @apply px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider;
+        }
+        tbody {
+            @apply bg-white divide-y divide-gray-200;
+        }
+        td {
+            @apply px-4 py-2 whitespace-nowrap text-sm text-gray-700 align-middle; /* Align middle */
+        }
+        td input {
+            @apply p-1 text-sm w-full; /* Smaller inputs in table, full width */
+        }
+        td button {
+            @apply px-2 py-1 text-xs; /* Smaller buttons in table */
+        }
+        /* Custom input for MM-DD - basic appearance */
+        input[type="month-day"]::-webkit-datetime-edit-year-field { display: none; }
+        input[type="month-day"]::-webkit-inner-spin-button,
+        input[type="month-day"]::-webkit-calendar-picker-indicator { display: none; }
+
+        /* Hamburger Menu Styles */
+    .hamburger-menu {
+        position: relative;
+        display: inline-block;
+    }
+    #hamburger-btn {
+        background-color: #4A5568; /* Tailwind gray-700 or similar */
+        color: white;
+        padding: 8px 12px; /* Adjust for a good size */
+        font-size: 20px; /* Hamburger icon size */
+        border: none;
+        cursor: pointer;
+        border-radius: 5px;
+        line-height: 1; /* Ensure icon is centered vertically */
+    }
+    #hamburger-btn:hover {
+        background-color: #2D3748; /* Darker shade for hover */
+    }
+    .dropdown-content {
+        display: none; /* Hidden by default */
+        position: absolute;
+        background-color: #ffffff; /* White background for dropdown */
+        min-width: 260px; /* Adjust as needed */
+        box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
+        z-index: 1000; /* Ensure it's on top */
+        left: 0; /* Align to the left of the button */
+        border-radius: 5px;
+        border: 1px solid #ddd; /* Light border for the dropdown */
+    }
+    .dropdown-content a {
+        color: #333; /* Dark text for links */
+        padding: 10px 15px;
+        text-decoration: none;
+        display: block;
+        font-size: 14px; /* Standard font size for menu items */
+    }
+    .dropdown-content a:hover {
+        background-color: #f0f0f0; /* Hover effect for links */
+    }
+    .dropdown-content hr {
+        border: 0;
+        height: 1px;
+        background-color: #e0e0e0; /* Separator color */
+        margin: 5px 0;
+    }
+
+    /* Interactive Guide Styles */
+    #interactive-guide {
+        position: fixed;
+        bottom: 20px;
+        right: 20px;
+        width: 400px;
+        max-width: calc(100vw - 40px);
+        background: white;
+        border-radius: 12px;
+        box-shadow: 0 8px 32px rgba(0,0,0,0.2);
+        z-index: 9999;
+        display: none;
+    }
+    
+    #interactive-guide.dragging {
+        cursor: move;
+    }
+    
+    .guide-header {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        color: white;
+        padding: 16px;
+        border-radius: 12px 12px 0 0;
+        cursor: move;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    
+    .guide-content {
+        padding: 20px;
+        max-height: 60vh;
+        overflow-y: auto;
+    }
+    
+    .guide-controls {
+        padding: 16px;
+        border-top: 1px solid #e5e7eb;
+        display: flex;
+        justify-content: space-between;
+        gap: 8px;
+    }
+    
+    .guide-btn {
+        padding: 8px 16px;
+        border-radius: 6px;
+        border: none;
+        cursor: pointer;
+        font-size: 14px;
+        font-weight: 500;
+        transition: all 0.2s;
+    }
+    
+    .guide-btn-primary {
+        background: #667eea;
+        color: white;
+    }
+    
+    .guide-btn-primary:hover {
+        background: #5568d3;
+    }
+    
+    .guide-btn-secondary {
+        background: #e5e7eb;
+        color: #374151;
+    }
+    
+    .guide-btn-secondary:hover {
+        background: #d1d5db;
+    }
+    
+    .guide-step-indicator {
+        display: flex;
+        gap: 8px;
+        justify-content: center;
+        margin-top: 16px;
+    }
+    
+    .step-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        background: #d1d5db;
+        transition: all 0.3s;
+    }
+    
+    .step-dot.active {
+        background: #667eea;
+        width: 24px;
+        border-radius: 4px;
+    }
+    
+    .step-dot.completed {
+        background: #10b981;
+    }
+    
+    @keyframes pulse-highlight {
+        0%, 100% {
+            box-shadow: 0 0 0 0 rgba(102, 126, 234, 0.7);
+        }
+        50% {
+            box-shadow: 0 0 0 15px rgba(102, 126, 234, 0);
+        }
+    }
+    
+    .guide-highlight-target {
+        animation: pulse-highlight 2s infinite;
+        border-radius: 8px;
+        position: relative;
+        z-index: 1000;
+    }
+
+    </style>
+</head>
+<body class="bg-gray-100">
+
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+
+    <script>
+        // --- DYNAMIC AUTHENTICATION & CONFIGURATION CONTEXT ---
+        (async () => {
+            // 1. Fetch Firebase config dynamically
+            let firebaseConfig;
+            try {
+                const response = await fetch('/api/frontend-config');
+                if (!response.ok) throw new Error(`Server error (${response.status})`);
+                const configData = await response.json();
+                firebaseConfig = configData.firebase_config || configData;
+                if (!firebaseConfig || !firebaseConfig.apiKey) throw new Error('Invalid config from server.');
+            } catch (error) {
+                console.error('Fatal: Could not load application configuration.', error);
+                document.body.innerHTML = `<div style="padding: 2rem; text-align: center; color: red; font-family: sans-serif;">Failed to load application configuration. Please refresh the page.</div>`;
+                return;
+            }
+
+            // 2. Initialize Firebase
+            firebase.initializeApp(firebaseConfig);
+            const auth = firebase.auth();
+            console.log(`Firebase initialized for project: ${firebaseConfig.projectId}`);
+
+            // 3. Check for logged-in user and set up context using onAuthStateChanged
+            auth.onAuthStateChanged(async (user) => {
+                if (user) {
+                    const currentAacUserId = sessionStorage.getItem("currentAacUserId");
+                    const tokenFromUser = await user.getIdToken();
+                    sessionStorage.setItem("firebaseIdToken", tokenFromUser);
+
+                    if (!currentAacUserId) {
+                        console.warn("No AAC User ID found in session. Redirecting to auth page for user selection.");
+                        window.location.href = 'auth.html';
+                        return;
+                    }
+
+                    window.authenticatedFetch = async (url, options = {}) => {
+                        const headers = options.headers || {};
+                        headers['Authorization'] = `Bearer ${tokenFromUser}`;
+                        headers['X-User-ID'] = currentAacUserId;
+                        
+                        // For admin access, include the target account ID
+                        const adminTargetAccountId = sessionStorage.getItem('adminTargetAccountId');
+                        if (adminTargetAccountId) {
+                            headers['X-Admin-Target-Account'] = adminTargetAccountId;
+                            console.log(`Setting admin target account header: ${adminTargetAccountId}`);
+                        }
+                        
+                        options.headers = headers;
+                        const response = await fetch(url, options);
+                        if (response.status === 401 || response.status === 403) {
+                            console.warn(`Auth failed (${response.status}). Redirecting to login.`);
+                            sessionStorage.clear(); window.location.href = 'auth.html'; throw new Error("Session expired.");
+                        }
+                        return response;
+                    };
+
+                    window.currentAacUserId = currentAacUserId;
+                    window.firebaseIdToken = tokenFromUser;
+                    window.adminContextInitializedByInlineScript = true;
+                    
+                    // Global function to update page title with profile name
+                    window.updatePageTitleWithProfile = async (baseTitle) => {
+                        try {
+                            const response = await window.authenticatedFetch('/api/account/users');
+                            if (!response.ok) return;
+                            
+                            const profiles = await response.json();
+                            const currentProfile = profiles.find(profile => profile.aac_user_id === currentAacUserId);
+                            
+                            if (currentProfile && currentProfile.display_name) {
+                                const titleElement = document.getElementById('dynamic-page-title');
+                                if (titleElement) {
+                                    titleElement.textContent = `${baseTitle} - ${currentProfile.display_name}`;
+                                }
+                            }
+                        } catch (error) {
+                            console.error('Error updating page title with profile:', error);
+                        }
+                    };
+                    
+                    document.dispatchEvent(new Event('adminUserContextReady'));
+                    console.log(`Admin context ready for AAC User ID: ${currentAacUserId}`);
+
+                } else {
+                    console.log("No Firebase user session found. Redirecting to auth.html.");
+                    sessionStorage.clear();
+                    window.location.href = 'auth.html';
+                }
+            });
+        })();
+    </script>
+    <div class="page-banner flex items-center justify-between bg-[#002244] text-[#FB4F14] px-4 py-2 shadow">
+        <div class="flex items-center gap-2">
+            <a href="gridpage.html?page=home" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100 focus:outline-none focus:ring-2 focus:ring-orange-500" title="Home">
+                <i class="fas fa-home"></i>
+            </a>
+            <h1 id="dynamic-page-title" class="ml-2 text-xl font-semibold">User Info &amp; Birthdays Administration</h1>
+        </div>
+        <div class="admin-toolbar flex items-center gap-2">
+            <a href="admin_pages.html" title="Pages &amp; Buttons" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-th-large"></i></a>
+            <a href="admin_settings.html" title="Global Settings" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-cog"></i></a>
+            <a href="user_current_admin.html" title="User Current Location" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-map-marker-alt"></i></a>
+            <a href="user_info_admin.html" title="User Info &amp; Birthdays" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-info-circle"></i></a>
+            <a href="user_diary_admin.html" title="User Diary" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-book-open"></i></a>
+            <a href="audio_admin.html" title="Audio Devices" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-volume-up"></i></a>
+            <a href="favorites_admin.html" title="Event Sources" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-star"></i></a>
+            <a href="admin_audit_report.html" title="Activity Reports" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-clipboard-list"></i></a>
+            <span class="border-l border-white h-6 mx-1"></span>
+            <button id="switch-user-button" title="Switch User Profile" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-users"></i></button>
+            <button id="logout-button" title="Logout" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-sign-out-alt"></i></button>
+            <button id="help-icon" title="Help" aria-label="Help" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full ml-2 transition-colors duration-200 text-base hover:bg-orange-100 focus:outline-none focus:ring-2 focus:ring-orange-500">
+                <i class="fas fa-question-circle"></i>
+            </button>
+        </div>
+    </div>
+
+    <div class="container mx-auto mt-6 p-4 space-y-6">
+
+        <!-- Current Mood Section -->
+        <div class="bg-blue-50 p-6 rounded-lg shadow-lg border-l-4 border-blue-500">
+            <h2 class="text-2xl font-bold text-gray-800 mb-6 border-b pb-2 flex items-center">
+                <i class="fas fa-smile mr-3 text-blue-600"></i>Current Mood
+            </h2>
+            <div class="space-y-4">
+                <div>
+                    <label for="currentMood" class="block text-lg font-medium text-gray-700 mb-2">Current Session Mood</label>
+                    <select id="currentMood" name="currentMood" class="w-full max-w-md px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                        <option value="">No mood selected</option>
+                        <!-- Mood options will be populated dynamically -->
+                    </select>
+                    <p class="text-xs text-gray-500 mt-1">Set the current mood to personalize AI responses. This affects how the assistant interacts with you.</p>
+                </div>
+                <div class="flex space-x-3">
+                    <button type="button" id="saveMoodBtn" class="button-primary">
+                        <i class="fas fa-save mr-2"></i>Save Mood
+                    </button>
+                    <button type="button" id="clearMoodBtn" class="button-secondary">
+                        <i class="fas fa-times mr-2"></i>Clear Mood
+                    </button>
+                    <span id="mood-save-status" class="text-sm text-green-600 ml-4 h-4 inline-block"></span>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-white p-6 rounded-lg shadow-lg">
+            <div class="mb-6 border-b pb-4">
+                <h2 class="text-2xl font-bold text-gray-800 mb-2">User Information</h2>
+                <p class="text-sm text-gray-600 mb-4">Use the optional Interview feature below or input information manually</p>
+                <button type="button" id="startInterviewButton" class="bg-green-600 hover:bg-green-700 text-white font-semibold px-6 py-3 rounded-lg shadow-md transition-colors duration-200 flex items-center">
+                    <i class="fas fa-microphone mr-2"></i> Start Audio Interview
+                </button>
+            </div>
+            <form id="user-info-form">
+                <div class="space-y-6">
+                    <div>
+                        <label for="userName" class="block text-lg font-medium text-gray-700 mb-2">User's Name</label>
+                        <input type="text" id="userName" name="userName" placeholder="Enter the user's preferred name" class="max-w-md">
+                        <p class="text-xs text-gray-500 mt-1">This name will be used for pronouns and possessive references (I, me, myself, mine).</p>
+                    </div>
+
+                    <!-- Profile Image Section -->
+                    <div>
+                        <label class="block text-lg font-medium text-gray-700 mb-2">
+                            <i class="fas fa-user-circle mr-2 text-blue-600"></i>Profile Picture
+                        </label>
+                        <p class="text-sm text-gray-600 mb-4">
+                            Upload a profile picture that will be used for the user's name and personal pronouns (I, me, myself, mine, etc.)
+                        </p>
+                        
+                        <!-- Current Profile Image Display -->
+                        <div id="currentProfileImageContainer" class="mb-4" style="display: none;">
+                            <div class="flex items-center gap-4 p-3 bg-gray-50 rounded-lg border">
+                                <img id="currentProfileImage" src="" alt="Current Profile Picture" class="w-16 h-16 object-cover rounded-full border-2 border-gray-300">
+                                <div>
+                                    <p class="text-sm font-medium text-gray-700">Current Profile Picture</p>
+                                    <p class="text-xs text-gray-500">Used for personal pronouns and identity</p>
+                                </div>
+                                <button type="button" id="removeProfileImageBtn" class="button-danger px-3 py-1 text-xs ml-auto">
+                                    <i class="fas fa-trash mr-1"></i>Remove
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Upload New Profile Image -->
+                        <div id="uploadProfileImageContainer" class="space-y-3">
+                            <div>
+                                <input type="file" id="profileImageFile" accept="image/*" class="w-full p-2 border border-gray-300 rounded-md">
+                            </div>
+                            <button type="button" id="uploadProfileImageBtn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold px-8 py-4 rounded-lg shadow-lg transition-colors duration-200 text-lg flex items-center">
+                                <i class="fas fa-upload mr-3 text-xl"></i>Upload Profile Picture
+                            </button>
+                        </div>
+                        
+                        <span id="profile-image-status" class="text-sm text-green-600 h-4 inline-block mt-2"></span>
+                    </div>
+
+                    <div>
+                        <label for="user-info" class="block text-lg font-medium text-gray-700 mb-2">User Narrative (Admin Input)</label>
+                        <textarea id="user-info" name="user-info" rows="10" placeholder="Enter a complete user story including personality, history, interests, preferences, favorites, family, pets, and any other relevant details. This helps personalize responses." class="w-full"></textarea>
+                        <p class="text-xs text-gray-500 mt-1">Include as much relevant detail as possible to create a comprehensive narrative about the user.</p>
+                    </div>
+
+                    <div class="border border-blue-200 rounded-lg p-4 bg-blue-50">
+                        <div class="flex items-center justify-between mb-2">
+                            <div>
+                                <h3 class="text-lg font-semibold text-blue-800">AI Option Overrides</h3>
+                                <p class="text-xs text-blue-700">Define hard include/exclude rules for generated AAC options.</p>
+                            </div>
+                            <button type="button" id="openAiOverridesModalBtn" class="bg-blue-600 hover:bg-blue-700 text-white font-bold px-6 py-3 rounded-lg shadow-lg transition-colors duration-200 text-base flex items-center">
+                                <i class="fas fa-shield-alt mr-2"></i>AI Option Overrides
+                            </button>
+                        </div>
+                        <p class="text-xs text-gray-600">These overrides are profile-specific and are applied to AI option generation and filtering.</p>
+                    </div>
+
+                    <!-- AI-Extracted Narrative from Chat History -->
+                    <div class="border-2 border-purple-200 rounded-lg p-4 bg-purple-50">
+                        <div class="flex items-center justify-between mb-2">
+                            <label class="block text-lg font-medium text-purple-700">
+                                <i class="fas fa-robot mr-2"></i>AI-Extracted Narrative (from Chat History)
+                            </label>
+                            <button type="button" id="refreshChatNarrativeBtn" class="px-3 py-1 text-xs bg-purple-600 hover:bg-purple-700 text-white rounded transition-colors">
+                                <i class="fas fa-sync-alt mr-1"></i>Refresh
+                            </button>
+                        </div>
+                        
+                        <div id="chat-narrative-content" class="space-y-3">
+                            <div id="chat-narrative-loading" class="text-gray-500 italic">Loading...</div>
+                            
+                            <!-- Narrative Text -->
+                            <div id="chat-narrative-text-section" class="hidden">
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Summary</label>
+                                <textarea id="chat-narrative-text" rows="4" class="w-full text-sm bg-white" placeholder="No narrative extracted yet. Run the chat history processor to extract insights."></textarea>
+                            </div>
+                            
+                            <!-- Extracted Facts -->
+                            <div id="chat-facts-section" class="hidden">
+                                <label class="block text-sm font-medium text-gray-700 mb-1">
+                                    Extracted Facts (<span id="facts-count">0</span>)
+                                </label>
+                                <div id="chat-facts-list" class="space-y-2 max-h-48 overflow-y-auto"></div>
+                            </div>
+                            
+                            <!-- Answered Questions -->
+                            <div id="chat-questions-section" class="hidden">
+                                <label class="block text-sm font-medium text-gray-700 mb-1">
+                                    Known Preferences (<span id="questions-count">0</span>)
+                                </label>
+                                <div id="chat-questions-list" class="grid grid-cols-2 gap-2 text-sm"></div>
+                            </div>
+                            
+                            <!-- Recent Greetings -->
+                            <div id="chat-greetings-section" class="hidden">
+                                <label class="block text-sm font-medium text-gray-700 mb-1">Recent Greetings</label>
+                                <div id="chat-greetings-list" class="flex flex-wrap gap-2"></div>
+                            </div>
+                        </div>
+                        
+                        <div class="mt-3 flex gap-2 text-xs text-gray-600">
+                            <span id="chat-narrative-meta">
+                                Last updated: <span id="chat-narrative-updated">Never</span> | 
+                                Source: <span id="chat-narrative-message-count">0</span> messages
+                            </span>
+                        </div>
+                        
+                        <p class="text-xs text-purple-600 mt-2">
+                            <i class="fas fa-info-circle mr-1"></i>
+                            This narrative is automatically extracted from chat messages older than 7 days. 
+                            It captures user preferences, personal facts, and communication patterns.
+                        </p>
+                    </div>
+
+                    <div>
+                        <label for="userBirthdate" class="block text-lg font-medium text-gray-700 mb-2">User's Birthday</label>
+                        <input type="date" id="userBirthdate" name="userBirthdate" class="max-w-xs">
+                        <p class="text-xs text-gray-500 mt-1">Include the year to calculate age.</p>
+                    </div>
+
+                </div>
+                <div class="mt-8 flex gap-4">
+                    <button type="button" id="saveInfoButton" class="bg-blue-600 hover:bg-blue-700 text-white font-bold px-8 py-4 rounded-lg shadow-lg transition-colors duration-200 text-lg flex items-center">
+                         <i class="fas fa-save mr-3 text-xl"></i> Save User Name, Info & Birthday
+                    </button>
+                    <span id="info-save-status" class="text-sm text-green-600 ml-4 h-4 inline-block"></span>
+                </div>
+            </form>
+        </div>
+
+        <div class="bg-white p-6 rounded-lg shadow-lg">
+            <div class="flex justify-between items-center mb-6 border-b pb-2">
+                <h2 class="text-2xl font-bold text-gray-800">Family & Friends</h2>
+                <button type="button" id="manageRelationshipsBtn" class="button-secondary">
+                    <i class="fas fa-cog mr-2"></i> Manage Relationship Types
+                </button>
+            </div>
+
+            <!-- Add Person Interview -->
+            <div class="mb-6 p-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg border-2 border-blue-300">
+                <h3 class="text-lg font-semibold text-blue-800 mb-1">
+                    <i class="fas fa-microphone mr-2"></i>Use Optional Interview Feature to Add Family Members and Friends
+                </h3>
+                <p class="text-sm text-gray-600 mb-3">Or add and update members manually below</p>
+                <button type="button" id="startFamilyFriendsInterviewBtn" class="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold px-6 py-3 rounded-lg shadow-lg transition-all duration-200 hover:scale-105 flex items-center">
+                    <i class="fas fa-microphone mr-2"></i>Start Interview
+                </button>
+            </div>
+
+            <!-- Friends & Family Table -->
+            <div>
+                 <p class="text-sm text-gray-600 mb-4">Add people important to you with their relationship, background info, and birthdays.</p>
+                 <table id="friendsFamilyTable" class="min-w-full divide-y divide-gray-200 border border-gray-200">
+                     <thead class="bg-gray-50">
+                         <tr>
+                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-1/5">Name</th> 
+                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-1/6">Relationship</th>  
+                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-2/5">About</th>
+                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-1/6">Birthday (MM-DD)</th>
+                             <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-1/6">Action</th> 
+                         </tr>
+                     </thead>
+                     <tbody id="friendsFamilyTbody" class="bg-white divide-y divide-gray-200">
+                         <tr>
+                             <td class="px-4 py-2">
+                                 <input type="text" placeholder="Name" class="border px-2 py-1 w-full text-sm">
+                             </td>
+                             <td class="px-4 py-2">
+                                 <select class="border px-2 py-1 w-full text-sm relationship-select">
+                                     <option value="">Select...</option>
+                                     <!-- Options will be populated dynamically -->
+                                 </select>
+                             </td>
+                             <td class="px-4 py-2">
+                                 <textarea placeholder="Background, interests, etc." class="border px-2 py-1 w-full text-sm resize-none" rows="2"></textarea>
+                             </td>
+                             <td class="px-4 py-2">
+                                 <input type="text" placeholder="MM-DD" pattern="\d{2}-\d{2}" maxlength="5" class="border px-2 py-1 w-full text-sm">
+                             </td>
+                             <td class="px-4 py-2">
+                                 <button class="button-danger px-2 py-1 text-xs">
+                                     <i class="fas fa-trash mr-1"></i>Delete
+                                 </button>
+                             </td>
+                         </tr>
+                     </tbody>
+                 </table>
+                 <button type="button" id="addFriendsFamilyRow" class="button-success mt-4">
+                     <i class="fas fa-plus mr-2"></i> Add Person
+                 </button>
+            </div>
+
+             <div class="mt-8">
+                 <button type="button" id="saveFriendsFamilyButton" class="bg-blue-600 hover:bg-blue-700 text-white font-bold px-8 py-4 rounded-lg shadow-lg transition-colors duration-200 text-lg flex items-center">
+                      <i class="fas fa-users mr-3 text-xl"></i> Save Family & Friends
+                 </button>
+                 <span id="friends-family-save-status" class="text-sm text-green-600 ml-4 h-4 inline-block"></span>
+             </div>
+        </div>
+
+    </div>
+
+    <!-- Custom Images Section -->
+    <div class="bg-white p-6 rounded-lg shadow-lg mt-6">
+        <div class="flex justify-between items-center mb-6 border-b pb-2">
+            <h2 class="text-2xl font-bold text-gray-800">Custom Images</h2>
+            <div class="flex space-x-2">
+                <button type="button" id="refreshCustomImagesBtn" class="button-secondary">
+                    <i class="fas fa-sync mr-2"></i> Refresh
+                </button>
+            </div>
+        </div>
+
+        <!-- Upload New Image -->
+        <div class="mb-6 p-4 bg-green-50 rounded-lg border border-green-200">
+            <h3 class="text-lg font-semibold text-green-800 mb-2">
+                <i class="fas fa-upload mr-2"></i>Upload Custom Image
+            </h3>
+            <p class="text-sm text-green-700 mb-4">
+                Upload a custom image for this profile. You can assign tags that will be used to match this image to buttons. 
+                For example, use a person's name from your Family & Friends list, or descriptive terms like "home", "school", or "favorite toy".
+            </p>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <!-- Left Column: Upload -->
+                <div>
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Select Image File</label>
+                        <input type="file" id="customImageFile" accept="image/*" class="w-full p-2 border border-gray-300 rounded-md">
+                        <p class="text-xs text-gray-500 mt-1">Supported: JPG, PNG, WebP (max 5MB)</p>
+                    </div>
+                </div>
+
+                <!-- Right Column: Tag and Upload -->
+                <div>
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Primary Tag</label>
+                        <input type="text" id="customImagePrimaryTag" placeholder="e.g., mom, dad, home, school" class="w-full p-2 border border-gray-300 rounded-md">
+                        <p class="text-xs text-gray-500 mt-1">Tag for matching to buttons (e.g., family member name)</p>
+                    </div>
+                    
+                    <button type="button" id="uploadCustomImageBtn" class="button-success w-full">
+                        <i class="fas fa-cloud-upload-alt mr-2"></i>Upload Image
+                    </button>
+                </div>
+            </div>
+
+            <!-- Upload Progress -->
+            <div id="uploadProgress" class="hidden mt-4">
+                <div class="flex items-center space-x-2">
+                    <div class="w-full bg-gray-200 rounded-full h-2">
+                        <div id="uploadProgressBar" class="bg-blue-600 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                    </div>
+                    <span id="uploadProgressText" class="text-sm text-gray-600">0%</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Custom Images List -->
+        <div>
+            <h3 class="text-lg font-semibold text-gray-800 mb-4">Uploaded Custom Images</h3>
+            <div id="customImagesList" class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-4">
+                <!-- Custom images will be loaded here -->
+                <div class="text-center text-gray-500 col-span-full">
+                    <i class="fas fa-images text-4xl mb-2"></i>
+                    <p>No custom images uploaded yet</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Save Status -->
+        <div class="mt-6">
+            <span id="custom-images-status" class="text-sm text-green-600 h-4 inline-block"></span>
+        </div>
+    </div>
+
+    </div> 
+
+    <!-- Relationship Management Modal -->
+    <div id="relationshipModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full hidden z-50">
+        <div class="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+            <div class="mt-3">
+                <h3 class="text-lg font-medium text-gray-900 text-center mb-4">Manage Relationship Types</h3>
+                
+                <!-- Add new relationship -->
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Add New Relationship Type</label>
+                    <div class="flex space-x-2">
+                        <input type="text" id="newRelationship" placeholder="Enter relationship type" class="flex-1">
+                        <button type="button" id="addRelationshipBtn" class="button-success px-3 py-2">
+                            <i class="fas fa-plus"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Current relationships -->
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Current Relationship Types</label>
+                    <div id="relationshipsList" class="max-h-40 overflow-y-auto space-y-2">
+                        <!-- Relationship tags will be populated here -->
+                    </div>
+                </div>
+
+                <!-- Modal buttons -->
+                <div class="flex justify-end space-x-2 mt-6">
+                    <button type="button" id="closeModalBtn" class="button-secondary">
+                        Close
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- AI Option Overrides Modal -->
+    <div id="aiOverridesModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full hidden z-50">
+        <div class="relative top-10 mx-auto p-5 border w-[720px] shadow-lg rounded-md bg-white">
+            <div class="mt-2">
+                <h3 class="text-xl font-semibold text-gray-900 mb-4">AI Option Overrides</h3>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div class="border rounded-lg p-4 bg-red-50">
+                        <h4 class="text-lg font-semibold text-red-800 mb-3">Exclusions</h4>
+
+                        <p class="text-sm font-medium text-red-700 mb-2">Activities to Exclude</p>
+                        <div class="space-y-2 text-sm">
+                            <label class="flex items-center"><input type="checkbox" id="ovr_excl_eatingByMouth" class="mr-2">Eating by mouth</label>
+                            <label class="flex items-center"><input type="checkbox" id="ovr_excl_eatingIndependently" class="mr-2">Eating independently</label>
+                            <label class="flex items-center"><input type="checkbox" id="ovr_excl_drinkingByMouth" class="mr-2">Drinking by mouth</label>
+                            <label class="flex items-center"><input type="checkbox" id="ovr_excl_drinkingIndependently" class="mr-2">Drinking independently</label>
+                            <label class="flex items-center"><input type="checkbox" id="ovr_excl_walkingIndependently" class="mr-2">Walking independently</label>
+                            <label class="flex items-center"><input type="checkbox" id="ovr_excl_toiletingIndependently" class="mr-2">Toileting independently</label>
+                            <label class="flex items-center"><input type="checkbox" id="ovr_excl_readingIndependently" class="mr-2">Reading independently</label>
+                        </div>
+
+                        <p class="text-sm font-medium text-red-700 mt-4 mb-2">Allergies</p>
+                        <div class="space-y-2">
+                            <div>
+                                <label for="ovr_excl_foodAllergies" class="block text-xs text-gray-700 mb-1">Food Allergies</label>
+                                <input type="text" id="ovr_excl_foodAllergies" class="w-full text-sm" placeholder="e.g., peanuts, dairy, shellfish">
+                            </div>
+                            <div>
+                                <label for="ovr_excl_environmentalAllergies" class="block text-xs text-gray-700 mb-1">Environmental Allergies</label>
+                                <input type="text" id="ovr_excl_environmentalAllergies" class="w-full text-sm" placeholder="e.g., pollen, cats, dust">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="border rounded-lg p-4 bg-green-50">
+                        <h4 class="text-lg font-semibold text-green-800 mb-3">Inclusions (Allow)</h4>
+                        <p class="text-sm text-green-700 mb-2">These can override default AI safety/topic restrictions.</p>
+                        <div class="space-y-2 text-sm">
+                            <label class="flex items-center"><input type="checkbox" id="ovr_inc_profanity" class="mr-2">Profanity</label>
+                            <label class="flex items-center"><input type="checkbox" id="ovr_inc_adultTopics" class="mr-2">Adult topics</label>
+                            <label class="flex items-center"><input type="checkbox" id="ovr_inc_adultJokes" class="mr-2">Adult jokes</label>
+                            <label class="flex items-center"><input type="checkbox" id="ovr_inc_religion" class="mr-2">Religion</label>
+                            <label class="flex items-center"><input type="checkbox" id="ovr_inc_politics" class="mr-2">Politics</label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex justify-end space-x-2 mt-6">
+                    <button type="button" id="cancelAiOverridesBtn" class="button-secondary">Cancel</button>
+                    <button type="button" id="saveAiOverridesBtn" class="button-primary">
+                        <i class="fas fa-save mr-2"></i>Save Overrides
+                    </button>
+                </div>
+                <div class="mt-3">
+                    <span id="ai-overrides-save-status" class="text-sm text-green-600"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Audio Interview Modal -->
+    <div id="audioInterviewModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white p-8 rounded-2xl shadow-2xl w-[90vw] max-w-4xl max-h-[90vh] mx-2 relative flex flex-col">
+            <button id="closeInterviewModal" class="absolute top-4 right-6 text-gray-500 hover:text-red-500 text-3xl font-bold focus:outline-none" aria-label="Close Interview">&times;</button>
+            
+            <div class="flex justify-between items-center mb-6">
+                <h2 class="text-3xl font-bold text-gray-800">Audio User Interview</h2>
+                <div class="flex items-center space-x-4">
+                    <span id="interviewProgress" class="text-sm text-gray-600">Question 0 of 0</span>
+                    <button id="pauseResumeBtn" class="button-secondary hidden">
+                        <i class="fas fa-pause"></i> Pause
+                    </button>
+                </div>
+            </div>
+            
+            <!-- Interview Status -->
+            <div class="bg-gray-100 p-4 rounded-lg mb-6">
+                <div class="flex items-center space-x-3 mb-2">
+                    <div id="interviewStatus" class="flex items-center space-x-2">
+                        <i class="fas fa-microphone text-blue-600"></i>
+                        <span class="text-sm font-medium text-gray-700">Ready to start interview</span>
+                    </div>
+                </div>
+                <div id="currentQuestion" class="text-lg font-medium text-gray-800 mb-3">
+                    Welcome! I'll ask you some questions to learn about this user. Click "Start Interview" when you're ready.
+                </div>
+                <div class="flex items-center space-x-4">
+                    <button id="startInterviewBtn" class="button-success">
+                        <i class="fas fa-play"></i> Start Interview
+                    </button>
+                    <button id="skipQuestionBtn" class="button-secondary hidden">
+                        <i class="fas fa-forward"></i> Skip Question
+                    </button>
+                    <button id="repeatQuestionBtn" class="button-secondary hidden">
+                        <i class="fas fa-redo"></i> Repeat Question
+                    </button>
+                </div>
+            </div>
+
+            <!-- Voice Recognition Feedback -->
+            <div id="voiceRecognitionFeedback" class="bg-blue-50 border border-blue-200 p-4 rounded-lg mb-6 hidden">
+                <div class="flex items-center space-x-2 mb-2">
+                    <i class="fas fa-microphone-alt text-blue-600"></i>
+                    <span class="text-sm font-medium text-blue-800">Listening for your response...</span>
+                </div>
+                <div id="recognizedText" class="text-gray-700 italic min-h-[60px] p-2 bg-white rounded border">
+                    (Your speech will appear here as you talk)
+                </div>
+                <div class="mt-3 flex space-x-3">
+                    <button id="confirmResponseBtn" class="button-primary hidden">
+                        <i class="fas fa-check"></i> Confirm Response
+                    </button>
+                    <button id="retryResponseBtn" class="button-secondary hidden">
+                        <i class="fas fa-microphone"></i> Try Again
+                    </button>
+                </div>
+            </div>
+
+            <!-- Interview Progress -->
+            <div class="flex-1 overflow-y-auto bg-gray-50 p-4 rounded-lg">
+                <h3 class="text-lg font-semibold text-gray-800 mb-3">Interview Progress</h3>
+                <div id="interviewLog" class="space-y-3">
+                    <p class="text-gray-600 italic">Questions and answers will appear here as we progress through the interview.</p>
+                </div>
+            </div>
+
+            <!-- Interview Controls -->
+            <div class="mt-6 flex justify-between items-center">
+                <div class="flex space-x-3">
+                    <button id="saveInterviewProgressBtn" class="button-secondary">
+                        <i class="fas fa-save"></i> Save Progress
+                    </button>
+                    <button id="restartInterviewBtn" class="button-danger">
+                        <i class="fas fa-redo"></i> Restart Interview
+                    </button>
+                </div>
+                <div class="flex space-x-3">
+                    <button id="generateNarrativeBtn" class="button-success hidden">
+                        <i class="fas fa-file-text"></i> Generate User Profile
+                    </button>
+                    <button id="closeInterviewBtn" class="button-secondary">
+                        Close Interview
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom Image Management Modal -->
+    <div id="customImageModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full hidden z-50">
+        <div class="relative top-20 mx-auto p-5 border w-[600px] shadow-lg rounded-md bg-white">
+            <div class="mt-3">
+                <h3 class="text-lg font-medium text-gray-900 text-center mb-4">Manage Custom Image</h3>
+                
+                <!-- Image Preview -->
+                <div class="mb-4 text-center">
+                    <img id="modalImagePreview" src="" alt="Custom Image" class="max-w-full max-h-48 mx-auto rounded-lg border">
+                </div>
+
+                <!-- Edit Form -->
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-2">Primary Tag</label>
+                    <input type="text" id="modalPrimaryTag" placeholder="e.g., mom, dad, home, school" class="w-full p-2 border border-gray-300 rounded-md">
+                    <p class="text-xs text-gray-500 mt-1">Tag used for matching to buttons</p>
+                </div>
+
+                <!-- Modal buttons -->
+                <div class="flex justify-between space-x-2 mt-6">
+                    <button type="button" id="deleteCustomImageBtn" class="button-danger">
+                        <i class="fas fa-trash mr-2"></i>Delete Image
+                    </button>
+                    <div class="flex space-x-2">
+                        <button type="button" id="closeCustomImageModalBtn" class="button-secondary">
+                            Cancel
+                        </button>
+                        <button type="button" id="saveCustomImageBtn" class="button-primary">
+                            <i class="fas fa-save mr-2"></i>Save Changes
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Update page title when admin context is ready
+        document.addEventListener('adminUserContextReady', async function() {
+            if (window.updatePageTitleWithProfile) {
+                await window.updatePageTitleWithProfile('User Info & Birthdays Administration');
+            }
+        });
+
+        // Firebase Authentication Setup
+        let firebaseApp = null;
+        let authInitialized = false;
+
+        // Initialize Firebase and authentication
+        async function initializeFirebaseAndAuth() {
+            try {
+                console.log('Initializing Firebase...');
+                
+                // 1. Fetch Firebase config dynamically
+                let firebaseConfig;
+                try {
+                    const configResponse = await fetch('/api/frontend-config');
+                    const configData = await configResponse.json();
+                    firebaseConfig = configData.firebase_config || configData;
+                    if (!firebaseConfig || !firebaseConfig.apiKey) throw new Error('Invalid config from server.');
+                } catch (error) {
+                    console.error('Failed to fetch Firebase config from server:', error);
+                    alert('Failed to load Firebase configuration.');
+                    return;
+                }
+
+                // 2. Initialize Firebase
+                firebaseApp = firebase.initializeApp(firebaseConfig);
+                console.log(`Firebase initialized for project: ${firebaseConfig.projectId}`);
+                
+                // 3. Now check authentication
+                checkAuthentication();
+            } catch (error) {
+                console.error('Firebase initialization failed:', error);
+                alert('Firebase initialization failed: ' + error.message);
+            }
+        }
+
+        // Check if user is authenticated
+        function checkAuthentication() {
+            console.log('Checking authentication...');
+            
+            firebase.auth().onAuthStateChanged(async (user) => {
+                if (user) {
+                    const currentAacUserId = sessionStorage.getItem("currentAacUserId");
+                    const tokenFromUser = await user.getIdToken();
+                    sessionStorage.setItem("firebaseIdToken", tokenFromUser);
+
+                    if (!currentAacUserId) {
+                        console.warn("No AAC User ID found in session. Redirecting to auth page for user selection.");
+                        window.location.href = '/auth.html';
+                        return;
+                    }
+
+                    // Set up global variables for authentication
+                    window.currentAacUserId = currentAacUserId;
+                    window.authToken = tokenFromUser;
+                    
+                    console.log('Authentication successful, user ID:', currentAacUserId);
+                    
+                    // Set up authenticated fetch function
+                    window.authenticatedFetch = function(url, options = {}) {
+                        const isFormData = options.body instanceof FormData;
+                        const headers = {
+                            // Don't set Content-Type for FormData — browser sets multipart boundary automatically
+                            ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
+                            ...options.headers
+                        };
+                        
+                        if (window.authToken) {
+                            headers['Authorization'] = `Bearer ${window.authToken}`;
+                        }
+                        
+                        if (window.currentAacUserId) {
+                            headers['X-User-ID'] = window.currentAacUserId;
+                        }
+                        
+                        // Handle admin context if present
+                        const adminTargetAccountId = sessionStorage.getItem('adminTargetAccountId');
+                        if (adminTargetAccountId) {
+                            headers['X-Admin-Target-Account'] = adminTargetAccountId;
+                        }
+                        
+                        return fetch(url, {
+                            ...options,
+                            headers: headers
+                        });
+                    };
+                    
+                    authInitialized = true;
+                    
+                    // Trigger event that auth context is ready
+                    document.dispatchEvent(new CustomEvent('adminUserContextReady'));
+                    
+                } else {
+                    console.log("User not logged in, redirecting to auth page");
+                    window.location.href = '/auth.html?redirect=' + encodeURIComponent(window.location.pathname);
+                }
+            });
+        }
+
+        // Initialize on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeFirebaseAndAuth();
+        });
+    </script>
+
+    <!-- Audio Interview System -->
+    <script src="/static/audio-interview-system.js"></script>
+
+    <!-- Interactive Guide Window -->
+    <div id="interactive-guide">
+        <div class="guide-header">
+            <div>
+                <h3 id="guide-title" class="text-lg font-semibold">Setup Guide</h3>
+                <p id="guide-progress" class="text-sm opacity-90">Step 1 of 5</p>
+            </div>
+            <button id="guide-close" class="text-white hover:text-gray-200 text-xl">&times;</button>
+        </div>
+        <div id="guide-content" class="guide-content">
+            <!-- Dynamic content -->
+        </div>
+        <div class="guide-controls">
+            <button id="guide-prev" class="guide-btn guide-btn-secondary">
+                <i class="fas fa-arrow-left mr-1"></i> Previous
+            </button>
+            <button id="guide-next" class="guide-btn guide-btn-primary">
+                Next <i class="fas fa-arrow-right ml-1"></i>
+            </button>
+        </div>
+        <div class="guide-step-indicator" id="guide-step-indicator"></div>
+    </div>
+
+    <script>
+        const interactiveGuide = {
+            currentTask: null,
+            currentStep: 0,
+            
+            guideData: {
+                'add-family-friends': {
+                    title: 'Family and Friends Info',
+                    steps: [
+                        {
+                            title: 'Unlock Admin Toolbar',
+                            icon: 'fa-unlock',
+                            content: `
+                                <p class="text-gray-700 mb-3">First, ensure the Admin toolbar is unlocked to access User Info.</p>
+                                <div class="bg-blue-50 border-l-4 border-blue-500 p-3 mb-3">
+                                    <p class="text-sm mb-2"><i class="fas fa-info-circle text-blue-500 mr-2"></i>Look for the <strong>lock icon</strong> in the top-left corner.</p>
+                                    <p class="text-sm ml-5"><strong>Already unlocked?</strong> If the Admin toolbar buttons (gear, user info, etc.) are visible, the toolbar is already unlocked.</p>
+                                    <p class="text-sm ml-5 mt-1"><strong>Locked?</strong> Click the lock icon and enter the PIN to unlock it.</p>
+                                </div>
+                                <div class="bg-gray-50 border-l-4 border-gray-400 p-3 mb-3">
+                                    <p class="text-sm"><i class="fas fa-key text-gray-600 mr-2"></i><strong>Default PIN:</strong> 1234</p>
+                                    <p class="text-sm mt-1">If you don't have the correct PIN, contact <a href="mailto:admin@talkwithbravo.com" class="text-blue-600 hover:underline">admin@talkwithbravo.com</a></p>
+                                </div>
+                            `,
+                            action: function() {},
+                            cleanup: function() {}
+                        },
+                        {
+                            title: 'Open User Info',
+                            icon: 'fa-info-circle',
+                            content: `
+                                <p class="text-gray-700 mb-3">You're already on the User Info page!</p>
+                                <div class="bg-green-50 border-l-4 border-green-500 p-3">
+                                    <p class="text-sm text-green-700"><i class="fas fa-check-circle text-green-600 mr-2"></i>Scroll down to find the People section</p>
+                                </div>
+                            `,
+                            action: function() {},
+                            cleanup: function() {}
+                        },
+                        {
+                            title: 'Find Family & Friends Section',
+                            icon: 'fa-users',
+                            content: `
+                                <p class="text-gray-700 mb-3">Scroll to the Family & Friends section.</p>
+                                <div class="bg-orange-50 border-l-4 border-orange-500 p-3 mb-3">
+                                    <p class="text-sm"><i class="fas fa-info-circle text-orange-500 mr-2"></i>Look for the Family & Friends section to add family members and friends</p>
+                                </div>
+                            `,
+                            action: function() {
+                                // Try to find and scroll to the friends/family section
+                                const friendsSection = document.querySelector('[id*="friend" i]') || 
+                                                      document.querySelector('[id*="family" i]') ||
+                                                      Array.from(document.querySelectorAll('h2, h3, label')).find(el => 
+                                                          el.textContent.toLowerCase().includes('friend') || 
+                                                          el.textContent.toLowerCase().includes('family')
+                                                      );
+                                if (friendsSection) {
+                                    friendsSection.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                    friendsSection.classList.add('guide-highlight-target');
+                                }
+                            },
+                            cleanup: function() {
+                                document.querySelectorAll('.guide-highlight-target').forEach(el => {
+                                    el.classList.remove('guide-highlight-target');
+                                });
+                            }
+                        },
+                        {
+                            title: 'Add People - Interview Option',
+                            icon: 'fa-microphone',
+                            content: `
+                                <p class="text-gray-700 mb-3">You can add people using the <strong>optional Audio Interview</strong>.</p>
+                                <div class="bg-blue-50 border-l-4 border-blue-500 p-3 mb-3">
+                                    <p class="text-sm font-semibold text-blue-700 mb-2">Recommended: Use Interview</p>
+                                    <p class="text-xs text-gray-600">Click "Add Person with Interview" to have Bravo ask you questions about a family member or friend.</p>
+                                </div>
+                                <div class="bg-yellow-50 border-l-4 border-yellow-500 p-3">
+                                    <p class="text-sm font-semibold text-yellow-700 mb-2">Alternative: Manual Entry</p>
+                                    <p class="text-xs text-gray-600">You can also add people manually in the table below.</p>
+                                </div>
+                            `,
+                            action: function() {
+                                const interviewBtn = document.getElementById('startFamilyFriendsInterviewBtn');
+                                if (interviewBtn) {
+                                    interviewBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                    setTimeout(() => interviewBtn.classList.add('guide-highlight-target'), 500);
+                                }
+                            },
+                            cleanup: function() {
+                                document.querySelectorAll('.guide-highlight-target').forEach(el => {
+                                    el.classList.remove('guide-highlight-target');
+                                });
+                            }
+                        },
+                        {
+                            title: 'Add People - Manual Entry',
+                            icon: 'fa-user-plus',
+                            content: `
+                                <p class="text-gray-700 mb-3">To manually add a family member or friend:</p>
+                                <div class="bg-orange-50 border-l-4 border-orange-500 p-3 mb-3">
+                                    <p class="text-sm font-semibold text-orange-700 mb-2"><i class="fas fa-info-circle text-orange-500 mr-2"></i>Steps to add a person:</p>
+                                    <ol class="text-xs text-gray-700 ml-4 mt-1 space-y-1">
+                                        <li>1. Click the <strong>Add Person</strong> button</li>
+                                        <li>2. Fill out the form fields:</li>
+                                        <ul class="ml-4 mt-1 space-y-1">
+                                            <li>• <strong>Name</strong></li>
+                                            <li>• <strong>Relationship</strong> (mom, dad, friend, etc.)</li>
+                                            <li>• <strong>Short narrative</strong> about the person</li>
+                                            <li>• <strong>Birthdate</strong> (optional)</li>
+                                        </ul>
+                                        <li>3. If needed, click <strong>Manage Relationship Types</strong> to add new relationship types</li>
+                                        <li>4. Click <strong>Save Family & Friends</strong> button to save</li>
+                                    </ol>
+                                </div>
+                                <div class="bg-green-50 border-l-4 border-green-500 p-3">
+                                    <p class="text-xs text-gray-600"><i class="fas fa-check-circle text-green-600 mr-2"></i>Not needed if you used the Audio Interview</p>
+                                </div>
+                            `,
+                            action: function() {
+                                // Highlight Add Person button and Save button
+                                const addPersonBtn = document.querySelector('button[onclick*="addFamilyFriend"]') || 
+                                                    document.querySelector('button:has-text("Add Person")') ||
+                                                    Array.from(document.querySelectorAll('button')).find(btn => 
+                                                        btn.textContent.includes('Add Person') || btn.textContent.includes('Add Family')
+                                                    );
+                                if (addPersonBtn) {
+                                    addPersonBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                    setTimeout(() => addPersonBtn.classList.add('guide-highlight-target'), 500);
+                                }
+                            },
+                            cleanup: function() {
+                                document.querySelectorAll('.guide-highlight-target').forEach(el => {
+                                    el.classList.remove('guide-highlight-target');
+                                });
+                            }
+                        },
+                        {
+                            title: 'Save Information',
+                            icon: 'fa-save',
+                            content: `
+                                <p class="text-gray-700 mb-3">Save the family and friends information.</p>
+                                <div class="bg-green-50 border-l-4 border-green-500 p-3">
+                                    <p class="text-sm text-green-700"><i class="fas fa-check-circle text-green-600 mr-2"></i>Click the "Save Family & Friends" button</p>
+                                </div>
+                            `,
+                            action: function() {
+                                const saveButton = document.getElementById('saveFriendsFamilyButton');
+                                if (saveButton) {
+                                    saveButton.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                    setTimeout(() => saveButton.classList.add('guide-highlight-target'), 500);
+                                }
+                            },
+                            cleanup: function() {
+                                const saveButton = document.getElementById('saveFriendsFamilyButton');
+                                if (saveButton) {
+                                    saveButton.classList.remove('guide-highlight-target');
+                                }
+                            }
+                        }
+                    ]
+                },
+                'create-user-narrative': {
+                    title: 'Create User Narrative',
+                    steps: [
+                        {
+                            title: 'Start Audio Interview',
+                            icon: 'fa-microphone',
+                            content: `
+                                <p class="text-gray-700 mb-3">Click the <strong>"Start Audio Interview"</strong> button to begin an interactive conversation.</p>
+                                <div class="space-y-2 mb-3">
+                                    <div class="bg-blue-50 border-l-4 border-blue-500 p-3">
+                                        <p class="text-sm font-semibold text-blue-700">Recommended Method</p>
+                                        <p class="text-xs text-gray-600">Bravo will ask questions and automatically fill in the user's name, birthday, and complete narrative</p>
+                                    </div>
+                                    <div class="bg-yellow-50 border-l-4 border-yellow-500 p-3">
+                                        <p class="text-sm font-semibold text-yellow-700">Alternative: Manual Entry</p>
+                                        <p class="text-xs text-gray-600">If you prefer, you can skip this and manually enter information in the following steps</p>
+                                    </div>
+                                </div>
+                            `,
+                            action: function() {
+                                // Find and highlight the audio interview button
+                                const audioBtn = document.querySelector('button[onclick*="startAudioInterview"]') ||
+                                               document.querySelector('button[onclick*="AudioInterview"]') ||
+                                               Array.from(document.querySelectorAll('button')).find(btn => 
+                                                   btn.textContent.toLowerCase().includes('audio') && btn.textContent.toLowerCase().includes('interview')
+                                               );
+                                if (audioBtn) {
+                                    audioBtn.classList.add('guide-highlight-target');
+                                    audioBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                    audioBtn.focus();
+                                }
+                            },
+                            cleanup: function() {
+                                document.querySelectorAll('.guide-highlight-target').forEach(el => {
+                                    el.classList.remove('guide-highlight-target');
+                                });
+                            }
+                        },
+                        {
+                            title: 'Using Audio Interview',
+                            icon: 'fa-microphone',
+                            content: `
+                                <p class="text-gray-700 mb-3">The Audio Interview feature is <strong>optional</strong> but highly recommended.</p>
+                                <div class="bg-blue-50 border-l-4 border-blue-500 p-3 mb-3">
+                                    <p class="text-sm font-semibold text-blue-700 mb-2">How it works:</p>
+                                    <p class="text-xs text-gray-600">Bravo will ask a series of questions about the person using the device, including their hobbies, interests, family, pets, and personality traits.</p>
+                                </div>
+                                <div class="bg-green-50 border-l-4 border-green-500 p-3 mb-3">
+                                    <p class="text-sm font-semibold text-green-700 mb-2">Benefits:</p>
+                                    <ul class="list-disc list-inside text-xs text-gray-600 space-y-1">
+                                        <li>Automatically fills Name, Birthday, and Narrative</li>
+                                        <li>Creates a comprehensive user story</li>
+                                        <li>Easier than typing everything manually</li>
+                                    </ul>
+                                </div>
+                                <p class="text-sm text-gray-600">Click the button to start, or click Next to skip and enter information manually.</p>
+                            `,
+                            action: function() {
+                                const audioBtn = document.querySelector('button[onclick*="startAudioInterview"]') ||
+                                               document.querySelector('button[onclick*="AudioInterview"]') ||
+                                               Array.from(document.querySelectorAll('button')).find(btn => 
+                                                   btn.textContent.toLowerCase().includes('audio') && btn.textContent.toLowerCase().includes('interview')
+                                               );
+                                if (audioBtn) {
+                                    audioBtn.classList.add('guide-highlight-target');
+                                    audioBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                    audioBtn.focus();
+                                }
+                            },
+                            cleanup: function() {
+                                document.querySelectorAll('.guide-highlight-target').forEach(el => {
+                                    el.classList.remove('guide-highlight-target');
+                                });
+                            }
+                        },
+                        {
+                            title: 'Inputting User Narrative Directly',
+                            icon: 'fa-user-edit',
+                            content: `
+                                <div class="bg-green-50 border-l-4 border-green-500 p-3 mb-3">
+                                    <p class="text-xs text-gray-600"><i class="fas fa-check-circle text-green-600 mr-2"></i><strong>Not needed if you used Audio Interview</strong> - the narrative is filled automatically</p>
+                                </div>
+                                <p class="text-gray-700 mb-3">If entering manually, include a complete user story in the Narrative field:</p>
+                                <ul class="list-disc list-inside ml-2 space-y-1 text-sm text-gray-700 mb-3">
+                                    <li>Hobbies and interests</li>
+                                    <li>Family members and pets</li>
+                                    <li>Favorite topics and activities</li>
+                                    <li>Personality traits</li>
+                                    <li>Personal history</li>
+                                </ul>
+                                <div class="bg-blue-50 border-l-4 border-blue-500 p-3">
+                                    <p class="text-xs text-gray-600"><i class="fas fa-lightbulb text-blue-600 mr-2"></i>The more detailed, the better Bravo can personalize communication</p>
+                                </div>
+                            `,
+                            action: function() {
+                                const narrativeInput = document.getElementById('user-narrative') || 
+                                                     document.querySelector('textarea[name*="narrative" i]') ||
+                                                     document.querySelector('textarea');
+                                if (narrativeInput) {
+                                    narrativeInput.classList.add('guide-highlight-target');
+                                    narrativeInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                    setTimeout(() => narrativeInput.focus(), 300);
+                                }
+                            },
+                            cleanup: function() {
+                                document.querySelectorAll('.guide-highlight-target').forEach(el => {
+                                    el.classList.remove('guide-highlight-target');
+                                });
+                            }
+                        },
+                        {
+                            title: 'Enter User Name',
+                            icon: 'fa-user',
+                            content: `
+                                <p class="text-gray-700 mb-3">Enter the user's preferred name in the Name field.</p>
+                                <div class="bg-green-50 border-l-4 border-green-500 p-3 mb-2">
+                                    <p class="text-xs text-gray-600"><i class="fas fa-check-circle text-green-600 mr-2"></i><strong>Not needed if you used Audio Interview</strong> - the name is filled automatically</p>
+                                </div>
+                                <div class="bg-blue-50 border-l-4 border-blue-500 p-3">
+                                    <p class="text-xs text-gray-600"><i class="fas fa-lightbulb text-blue-600 mr-2"></i>This is how Bravo will refer to the user</p>
+                                </div>
+                            `,
+                            action: function() {
+                                const nameInput = document.getElementById('user-name') || 
+                                                 document.querySelector('input[name="name"]') ||
+                                                 document.querySelector('input[placeholder*="name" i]');
+                                if (nameInput) {
+                                    nameInput.classList.add('guide-highlight-target');
+                                    nameInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                    // Delay focus to ensure scroll completes
+                                    setTimeout(() => nameInput.focus(), 300);
+                                }
+                            },
+                            cleanup: function() {
+                                document.querySelectorAll('.guide-highlight-target').forEach(el => {
+                                    el.classList.remove('guide-highlight-target');
+                                });
+                            }
+                        },
+                        {
+                            title: 'Set Birthday',
+                            icon: 'fa-birthday-cake',
+                            content: `
+                                <p class="text-gray-700 mb-3">Enter the user's date of birth.</p>
+                                <div class="bg-green-50 border-l-4 border-green-500 p-3 mb-2">
+                                    <p class="text-xs text-gray-600"><i class="fas fa-check-circle text-green-600 mr-2"></i><strong>Not needed if you used Audio Interview</strong> - the birthday is filled automatically</p>
+                                </div>
+                                <div class="bg-yellow-50 border-l-4 border-yellow-500 p-3">
+                                    <p class="text-xs text-gray-600"><i class="fas fa-info-circle text-yellow-600 mr-2"></i>This helps Bravo provide age-appropriate content</p>
+                                </div>
+                            `,
+                            action: function() {
+                                const birthdayInput = document.getElementById('user-birthday') || document.querySelector('input[type="date"]');
+                                if (birthdayInput) {
+                                    birthdayInput.classList.add('guide-highlight-target');
+                                    birthdayInput.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                    birthdayInput.focus();
+                                }
+                            },
+                            cleanup: function() {
+                                document.querySelectorAll('.guide-highlight-target').forEach(el => {
+                                    el.classList.remove('guide-highlight-target');
+                                });
+                            }
+                        },
+                        {
+                            title: 'Save User Information',
+                            icon: 'fa-save',
+                            content: `
+                                <p class="text-gray-700 mb-3">Click the <strong>"Save User Name, Info & Birthday"</strong> button to save all information.</p>
+                                <div class="bg-green-50 border-l-4 border-green-500 p-3">
+                                    <p class="text-sm text-green-700"><i class="fas fa-check-circle text-green-600 mr-2"></i>You should see a success message confirming the save!</p>
+                                </div>
+                            `,
+                            action: function() {
+                                const saveBtn = document.getElementById('save-user-info-btn') || 
+                                               document.querySelector('button[onclick*="saveUserInfo"]') ||
+                                               Array.from(document.querySelectorAll('button')).find(btn => 
+                                                   btn.textContent.includes('Save User')
+                                               );
+                                if (saveBtn) {
+                                    saveBtn.classList.add('guide-highlight-target');
+                                    saveBtn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                }
+                            },
+                            cleanup: function() {
+                                document.querySelectorAll('.guide-highlight-target').forEach(el => {
+                                    el.classList.remove('guide-highlight-target');
+                                });
+                            }
+                        }
+                    ]
+                }
+            },
+            
+            init: function() {
+                // Check localStorage for active guide
+                const savedState = localStorage.getItem('activeGuide');
+                if (savedState) {
+                    const { taskId, stepIndex, taskIndex } = JSON.parse(savedState);
+                    // Store the task index if provided
+                    if (taskIndex !== undefined) {
+                        this.currentTaskIndex = taskIndex;
+                    }
+                    // Small delay to ensure page is fully loaded
+                    setTimeout(() => {
+                        this.start(taskId, stepIndex);
+                    }, 500);
+                }
+                
+                // Setup event listeners
+                document.getElementById('guide-close').addEventListener('click', () => this.close());
+                document.getElementById('guide-prev').addEventListener('click', () => this.previousStep());
+                document.getElementById('guide-next').addEventListener('click', () => this.nextStep());
+            },
+            
+            start: function(taskId, stepIndex = 0) {
+                const task = this.guideData[taskId];
+                if (!task) {
+                    console.error('Task not found:', taskId);
+                    return;
+                }
+                
+                this.currentTask = taskId;
+                this.currentStep = stepIndex;
+                
+                document.getElementById('interactive-guide').style.display = 'block';
+                document.getElementById('guide-title').textContent = task.title;
+                
+                this.showStep();
+            },
+            
+            showStep: function() {
+                const task = this.guideData[this.currentTask];
+                const step = task.steps[this.currentStep];
+                
+                // Cleanup previous step
+                if (this.currentStep > 0) {
+                    const prevStep = task.steps[this.currentStep - 1];
+                    if (prevStep.cleanup) prevStep.cleanup();
+                }
+                
+                // Update progress
+                document.getElementById('guide-progress').textContent = 
+                    `Step ${this.currentStep + 1} of ${task.steps.length}`;
+                
+                // Update content
+                document.getElementById('guide-content').innerHTML = `
+                    <div class="flex items-center gap-3 mb-4">
+                        <div class="w-12 h-12 rounded-full bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center text-white">
+                            <i class="fas ${step.icon} text-xl"></i>
+                        </div>
+                        <h4 class="text-lg font-semibold text-gray-800">${step.title}</h4>
+                    </div>
+                    ${step.content}
+                `;
+                
+                // Update step indicators
+                this.updateStepIndicators();
+                
+                // Update button states
+                document.getElementById('guide-prev').style.display = 
+                    this.currentStep === 0 ? 'none' : 'block';
+                
+                const nextBtn = document.getElementById('guide-next');
+                if (this.currentStep === task.steps.length - 1) {
+                    nextBtn.innerHTML = '<i class="fas fa-check mr-1"></i> Complete';
+                } else {
+                    nextBtn.innerHTML = 'Next <i class="fas fa-arrow-right ml-1"></i>';
+                }
+                
+                // Execute step action
+                if (step.action) {
+                    setTimeout(() => step.action(), 300);
+                }
+                
+                // Save state
+                const savedState = {
+                    taskId: this.currentTask,
+                    stepIndex: this.currentStep
+                };
+                
+                // Include task index if available
+                if (this.currentTaskIndex !== undefined) {
+                    savedState.taskIndex = this.currentTaskIndex;
+                }
+                
+                localStorage.setItem('activeGuide', JSON.stringify(savedState));
+            },
+            
+            updateStepIndicators: function() {
+                const task = this.guideData[this.currentTask];
+                const container = document.getElementById('guide-step-indicator');
+                container.innerHTML = '';
+                
+                for (let i = 0; i < task.steps.length; i++) {
+                    const dot = document.createElement('div');
+                    dot.className = 'step-dot';
+                    if (i === this.currentStep) dot.classList.add('active');
+                    if (i < this.currentStep) dot.classList.add('completed');
+                    container.appendChild(dot);
+                }
+            },
+            
+            nextStep: function() {
+                const task = this.guideData[this.currentTask];
+                
+                if (this.currentStep < task.steps.length - 1) {
+                    this.currentStep++;
+                    this.showStep();
+                } else {
+                    this.complete();
+                }
+            },
+            
+            previousStep: function() {
+                if (this.currentStep > 0) {
+                    this.currentStep--;
+                    this.showStep();
+                }
+            },
+            
+            complete: function() {
+                // Cleanup last step
+                const task = this.guideData[this.currentTask];
+                const lastStep = task.steps[this.currentStep];
+                if (lastStep.cleanup) lastStep.cleanup();
+                
+                console.log('User Info task complete. Current task index BEFORE saving:', this.currentTaskIndex);
+                
+                // Save current task index before checking
+                if (this.currentTaskIndex !== undefined) {
+                    localStorage.setItem('lastCompletedTaskIndex', this.currentTaskIndex.toString());
+                }
+                
+                // Check if this is task 10 (add-family-friends) - the last task before Customize Pages
+                if (this.currentTaskIndex === 10) {
+                    // Show prompt to continue to Customize Pages
+                    document.getElementById('guide-content').innerHTML = `
+                        <div class="text-center py-8">
+                            <div class="w-16 h-16 rounded-full bg-green-500 flex items-center justify-center text-white mx-auto mb-4">
+                                <i class="fas fa-check text-3xl"></i>
+                            </div>
+                            <h4 class="text-xl font-bold text-gray-800 mb-2">Task Complete!</h4>
+                            <p class="text-gray-700 mb-4">You've completed the ${task.title} setup.</p>
+                            <div class="bg-blue-50 border-l-4 border-blue-500 p-4 mb-6 text-left">
+                                <p class="text-sm text-gray-700 mb-2"><strong>Would you like to continue with the next Medium Priority task?</strong></p>
+                                <p class="text-xs text-gray-600">The next task is "Customize Pages and Buttons" which allows you to personalize page layouts and button arrangements.</p>
+                            </div>
+                            <div class="flex gap-3 justify-center">
+                                <button onclick="interactiveGuide.continueToNextTask()" class="px-6 py-3 bg-blue-500 text-white rounded-lg hover:bg-blue-600 transition shadow-lg">
+                                    <i class="fas fa-arrow-right mr-2"></i>Continue to Next Task
+                                </button>
+                                <button onclick="interactiveGuide.endSetup()" class="px-6 py-3 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition">
+                                    <i class="fas fa-times mr-2"></i>Exit User Setup
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                    
+                    document.getElementById('guide-prev').style.display = 'none';
+                    document.getElementById('guide-next').style.display = 'none';
+                    
+                    // Clear active guide but keep task index
+                    localStorage.removeItem('activeGuide');
+                    return;
+                }
+                
+                // Auto-advance for other tasks
+                document.getElementById('guide-content').innerHTML = `
+                    <div class="text-center py-8">
+                        <div class="w-16 h-16 rounded-full bg-green-500 flex items-center justify-center text-white mx-auto mb-4">
+                            <i class="fas fa-check text-3xl"></i>
+                        </div>
+                        <h4 class="text-xl font-semibold text-gray-800 mb-2">Task Complete!</h4>
+                        <p class="text-gray-600">You've completed the ${task.title} setup.</p>
+                        <p class="text-sm text-gray-500 mt-2">Moving to next task...</p>
+                    </div>
+                `;
+                
+                // Clear guide localStorage but save task index for advancement
+                localStorage.removeItem('activeGuide');
+                localStorage.setItem('advanceToNextTask', 'true');
+                
+                // Auto-close after 2 seconds and return to settings to show next task
+                setTimeout(() => {
+                    this.close();
+                    window.location.href = 'admin_settings.html?keepUnlocked=true';
+                }, 2000);
+            },
+            
+            continueToNextTask: function() {
+                console.log('Continue to next task clicked');
+                localStorage.removeItem('activeGuide');
+                localStorage.setItem('advanceToNextTask', 'true');
+                window.location.href = 'admin_settings.html?keepUnlocked=true';
+            },
+            
+            endSetup: function() {
+                console.log('End setup clicked');
+                localStorage.removeItem('activeGuide');
+                localStorage.removeItem('lastCompletedTaskIndex');
+                this.close();
+            },
+            
+            close: function() {
+                const task = this.guideData[this.currentTask];
+                if (task && task.steps[this.currentStep] && task.steps[this.currentStep].cleanup) {
+                    task.steps[this.currentStep].cleanup();
+                }
+                
+                document.getElementById('interactive-guide').style.display = 'none';
+                localStorage.removeItem('activeGuide');
+            }
+        };
+        
+        // Initialize guide when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            interactiveGuide.init();
+            
+            // Check if there's an active guide to resume from another page
+            setTimeout(() => {
+                // Check for continuation from gridpage first
+                const continueGuide = localStorage.getItem('continueGuideOnUserInfo');
+                const savedGuide = localStorage.getItem('activeGuide');
+                
+                console.log('User Info page - checking for guides:');
+                console.log('  - continueGuideOnUserInfo:', continueGuide);
+                console.log('  - activeGuide:', savedGuide);
+                
+                if (continueGuide) {
+                    try {
+                        const continueState = JSON.parse(continueGuide);
+                        console.log('Found continuation state from gridpage:', continueState);
+                        
+                        // Set the task index if provided
+                        if (continueState.taskIndex !== undefined) {
+                            interactiveGuide.currentTaskIndex = continueState.taskIndex;
+                            console.log('Set task index from continuation:', continueState.taskIndex);
+                        }
+                        
+                        // Clear the continuation flag
+                        localStorage.removeItem('continueGuideOnUserInfo');
+                        
+                        // Check if this guide exists in user_info guideData
+                        const task = interactiveGuide.guideData[continueState.taskId];
+                        if (task) {
+                            // Start the detailed guide
+                            console.log('Starting detailed guide:', continueState.taskId);
+                            interactiveGuide.start(continueState.taskId, 0);
+                        } else {
+                            console.error('Task not found in user_info guideData:', continueState.taskId);
+                        }
+                    } catch (e) {
+                        console.error('Error parsing continuation state:', e);
+                    }
+                } else if (savedGuide) {
+                    try {
+                        const guideState = JSON.parse(savedGuide);
+                        console.log('Found active guide to resume:', guideState);
+                        
+                        // Check if the guide exists in user_info guideData
+                        const task = interactiveGuide.guideData[guideState.taskId];
+                        if (task) {
+                            console.log('Resuming guide on User Info page:', guideState.taskId);
+                            interactiveGuide.start(guideState.taskId, guideState.stepIndex || 0);
+                        } else {
+                            // Guide not found - might be from gridpage, start it fresh
+                            console.log('Guide not found, attempting to start fresh:', guideState.taskId);
+                            localStorage.removeItem('activeGuide');
+                            if (guideState.taskId === 'add-family-friends' && interactiveGuide.guideData['add-family-friends']) {
+                                interactiveGuide.start('add-family-friends', 0);
+                            }
+                        }
+                    } catch (e) {
+                        console.error('Error parsing saved guide:', e);
+                    }
+                }
+            }, 500);
+        });
+    </script>
+
+</body>
+</html>

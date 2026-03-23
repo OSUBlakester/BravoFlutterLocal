@@ -1,0 +1,1987 @@
+import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'dart:convert';
+import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter_tts/flutter_tts.dart';
+import 'package:provider/provider.dart';
+import 'services/user_settings_provider.dart';
+import 'services/audio_device_provider.dart';
+import 'services/audio_device_service.dart';
+import 'admin_pages_buttons.dart';
+import 'user_current_admin_page.dart';
+import 'user_info_admin_page.dart';
+import 'user_diary_admin_page.dart';
+import 'admin_settings_scaffold.dart';
+import 'dart:async';
+import 'package:flutter/services.dart';
+import 'package:just_audio/just_audio.dart';
+import 'dart:io';
+import 'audio_device_admin_page.dart';
+import 'services/wake_word_service.dart';
+// import 'package:google_fonts/google_fonts.dart';
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+
+  // Force landscape left for all platforms
+  await SystemChrome.setPreferredOrientations([
+    DeviceOrientation.landscapeLeft,
+  ]);
+  
+  try {
+    print('Starting Firebase initialization...');
+    print('Platform: ${Platform.operatingSystem}');
+    print('Is web: $kIsWeb');
+    
+    if (kIsWeb) {
+      await Firebase.initializeApp(
+        options: const FirebaseOptions(
+          apiKey: "AIzaSyARWoyZuGJPb4DzyKa7SRIj_A25ya7fqPA",
+          authDomain: "bravopoc.firebaseapp.com",
+          projectId: "bravopoc",
+          storageBucket: "bravopoc.firebasestorage.app",
+          messagingSenderId: "374725441777",
+          appId: "1:374725441777:web:af90d3a996d57f91515150",
+        ),
+      );
+    } else {
+      // For iOS/Android, Firebase should auto-configure from GoogleService-Info.plist
+      await Firebase.initializeApp();
+    }
+    print('Firebase initialized successfully');
+    
+    // Verify Firebase is initialized
+    final app = Firebase.app();
+    print('Firebase app name: ${app.name}');
+    print('Firebase project ID: ${app.options.projectId}');
+    
+  } catch (e) {
+    print('Firebase initialization failed: $e');
+    print('Error type: ${e.runtimeType}');
+    
+    // Try fallback initialization for iOS
+    if (!kIsWeb && Platform.isIOS) {
+      try {
+        print('Attempting fallback Firebase initialization for iOS...');
+        await Firebase.initializeApp(
+          options: const FirebaseOptions(
+            apiKey: "AIzaSyDRdMaKezDzfNiPtMMvNMDi_tMBI_YcQGg",
+            appId: "1:374725441777:ios:e7a6f9bca8ed2a54515150",
+            messagingSenderId: "374725441777",
+            projectId: "bravopoc",
+            storageBucket: "bravopoc.firebasestorage.app",
+          ),
+        );
+        print('Fallback Firebase initialization succeeded');
+      } catch (fallbackError) {
+        print('Fallback Firebase initialization also failed: $fallbackError');
+      }
+    }
+  }
+  
+  runApp(const MyApp());
+}
+
+class AuthPage extends StatefulWidget {
+  const AuthPage({super.key});
+
+  @override
+  State<AuthPage> createState() => _AuthPageState();
+}
+
+
+class _AuthPageState extends State<AuthPage> {
+  bool isLogin = true;
+  bool isLoading = false;
+  String error = '';
+
+  final emailController = TextEditingController();
+  final passwordController = TextEditingController();
+  final accountNameController = TextEditingController();
+  final numUsersController = TextEditingController(text: '1');
+  final promoCodeController = TextEditingController();
+  final addressController = TextEditingController();
+  final phoneController = TextEditingController();
+  final therapistEmailController = TextEditingController();
+
+  @override
+  Widget build(BuildContext context) {
+    print('AuthPage build method called');
+    return Scaffold(
+      appBar: AppBar(title: Text(isLogin ? 'Login' : 'Register')),
+      body: Center(
+        child: SingleChildScrollView(
+          child: Container(
+            padding: const EdgeInsets.all(24),
+            constraints: const BoxConstraints(maxWidth: 420),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(12),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black12,
+                  blurRadius: 10,
+                  offset: Offset(0, 4),
+                ),
+              ],
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  isLogin ? 'Login' : 'Register',
+                  style: Theme.of(context).textTheme.headlineSmall,
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: emailController,
+                  decoration: const InputDecoration(labelText: 'Email'),
+                  keyboardType: TextInputType.emailAddress,
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: passwordController,
+                  decoration: const InputDecoration(labelText: 'Password'),
+                  obscureText: true,
+                ),
+                if (!isLogin) ...[
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: accountNameController,
+                    decoration: const InputDecoration(
+                      labelText: 'Account Name',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: numUsersController,
+                    decoration: const InputDecoration(
+                      labelText: 'Number of Users',
+                    ),
+                    keyboardType: TextInputType.number,
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: promoCodeController,
+                    decoration: const InputDecoration(
+                      labelText: 'Promo Code (Optional)',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: addressController,
+                    decoration: const InputDecoration(
+                      labelText: 'Address (Optional)',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: phoneController,
+                    decoration: const InputDecoration(
+                      labelText: 'Phone (Optional)',
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: therapistEmailController,
+                    decoration: const InputDecoration(
+                      labelText: 'Therapist/Admin Email (Optional)',
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 20),
+                if (error.isNotEmpty)
+                  Text(error, style: const TextStyle(color: Colors.red)),
+                if (isLoading)
+                  const Padding(
+                    padding: EdgeInsets.all(8.0),
+                    child: CircularProgressIndicator(),
+                  ),
+                ElevatedButton(
+                  onPressed: isLoading
+                      ? null
+                      : () => isLogin ? handleLogin() : handleRegister(),
+                  child: Text(isLogin ? 'Login' : 'Register'),
+                ),
+                TextButton(
+                  onPressed: isLoading
+                      ? null
+                      : () => setState(() => isLogin = !isLogin),
+                  child: Text(
+                    isLogin
+                        ? "Don't have an account? Register here"
+                        : "Already have an account? Login here",
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> handleLogin() async {
+    setState(() {
+      isLoading = true;
+      error = '';
+    });
+    try {
+      // Check if Firebase is initialized
+      print('Checking Firebase initialization...');
+      try {
+        final app = Firebase.app();
+        print('Firebase app found: ${app.name}, project: ${app.options.projectId}');
+      } catch (e) {
+        print('Firebase not initialized: $e');
+        throw Exception('Firebase not initialized properly. Please restart the app.');
+      }
+      print('Attempting Firebase Auth login...');
+      final userCredential = await FirebaseAuth.instance
+          .signInWithEmailAndPassword(
+            email: emailController.text.trim(),
+            password: passwordController.text.trim(),
+          );
+      final user = userCredential.user;
+      if (user == null) throw Exception('No user returned from Firebase.');
+      final idToken = await user.getIdToken() ?? '';
+      if (idToken.isEmpty) throw Exception('Failed to retrieve ID token.');
+      // Fetch AAC user profiles from backend
+      final response = await http.get(
+        Uri.parse('https://talkwithbravo.com/api/account/users'),
+        headers: {
+          'Authorization': 'Bearer $idToken',
+          'Content-Type': 'application/json',
+        },
+      );
+      if (response.statusCode == 200) {
+        final userProfiles = json.decode(response.body);
+        if (userProfiles is List && userProfiles.isNotEmpty) {
+          // If only one AAC user, auto-select
+          final selectedAacUserId = userProfiles[0]['aac_user_id'];
+          final selectedDisplayName = userProfiles[0]['display_name'];
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (_) => GridPage(
+                idToken: idToken,
+                aacUserId: selectedAacUserId ?? '',
+                displayName: selectedDisplayName,
+              ),
+            ),
+          );
+        } else {
+          setState(() {
+            error = 'No AAC user profiles found for this account.';
+          });
+        }
+      } else {
+        setState(() {
+          error = 'Failed to fetch user profiles (${response.statusCode}).';
+        });
+      }
+    } on FirebaseAuthException catch (e) {
+      setState(() {
+        error = e.message ?? 'Login failed.';
+      });
+    } catch (e) {
+      setState(() {
+        error = e.toString();
+      });
+    } finally {
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
+
+  Future<void> handleRegister() async {
+    setState(() {
+      isLoading = true;
+      error = '';
+    });
+    try {
+      final userCredential = await FirebaseAuth.instance
+          .createUserWithEmailAndPassword(
+            email: emailController.text.trim(),
+            password: passwordController.text.trim(),
+          );
+      final user = userCredential.user;
+      if (user == null) throw Exception('No user returned from Firebase.');
+      final idToken = await user.getIdToken();
+      if (idToken == null || idToken.isEmpty)
+        throw Exception('Failed to retrieve ID token.');
+      // Register account in backend
+      final backendResponse = await http.post(
+        Uri.parse('https://talkwithbravo.com/api/auth/register'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer $idToken',
+        },
+        body: json.encode({
+          'email': emailController.text.trim(),
+          'account_name': accountNameController.text.trim(),
+          'num_users_allowed':
+              int.tryParse(numUsersController.text.trim()) ?? 1,
+          'promo_code': promoCodeController.text.trim().isEmpty
+              ? null
+              : promoCodeController.text.trim(),
+          'address': addressController.text.trim().isEmpty
+              ? null
+              : addressController.text.trim(),
+          'phone': phoneController.text.trim().isEmpty
+              ? null
+              : phoneController.text.trim(),
+          'therapist_email': therapistEmailController.text.trim().isEmpty
+              ? null
+              : therapistEmailController.text.trim(),
+        }),
+      );
+      if (backendResponse.statusCode == 200 ||
+          backendResponse.statusCode == 201) {
+        final backendResult = json.decode(backendResponse.body);
+        final selectedAacUserId = backendResult['first_aac_user_id'];
+        final selectedDisplayName =
+            accountNameController.text.trim() + "'s Device 1";
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(
+            builder: (_) => GridPage(
+              idToken: idToken,
+              aacUserId: selectedAacUserId ?? '',
+              displayName: selectedDisplayName,
+            ),
+          ),
+        );
+      } else {
+        setState(() {
+          error =
+              'Backend registration failed (${backendResponse.statusCode}).';
+        });
+      }
+    } on FirebaseAuthException catch (e) {
+      setState(() {
+        error = e.message ?? 'Registration failed.';
+      });
+    } catch (e) {
+      setState(() {
+        error = e.toString();
+      });
+    } finally {
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
+}
+
+
+final RouteObserver<PageRoute> routeObserver = RouteObserver<PageRoute>();
+// --- End custom widgets ---
+// --- Top-level app classes ---
+
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    print('MyApp build method called');
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider<UserSettingsProvider>(
+          create: (_) =>
+              UserSettingsProvider(apiBaseUrl: 'https://talkwithbravo.com'),
+        ),
+        ChangeNotifierProvider<AudioDeviceProvider>(
+          create: (_) => AudioDeviceProvider(),
+        ),
+      ],
+      child: MaterialApp(
+        title: 'Bravo AAC',
+        theme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
+        ),
+        home: const AuthPage(),
+        routes: {
+          '/admin-settings': (_) => const AdminSettingsPage(),
+          '/admin-pages': (_) => const AdminPagesButtonsPage(),
+          '/admin-user-current': (context) {
+            final settingsProvider = Provider.of<UserSettingsProvider>(
+              context,
+              listen: false,
+            );
+            final idToken = settingsProvider.idToken ?? '';
+            final aacUserId = settingsProvider.userId ?? '';
+            return UserCurrentAdminPage(idToken: idToken, aacUserId: aacUserId);
+          },
+          '/admin-user-info': (context) {
+            final settingsProvider = Provider.of<UserSettingsProvider>(
+              context,
+              listen: false,
+            );
+            final idToken = settingsProvider.idToken ?? '';
+            final aacUserId = settingsProvider.userId ?? '';
+            return UserInfoAdminPage(idToken: idToken, aacUserId: aacUserId);
+          },
+          '/admin-user-diary': (context) {
+            final settingsProvider = Provider.of<UserSettingsProvider>(
+              context,
+              listen: false,
+            );
+            final idToken = settingsProvider.idToken ?? '';
+            final aacUserId = settingsProvider.userId ?? '';
+            return UserDiaryAdminPage(idToken: idToken, aacUserId: aacUserId);
+          },
+          '/admin-audio-devices': (_) => const AudioDeviceAdminPage(),
+        },
+        navigatorObservers: [routeObserver],
+      ),
+    );
+  }
+}
+
+class GridPage extends StatefulWidget {
+  final String idToken;
+  final String aacUserId;
+  final String displayName;
+  const GridPage({
+    super.key,
+    required this.idToken,
+    required this.aacUserId,
+    required this.displayName,
+  });
+
+  @override
+  State<GridPage> createState() => _GridPageState();
+}
+
+class _GridPageState extends State<GridPage> with RouteAware {
+  // --- Prevent scanning until announcement and grid update are complete ---
+  bool _suppressScanning = false;
+  // Orientation lock code removed: always landscape left via platform config
+  // --- Color variables for user settings (defaults, but will use provider if available) ---
+  static const Color kDefaultDarkColor = Color(0xFF002244); // Default dark blue
+  static const Color kDefaultLightColor = Color(0xFFFB4F14); // Default orange
+
+  // --- LLM DEBUGGING ---
+  // Debug: Track every LLM call and every grid update for LLM
+  void debugLogLLM({required String stage, String? prompt, dynamic response, List<Map<String, dynamic>>? gridButtons}) {
+    debugPrint('==== LLM DEBUG [$stage] ====');
+    if (prompt != null) debugPrint('Prompt: $prompt');
+    if (response != null) debugPrint('LLM Response: $response');
+    if (gridButtons != null) debugPrint('Grid Buttons: ${gridButtons.map((b) => b['text']).toList()}');
+    debugPrint('===========================');
+  }
+
+  // --- Auditory scanning methods: must be at the top of the class ---
+  void _maybeStartScanning() {
+    if (_suppressScanning) {
+      debugPrint('maybeStartScanning: scanning suppressed');
+      return;
+    }
+    final settingsProvider = Provider.of<UserSettingsProvider>(context, listen: false);
+    debugPrint('maybeStartScanning: enableAuditoryScanning = \\${settingsProvider.settings?.enableAuditoryScanning}');
+    if (settingsProvider.settings?.enableAuditoryScanning ?? false) {
+      _startAuditoryScanning();
+    } else {
+      _stopAuditoryScanning();
+    }
+  }
+
+  Future<void> _startAuditoryScanning() async {
+    debugPrint('startAuditoryScanning: called, isScanning=' + isScanning.toString());
+    if (isScanning) return;
+    setState(() {
+      isScanning = true;
+      scanningIndex = -1;
+    });
+    final settingsProvider = Provider.of<UserSettingsProvider>(context, listen: false);
+    int delay = settingsProvider.settings?.scanDelay ?? 3500;
+    scanningTimer?.cancel();
+    final audioDeviceProvider = Provider.of<AudioDeviceProvider>(context, listen: false);
+    if (!kIsWeb && Platform.isWindows) {
+      debugPrint('startAuditoryScanning: Routing to personal device: \\${audioDeviceProvider.personalDeviceId}');
+      await AudioDeviceService().playAudioToDevice(
+        audioDeviceProvider.personalDeviceId ?? 'default',
+        isPersonal: true,
+      );
+    }
+    // No force speaker for iOS/Android
+    _scanStep();
+    scanningTimer = Timer.periodic(
+      Duration(milliseconds: delay),
+      (_) => _scanStep(),
+    );
+    gridFocusNode?.requestFocus();
+  }
+
+  void _stopAuditoryScanning() {
+    debugPrint('stopAuditoryScanning: called, isScanning=' + isScanning.toString());
+    setState(() {
+      isScanning = false;
+      scanningTimer?.cancel();
+      scanningIndex = null;
+    });
+  }
+
+  void _scanStep() async {
+    debugPrint('scanStep: called');
+    final definedButtons = gridButtons.where((btn) => (btn['text'] ?? '').toString().trim().isNotEmpty).toList();
+    if (definedButtons.isEmpty) {
+      debugPrint('scanStep: No defined buttons');
+      return;
+    }
+    setState(() {
+      scanningIndex = scanningIndex == null ? 0 : (scanningIndex! + 1) % definedButtons.length;
+    });
+    final btn = definedButtons[scanningIndex!];
+    debugPrint('scanStep: Speaking button text: \\${btn['text'] ?? btn['summary'] ?? btn['option'] ?? ''}');
+    await _speakSystemVoice(btn['text'] ?? btn['summary'] ?? btn['option'] ?? '');
+  }
+  static const platform = MethodChannel('audio_routing');
+
+  // Placeholder for grid data (to be fetched from backend)
+  List<Map<String, dynamic>> gridButtons = [
+    {"text": "Greetings"},
+    {"text": "Feelings"},
+    {"text": "Needs"},
+    {"text": "Questions"},
+    {"text": "About Me"},
+    {"text": "My Day"},
+    {"text": "Current Events"},
+    {"text": "Food"},
+    {"text": "Drink"},
+  ];
+  List<Map<String, dynamic>>?
+  previousGridButtons; // Store previous grid for LLM
+  String? previousPageName; // Store previous page name for LLM
+
+  String speechHistory = '';
+  String questionDisplay = '';
+  bool isLoading = false;
+  late FlutterTts flutterTts;
+  String? statusMessage = '';
+
+  List<String> llmPreviousOptions = [];
+  String? llmOriginalPrompt;
+
+  String currentPageName = 'home'; // Track the current page name
+  String currentPageDisplayName = 'Home'; // Track the current page display name
+
+  int? scanningIndex;
+  Timer? scanningTimer;
+  FocusNode? gridFocusNode;
+  bool isScanning = false;
+
+  WakeWordService? _wakeWordService;
+  bool _listeningForQuestion = false;
+  bool _isProcessingLLM = false;
+  String? _questionText;
+  String? _wakeWordInterjection; // NEW
+  String? _wakeWordName;         // NEW
+  List<String> _wakeWordVariants = []; // NEW
+  bool _highlightQuestionBox = false;
+
+
+  // --- GRID SIZE VARIABLE ---
+  static const int gridSize = 10; // Default 10x10 grid, can be made configurable later
+
+  @override
+  void initState() {
+    super.initState();
+    flutterTts = FlutterTts();
+    gridFocusNode = FocusNode();
+    // Orientation lock handled by platform (Info.plist/AndroidManifest)
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final settingsProvider = Provider.of<UserSettingsProvider>(
+        context,
+        listen: false,
+      );
+      settingsProvider.idToken = widget.idToken;
+      settingsProvider.userId = widget.aacUserId;
+      await settingsProvider.fetchSettings();
+      // --- Wake Word Setup ---
+      _wakeWordInterjection = (settingsProvider.settings?.wakeWordInterjection ?? 'hey').trim().toLowerCase();
+      _wakeWordName = (settingsProvider.settings?.wakeWordName ?? 'bravo').trim().toLowerCase();
+      _wakeWordVariants = [
+        '${_wakeWordInterjection} ${_wakeWordName}',
+        '${_wakeWordInterjection}, ${_wakeWordName}',
+        '${_wakeWordInterjection},${_wakeWordName}',
+      ];
+      debugPrint('Wake word variants: \'${_wakeWordVariants.join("' | '")}\'');
+      _wakeWordService = WakeWordService(
+        wakeWords: _wakeWordVariants,
+      );
+      // --- Patch: Prevent wake word auto-restart during question listening ---
+      bool _inQuestionMode = false;
+      _wakeWordService!.onWakeWord = (transcript) async {
+      debugPrint('Wake word detected in transcript: $transcript');
+      
+      setState(() {
+        statusMessage = 'Listening for your question...';
+        _listeningForQuestion = true;
+        _highlightQuestionBox = true;
+      });
+
+      _stopAuditoryScanning();
+      debugPrint('Auditory scanning stopped.');
+
+      _wakeWordService?.pauseWakeWordAutoRestart();
+      await _wakeWordService?.stopAllRecognizers();
+      debugPrint('Wake word service stopped listening.');
+      
+      // Remove settings change listener to prevent scanning restart
+      final settingsProvider = Provider.of<UserSettingsProvider>(context, listen: false);
+      settingsProvider.removeListener(_maybeStartScanning);
+      // Announce first, and only start question listening after announcement is fully finished
+      debugPrint('[WakeWord] Announcing "Listening for your question..." via backend');
+      try {
+        
+        await announceViaBackend('Listening for your question...');
+      } catch (e) {
+        debugPrint('[WakeWord] Announcement failed: $e');
+      }
+      debugPrint('[WakeWord] Announcement finished, waiting before starting question listening...');
+      // Add a small delay to ensure audio session is released
+      // await Future.delayed(const Duration(milliseconds: 800));
+      debugPrint('[WakeWord] Now starting question listening.');
+      _inQuestionMode = true;
+      previousPageName = currentPageName;
+      _wakeWordService!.startQuestionListening();
+      debugPrint('Started question listening after announcement and delay.');
+    };
+      _wakeWordService!.onQuestion = (question) async {
+        debugPrint('Question detected: $question');
+        setState(() {
+          _questionText = question;
+          questionDisplay = question;
+          _listeningForQuestion = false;
+          _isProcessingLLM = true;
+          _highlightQuestionBox = false;
+          statusMessage = 'Processing: $question';
+        });
+        await announceViaBackend('Okay, processing: $question. Give me a moment.');
+        // Add a delay before restarting wake word listening after TTS/LLM announcement
+        await Future.delayed(const Duration(seconds: 2));
+        _inQuestionMode = false;
+        await _getLLMResponse(question);
+      };
+      // Patch: Wrap wake word auto-restart logic to check _inQuestionMode
+      if (_wakeWordService != null) {
+        _wakeWordService!.shouldAllowWakeWordRestart = () => !_inQuestionMode;
+        // Wire up announcement callback for robust error handling
+        _wakeWordService!.onAnnounce = (msg) async => await announceViaBackend(msg);
+        // Wire up question highlight callback to control UI highlight
+        _wakeWordService!.onQuestionHighlight = (highlight) {
+          setState(() {
+            _highlightQuestionBox = highlight;
+          });
+        };
+      }
+      debugPrint('Starting wake word service from main grid page.');
+      _wakeWordService?.resumeWakeWordAutoRestart();
+      _wakeWordService!.startWakeWordListening();
+      await fetchGridData();
+      _maybeStartScanning();
+      // Add listener for settings changes
+      settingsProvider.addListener(_maybeStartScanning);
+    });
+  }
+
+  @override
+  void dispose() {
+    scanningTimer?.cancel();
+    gridFocusNode?.dispose();
+    // Orientation lock reset removed
+    // Remove listener for settings changes
+    final settingsProvider = Provider.of<UserSettingsProvider>(
+      context,
+      listen: false,
+    );
+    settingsProvider.removeListener(_maybeStartScanning);
+    routeObserver.unsubscribe(this);
+    super.dispose();
+  }
+
+  @override
+  void didPushNext() {
+    // Navigated away from grid page (e.g., to admin page)
+    debugPrint('didPushNext: Stopping auditory scanning and wake word listening');
+    _stopAuditoryScanning();
+    _wakeWordService?.pauseWakeWordAutoRestart();
+    _wakeWordService?.stopWakeWordListening();
+    // Remove settings change listener to prevent scanning restart
+    final settingsProvider = Provider.of<UserSettingsProvider>(context, listen: false);
+    settingsProvider.removeListener(_maybeStartScanning);
+    _wakeWordService?.resumeWakeWordAutoRestart();
+    super.didPushNext();
+  }
+
+  @override
+  void didPopNext() {
+    // Returned to grid page
+    final settingsProvider = Provider.of<UserSettingsProvider>(context, listen: false);
+    settingsProvider.addListener(_maybeStartScanning);
+    _maybeStartScanning();
+    // Restart wake word listening
+    if (_wakeWordService != null) {
+      WakeWordService.wakeWordShouldBeActive = true;
+      _wakeWordService?.resumeWakeWordAutoRestart();
+      _wakeWordService!.startWakeWordListening();
+    }
+    super.didPopNext();
+  }
+
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    routeObserver.subscribe(this, ModalRoute.of(context)! as PageRoute);
+  }
+
+  // Restore fetchGridData method for initial grid loading
+  Future<void> fetchGridData() async {
+    setState(() {
+      isLoading = true;
+    });
+    try {
+      final response = await http.get(
+        Uri.parse('https://talkwithbravo.com/pages'),
+        headers: {
+          'Authorization': 'Bearer ${widget.idToken}',
+          'X-User-ID': widget.aacUserId,
+          'Content-Type': 'application/json',
+        },
+      );
+      if (response.statusCode == 200) {
+        final List<dynamic> data = json.decode(response.body);
+        if (data.isNotEmpty && data[0]['buttons'] != null) {
+          setState(() {
+            gridButtons = List<Map<String, dynamic>>.from(
+              data[0]['buttons'] ?? [],
+            );
+            currentPageName = (data[0]['name'] ?? data[0]['pageName'] ?? 'home')
+                .toString();
+            currentPageDisplayName =
+                (data[0]['displayName'] ??
+                        data[0]['display_name'] ??
+                        currentPageName)
+                    .toString();
+            statusMessage = 'Loaded initial grid.';
+          });
+          _maybeStartScanning();
+        } else {
+          setState(() {
+            gridButtons = [];
+            currentPageName = 'home';
+            currentPageDisplayName = 'Home';
+            statusMessage = 'No grid data found.';
+          });
+        }
+      } else {
+        setState(() {
+          gridButtons = [];
+          statusMessage =
+              'Error fetching grid. Status: ' + response.statusCode.toString();
+        });
+      }
+    } catch (e) {
+      setState(() {
+        gridButtons = [];
+        statusMessage = 'Exception fetching grid: $e';
+      });
+    } finally {
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
+
+  // Example usage in your admin button(s):
+  // Replace:
+  //   onPressed: () => Navigator.pushNamed(context, '/admin-settings'),
+  // With:
+  //   onPressed: () => _onAdminButtonPressed('/admin-settings'),
+
+  // --- Auditory scanning and announcement routing ---
+
+  Future<void> _speakSystemVoice(String text) async {
+    final audioDeviceProvider = Provider.of<AudioDeviceProvider>(
+      context,
+      listen: false,
+    );
+    if (!kIsWeb && Platform.isWindows) {
+      await AudioDeviceService().playAudioToDevice(
+        audioDeviceProvider.systemDeviceId ?? 'default',
+        isPersonal: false,
+      );
+    }
+    // Do NOT call forceSpeaker or resetToDefault for scanning prompts on iOS/Android
+    await flutterTts.stop();
+    await flutterTts.setVoice({});
+    await flutterTts.speak(text);
+    debugPrint('Scanning prompt spoken: $text');
+  }
+
+
+  /// Announce using the backend TTS (selected voice, correct routing)
+  Future<void> announceViaBackend(
+    String text, {
+    String routing = 'system',
+  }) async {
+    String idToken = widget.idToken;
+    final aacUserId = widget.aacUserId;
+    try {
+      
+      final startTotal = DateTime.now();
+      debugPrint('[TIMER] announceViaBackend: START for "$text" at ${startTotal.millisecondsSinceEpoch}');
+      // Always refresh the token before backend call
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        final refreshedToken = await user.getIdToken(true);
+        if (refreshedToken != null && refreshedToken.isNotEmpty) {
+          idToken = refreshedToken;
+        }
+      }
+      
+      bool backendAudioPlayed = false;
+      final startRequest = DateTime.now();
+      debugPrint('[TIMER] announceViaBackend: Requesting backend audio for "$text" at ${startRequest.millisecondsSinceEpoch}');
+      final response = await http.post(
+        Uri.parse('https://talkwithbravo.com/play-audio'),
+        headers: {
+          'Authorization': 'Bearer $idToken',
+          'X-User-ID': aacUserId,
+          'Content-Type': 'application/json',
+        },
+        body: json.encode({'text': text, 'routing_target': 'system'}),
+      );
+      final endRequest = DateTime.now();
+      debugPrint('[TIMER] announceViaBackend: Backend response received at ${endRequest.millisecondsSinceEpoch} (delta: ${endRequest.difference(startRequest).inMilliseconds} ms)');
+      debugPrint('announceViaBackend: Response status: \\${response.statusCode}');
+      if (response.statusCode == 200) {
+        final jsonStr = response.body;
+        final audioUrl = RegExp('"audio_url"\s*:\s*"([^"]+)"').firstMatch(jsonStr)?.group(1);
+        final base64Audio = RegExp('"audio_data"\\s*:\\s*"([^"]+)"').firstMatch(jsonStr)?.group(1) ??
+            RegExp('"audioContent"\\s*:\\s*"([^"]+)"').firstMatch(jsonStr)?.group(1) ??
+            RegExp('"audio"\\s*:\\s*"([^"]+)"').firstMatch(jsonStr)?.group(1);
+        try {
+          if (!kIsWeb && Platform.isIOS) {
+            final platform = MethodChannel('audio_routing');
+            final player = AudioPlayer();
+            await flutterTts.stop();
+            await player.stop();
+            debugPrint('[TIMER] announceViaBackend: Before forceSpeaker (iOS) at ${DateTime.now().millisecondsSinceEpoch}');
+            await platform.invokeMethod('forceSpeaker');
+            debugPrint('[TIMER] announceViaBackend: Before silence.mp3 at ${DateTime.now().millisecondsSinceEpoch}');
+            final silenceStart = DateTime.now();
+            bool silencePlayed = false;
+            try {
+              await player.setAsset('assets/silence.mp3');
+              await player.play();
+              silencePlayed = true;
+            } catch (e) {
+              debugPrint('announceViaBackend: silence.mp3 playback failed: $e');
+            }
+            final silenceEnd = DateTime.now();
+            debugPrint('[TIMER] announceViaBackend: After silence.mp3 at ${silenceEnd.millisecondsSinceEpoch} (delta: ${silenceEnd.difference(silenceStart).inMilliseconds} ms)');
+            await platform.invokeMethod('resetToDefault');
+            await platform.invokeMethod('forceSpeaker');
+            // --- PREFER BASE64 AUDIO OVER AUDIOURL ---
+            if (base64Audio != null && base64Audio.isNotEmpty) {
+              debugPrint('announceViaBackend: Playing base64 audio (preferred)');
+              final base64Start = DateTime.now();
+              final bytes = base64Decode(base64Audio);
+              final tempDir = Directory.systemTemp;
+              final tempFile = await File('${tempDir.path}/backend_tts.mp3').create();
+              await tempFile.writeAsBytes(bytes, flush: true);
+              await player.setFilePath(tempFile.path);
+              // --- Wait for playback to finish before resetToDefault ---
+              final completer = Completer<void>();
+              final sub = player.playerStateStream.listen((state) {
+                if (state.processingState == ProcessingState.completed) {
+                  if (!completer.isCompleted) completer.complete();
+                }
+              });
+              await player.play();
+              await completer.future;
+              await sub.cancel();
+              final base64End = DateTime.now();
+              debugPrint('[TIMER] announceViaBackend: After base64 audio playback at ${base64End.millisecondsSinceEpoch} (delta: ${base64End.difference(base64Start).inMilliseconds} ms)');
+              await Future.delayed(const Duration(milliseconds: 100));
+              await platform.invokeMethod('resetToDefault');
+              backendAudioPlayed = true;
+            } else if (audioUrl != null && audioUrl.isNotEmpty) {
+              try {
+                await platform.invokeMethod('forceSpeaker');
+                debugPrint('[TIMER] announceViaBackend: Before setUrl/play audioUrl at ${DateTime.now().millisecondsSinceEpoch}');
+                final audioUrlStart = DateTime.now();
+                await player.setUrl(audioUrl);
+                // --- Wait for playback to finish before resetToDefault ---
+                final completer = Completer<void>();
+                final sub = player.playerStateStream.listen((state) {
+                  if (state.processingState == ProcessingState.completed) {
+                    if (!completer.isCompleted) completer.complete();
+                  }
+                });
+                await player.play();
+                await completer.future;
+                await sub.cancel();
+                final audioUrlEnd = DateTime.now();
+                debugPrint('[TIMER] announceViaBackend: After audioUrl playback at ${audioUrlEnd.millisecondsSinceEpoch} (delta: ${audioUrlEnd.difference(audioUrlStart).inMilliseconds} ms)');
+                await Future.delayed(const Duration(milliseconds: 100));
+                await platform.invokeMethod('resetToDefault');
+                backendAudioPlayed = true;
+              } catch (e) {
+                debugPrint('announceViaBackend: setUrl/play failed for audioUrl: $e');
+              }
+            } else {
+              debugPrint('announceViaBackend: No audio_url or base64 audio found in response');
+            }
+          } else if (!kIsWeb && Platform.isWindows) {
+            // Use AudioDeviceService for Windows
+            final audioDeviceService = AudioDeviceService();
+            await audioDeviceService.initialize();
+            debugPrint('announceViaBackend: Using AudioDeviceService for TTS playback with system device routing');
+            if (base64Audio != null && base64Audio.isNotEmpty) {
+              final base64Start = DateTime.now();
+              await audioDeviceService.playTTSAudio(base64Audio, isPersonal: false);
+              final base64End = DateTime.now();
+              debugPrint('[TIMER] announceViaBackend: Windows base64 audio playback delta: ${base64End.difference(base64Start).inMilliseconds} ms');
+              backendAudioPlayed = true;
+            } else if (audioUrl != null && audioUrl.isNotEmpty) {
+              final player = AudioPlayer();
+              final audioUrlStart = DateTime.now();
+              await player.setUrl(audioUrl);
+              await player.play();
+              final audioUrlEnd = DateTime.now();
+              debugPrint('[TIMER] announceViaBackend: Windows audioUrl playback delta: ${audioUrlEnd.difference(audioUrlStart).inMilliseconds} ms');
+              backendAudioPlayed = true;
+            }
+          } else if (!kIsWeb && Platform.isAndroid) {
+            final player = AudioPlayer();
+            if (audioUrl != null && audioUrl.isNotEmpty) {
+              final audioUrlStart = DateTime.now();
+              await player.setUrl(audioUrl);
+              // --- Wait for playback to finish before resetToDefault ---
+              final completer = Completer<void>();
+              final sub = player.playerStateStream.listen((state) {
+                if (state.processingState == ProcessingState.completed) {
+                  if (!completer.isCompleted) completer.complete();
+                }
+              });
+              await player.play();
+              await completer.future;
+              await sub.cancel();
+              final audioUrlEnd = DateTime.now();
+              debugPrint('[TIMER] announceViaBackend: Android audioUrl playback delta: ${audioUrlEnd.difference(audioUrlStart).inMilliseconds} ms');
+              await Future.delayed(const Duration(milliseconds: 100));
+              final platform = MethodChannel('audio_routing');
+              await platform.invokeMethod('resetToDefault');
+              backendAudioPlayed = true;
+            } else if (base64Audio != null && base64Audio.isNotEmpty) {
+              final base64Start = DateTime.now();
+              final bytes = base64Decode(base64Audio);
+              final tempDir = Directory.systemTemp;
+              final tempFile = await File('${tempDir.path}/backend_tts.mp3').create();
+              await tempFile.writeAsBytes(bytes, flush: true);
+              await player.setFilePath(tempFile.path);
+              // --- Wait for playback to finish before resetToDefault ---
+              final completer = Completer<void>();
+              final sub = player.playerStateStream.listen((state) {
+                if (state.processingState == ProcessingState.completed) {
+                  if (!completer.isCompleted) completer.complete();
+                }
+              });
+              await player.play();
+              await completer.future;
+              await sub.cancel();
+              final base64End = DateTime.now();
+              debugPrint('[TIMER] announceViaBackend: Android base64 audio playback delta: ${base64End.difference(base64Start).inMilliseconds} ms');
+              await Future.delayed(const Duration(milliseconds: 100));
+              final platform = MethodChannel('audio_routing');
+              await platform.invokeMethod('resetToDefault');
+              backendAudioPlayed = true;
+            }
+          } else {
+            // Fallback: try just_audio
+            final player = AudioPlayer();
+            if (audioUrl != null && audioUrl.isNotEmpty) {
+              final audioUrlStart = DateTime.now();
+              await player.setUrl(audioUrl);
+              await player.play();
+              final audioUrlEnd = DateTime.now();
+              debugPrint('[TIMER] announceViaBackend: Fallback audioUrl playback delta: ${audioUrlEnd.difference(audioUrlStart).inMilliseconds} ms');
+              backendAudioPlayed = true;
+            } else if (base64Audio != null && base64Audio.isNotEmpty) {
+              final base64Start = DateTime.now();
+              final bytes = base64Decode(base64Audio);
+              final tempDir = Directory.systemTemp;
+              final tempFile = await File('${tempDir.path}/backend_tts.mp3').create();
+              await tempFile.writeAsBytes(bytes, flush: true);
+              await player.setFilePath(tempFile.path);
+              await player.play();
+              final base64End = DateTime.now();
+              debugPrint('[TIMER] announceViaBackend: Fallback base64 audio playback delta: ${base64End.difference(base64Start).inMilliseconds} ms');
+              backendAudioPlayed = true;
+            }
+          }
+        } catch (e) {
+          debugPrint('announceViaBackend: Audio playback failed: $e');
+          backendAudioPlayed = false;
+        }
+      } else {
+        debugPrint(
+          'announceViaBackend: Backend error \\${response.statusCode}: \\${response.body}',
+        );
+      }
+      // Fallback: use local TTS if backend audio not played
+      if (!backendAudioPlayed) {
+        debugPrint('announceViaBackend: Fallback to local TTS for "$text"');
+        await flutterTts.stop();
+        await flutterTts.setVoice({});
+        // Wait for local TTS to finish before returning
+        final ttsCompleter = Completer<void>();
+        flutterTts.setCompletionHandler(() {
+        if (!ttsCompleter.isCompleted) ttsCompleter.complete();
+      });
+      await flutterTts.speak(text);
+      await ttsCompleter.future;
+      // Remove handler after use (set to empty function)
+      flutterTts.setCompletionHandler(() {});
+      }
+      // After using forceSpeaker, reset to default device
+      if (!kIsWeb && (Platform.isIOS || Platform.isAndroid)) {
+        try {
+          final platform = MethodChannel('audio_routing');
+          debugPrint('resetToDefault called after option announcement');
+          await platform.invokeMethod('resetToDefault');
+        } catch (e) {
+          debugPrint('resetToDefault not implemented or failed: $e');
+        }
+      }
+      final endTotal = DateTime.now();
+      debugPrint('[TIMER] announceViaBackend: END at ${endTotal.millisecondsSinceEpoch} (total delta: ${endTotal.difference(startTotal).inMilliseconds} ms)');
+    } catch (e) {
+      debugPrint('announceViaBackend: Exception: $e');
+      // Fallback: use local TTS if something fails
+      await flutterTts.stop();
+      await flutterTts.setVoice({});
+      final ttsCompleter = Completer<void>();
+      flutterTts.setCompletionHandler(() {
+        if (!ttsCompleter.isCompleted) ttsCompleter.complete();
+      });
+      await flutterTts.speak(text);
+      await ttsCompleter.future;
+      flutterTts.setCompletionHandler(() {});
+    }
+  }
+
+  Future<void> handleButtonAction(Map<String, dynamic> buttonData) async {
+    
+    final settingsProvider = Provider.of<UserSettingsProvider>(
+      context,
+      listen: false,
+    );
+    final llmQuery = buttonData['LLMQuery'] as String?;
+    final targetPage = buttonData['targetPage'] as String?;
+    final speechPhrase = buttonData['speechPhrase'] as String?;
+    final queryType = buttonData['queryType'] as String?;
+    // Debug: print entry to handleButtonAction
+    debugPrint('handleButtonAction called. llmQuery: $llmQuery, queryType: $queryType, isLLMGenerated: ${buttonData['isLLMGenerated']}');
+    if (llmQuery != null && llmQuery.isNotEmpty) {
+      debugLogLLM(stage: 'LLM Query Start', prompt: llmQuery);
+      // Always store both previous grid and page before showing LLM options
+      previousPageName = currentPageName;
+      previousGridButtons = List<Map<String, dynamic>>.from(gridButtons);
+      _stopAuditoryScanning();
+      setState(() {
+        statusMessage = 'Processing LLM...';
+        isLoading = true;
+      });
+      // Prevent double LLM calls: set a flag
+      if (_isProcessingLLM) {
+        debugPrint('LLM is already processing, skipping duplicate call.');
+        return;
+      }
+      _isProcessingLLM = true;
+      try {
+        final llmOptions = settingsProvider.settings?.llmOptions ?? 10;
+        final useSummary = settingsProvider.settings?.useShortSummaryOnButtons ?? false;
+        String summaryInstruction = useSummary
+            ? 'If the generated option is more than 5 words, the "summary" key should be a 3-5 word abbreviation of each option, including the exact key words from the option. If the option is 5 words or less, the "summary" key should contain the exact same FULL text as the "option" key.'
+            : 'The "summary" key should contain the exact same FULL text as the "option" key.';
+        String prompt = llmQuery.replaceAll(
+          '#LLMOptions',
+          llmOptions.toString(),
+        );
+        // Append formatting instructions and example at the end
+        final formatInstructions =
+            'Format your response as a JSON list where each item has "option" and "summary" keys.\n'
+            'The "option" key should contain the FULL option text.\n'
+            '\u001b[0m${summaryInstruction}\n'
+            'Example:\n'
+            '[\n'
+            '  {"summary": "How are you?", "option": "Hello, how are you doing today?"},\n'
+            '  {"summary": "See You", "option": "Goodbye!  It was great seeing you. See you later!"}\n'
+            ']';
+        prompt = prompt.trim() + '\n' + formatInstructions;
+        llmOriginalPrompt = prompt; // Store for "Something Else"
+        debugPrint('LLM PROMPT: ' + prompt);
+        debugLogLLM(stage: 'LLM Prompt Sent', prompt: prompt);
+        debugPrint('LLM REQUEST URL: https://talkwithbravo.com/llm');
+        debugPrint('LLM REQUEST BODY: ' + json.encode({'prompt': prompt}));
+        final response = await http.post(
+          Uri.parse('https://talkwithbravo.com/llm'),
+          headers: {
+            'Authorization': 'Bearer ${widget.idToken}',
+            'X-User-ID': widget.aacUserId,
+            'Content-Type': 'application/json',
+          },
+          body: json.encode({'prompt': prompt}),
+        );
+        if (response.statusCode == 200) {
+          final options = json.decode(response.body);
+          debugLogLLM(stage: 'LLM Raw Response', response: options);
+          List<Map<String, dynamic>> llmButtons = [];
+          llmPreviousOptions = [];
+          if (options is List && options.isNotEmpty) {
+            // Only update previousGridButtons if not already in an LLM grid
+            if (previousGridButtons == null) {
+              previousGridButtons = List<Map<String, dynamic>>.from(
+                gridButtons,
+              );
+            }
+            // Map LLM options: summary for label, option for speechPhrase
+            llmButtons = options.asMap().entries.map<Map<String, dynamic>>((
+              entry,
+            ) {
+              final i = entry.key;
+              final opt = entry.value;
+              String summary = '';
+              String optionText = '';
+              if (opt is Map) {
+                summary = (opt['summary'] ?? '').toString();
+                optionText = (opt['option'] ?? '').toString();
+              } else {
+                summary = opt.toString();
+                optionText = opt.toString();
+              }
+              String label = summary.trim().isNotEmpty ? summary : optionText;
+              llmPreviousOptions.add(optionText);
+              return {
+                'text': label,
+                'speechPhrase': optionText,
+                'isLLMGenerated': true,
+                'targetPage': previousPageName,
+                'row': i,
+                'col': 0,
+              };
+            }).toList();
+            // Add "Please ask me again" button (for question type)
+            // Always add "Please ask me again" if this is a question LLM
+            final isQuestion = (buttonData['queryType'] ?? '').toString().toLowerCase() == 'question' || llmQuery.toLowerCase().contains('question');
+            if (isQuestion) {
+              llmButtons.add({
+                'text': 'Please ask me again',
+                'speechPhrase': 'Please ask me again',
+                'isLLMGenerated': true,
+                'llmSpecial': 'askAgain',
+                'row': llmButtons.length,
+                'col': 0,
+              });
+            }
+            // Add default buttons: Something Else, Go Back
+            int nextIndex = llmButtons.length;
+            llmButtons.add({
+              'text': 'Something Else',
+              'speechPhrase': 'Something Else',
+              'isLLMGenerated': true,
+              'llmSpecial': 'somethingElse',
+              'row': nextIndex,
+              'col': 0,
+            });
+            nextIndex++;
+            llmButtons.add({
+              'text': 'Go Back',
+              'speechPhrase': 'Go Back',
+              'isLLMGenerated': true,
+              'llmSpecial': 'goBack',
+              'row': nextIndex,
+              'col': 0,
+            });
+            final nonEmptyButtons = llmButtons
+                .where((btn) => (btn['text'] ?? '').toString().trim().isNotEmpty)
+                .toList();
+            setState(() {
+              gridButtons = llmButtons;
+              statusMessage =
+                  'LLM returned ${llmButtons.length} option(s) (including standard buttons). Displaying ${nonEmptyButtons.length} button(s). First: ' +
+                  (nonEmptyButtons.isNotEmpty ? nonEmptyButtons[0]['text'] : 'None');
+              isLoading = false;
+            });
+            debugLogLLM(stage: 'LLM Grid Set', gridButtons: llmButtons);
+            // Start scanning after the frame is built
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              _maybeStartScanning();
+              //_stopAuditoryScanning();
+              //_startAuditoryScanning();
+            });
+            if (nonEmptyButtons.isEmpty) {
+              setState(() {
+                statusMessage = (statusMessage ?? '') + '\nWarning: All LLM options have empty text.';
+              });
+            }
+            return;
+          } else {
+            setState(() {
+              statusMessage =
+                  'No options returned. LLM raw: ' + response.body.toString();
+            });
+          }
+        } else {
+          setState(() {
+            statusMessage =
+                'LLM error (${response.statusCode}). Raw: ' +
+                response.body.toString();
+          });
+        }
+      } catch (e) {
+        setState(() {
+          statusMessage = 'LLM error: $e';
+        });
+      } finally {
+        setState(() {
+          isLoading = false;
+          _isProcessingLLM = false;
+        });
+      }
+      return;
+      return;
+    } else if (buttonData['isLLMGenerated'] == true && buttonData['speechPhrase'] != null) {
+      // Handle special LLM buttons
+      if (buttonData['llmSpecial'] == 'goBack') {
+        if (previousPageName != null) {
+          final pageToRestore = previousPageName;
+          previousPageName = null;
+          previousGridButtons = null;
+          await fetchGridDataForPage(pageToRestore!);
+        } else if (previousGridButtons != null) {
+          setState(() {
+            gridButtons = previousGridButtons!;
+            previousGridButtons = null;
+          });
+        }
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _maybeStartScanning();
+        });
+        return;
+      } else if (buttonData['llmSpecial'] == 'somethingElse') {
+        // Generate new LLM prompt excluding previous options
+        final origPrompt = llmOriginalPrompt ?? '';
+        final excludeList = llmPreviousOptions;
+        final excludeText = excludeList.isNotEmpty
+            ? ' IMPORTANTLY, exclude the following options if possible: "' + excludeList.join('; ') + '".'
+            : '';
+        final newPrompt = origPrompt + excludeText;
+        debugPrint('Something Else LLM prompt: $newPrompt');
+        setState(() {
+          statusMessage = 'Requesting more LLM options...';
+        });
+        final response = await http.post(
+          Uri.parse('https://talkwithbravo.com/llm'),
+          headers: {
+            'Authorization': 'Bearer ${widget.idToken}',
+            'X-User-ID': widget.aacUserId,
+            'Content-Type': 'application/json',
+          },
+          body: json.encode({'prompt': newPrompt}),
+        );
+        if (response.statusCode == 200) {
+          final options = json.decode(response.body);
+          debugLogLLM(stage: 'LLM Something Else Raw Response', response: options);
+          // Recursively call handleButtonAction with a fake buttonData to trigger LLM mapping
+          handleButtonAction({
+            'LLMQuery': newPrompt,
+            'queryType': buttonData['queryType'] ?? 'question',
+          });
+        } else {
+          setState(() {
+            statusMessage =
+                'LLM error (${response.statusCode}) on Something Else. Raw: ' + response.body.toString();
+          });
+        }
+        return;
+      } else if (buttonData['llmSpecial'] == 'askAgain') {
+        setState(() {
+          statusMessage = 'Please ask your question again after the tone.';
+        });
+        await announceViaBackend('Okay, please ask your question again after the tone.');
+        await Future.delayed(const Duration(milliseconds: 500));
+        previousPageName = currentPageName;
+        _wakeWordService?.startQuestionListening();
+        return;
+      }
+      final optionText = buttonData['speechPhrase'] as String;
+      // Only announce if not a default button
+      if (buttonData['llmSpecial'] != 'goBack' && buttonData['llmSpecial'] != 'somethingElse' && buttonData['llmSpecial'] != 'askAgain') {
+        setState(() {
+          // If there is a question, prepend it and a colon before the optionText
+          if (questionDisplay.isNotEmpty) {
+            speechHistory =
+              questionDisplay + ': ' + optionText + (speechHistory.isNotEmpty ? '\n' : '') + speechHistory;
+              questionDisplay = ''; // Clear questionDisplay after using it
+          } else {
+            speechHistory =
+              optionText + (speechHistory.isNotEmpty ? '\n' : '') + speechHistory;
+          }
+        });
+        _wakeWordService?.pauseWakeWordAutoRestart();
+        debugPrint('Stopping wake word listening before announcing LLM option: $optionText');
+        await _wakeWordService?.stopAllRecognizers();
+        // --- Suppress scanning until announcement and grid update are complete ---
+        _suppressScanning = true;
+        await announceViaBackend(optionText);
+        // After announcing, restore previous page if available
+        debugPrint('Restoring previous grid/page after LLM option. previousPageName: $previousPageName, previousGridButtons: ${previousGridButtons != null}');
+        if (previousPageName != null) {
+          final pageToRestore = previousPageName;
+          previousPageName = null;
+          previousGridButtons = null;
+          await fetchGridDataForPage(pageToRestore!);
+        } else if (previousGridButtons != null) {
+          setState(() {
+            gridButtons = previousGridButtons!;
+            previousGridButtons = null;
+          });
+        }
+        // Only allow scanning after the grid is updated and frame is built
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          _suppressScanning = false;
+          _maybeStartScanning();
+        });
+      }
+    } else if (queryType == 'currentevents') {
+      setState(() {
+        statusMessage = 'Loading current events...';
+      });
+    } else if (targetPage != null && targetPage.isNotEmpty) {
+      // If speechPhrase is present, announce it first, then navigate
+      if (speechPhrase != null && speechPhrase.isNotEmpty) {
+        setState(() {
+          statusMessage = ''; // Clear status
+        });
+        await announceViaBackend(speechPhrase);
+      }
+      setState(() {
+        statusMessage = 'Navigating to "' + targetPage + '"...';
+      });
+      await fetchGridDataForPage(targetPage);
+      // Debug: show gridButtons after navigation
+      final nonEmptyButtons = gridButtons
+          .where((btn) => (btn['text'] ?? '').toString().trim().isNotEmpty)
+          .toList();
+      setState(() {
+        statusMessage =
+            'Loaded page "' +
+            targetPage +
+            '" with ' +
+            gridButtons.length.toString() +
+            ' button(s). Displaying ' +
+            nonEmptyButtons.length.toString() +
+            ' button(s). First: ' +
+            (nonEmptyButtons.isNotEmpty ? nonEmptyButtons[0]['text'] : 'None');
+        // Do not update questionDisplay
+      });
+      if (gridButtons.isEmpty || nonEmptyButtons.isEmpty) {
+        setState(() {
+          statusMessage = (statusMessage ?? '') +
+              '\nWarning: Page "' +
+              targetPage +
+              '" is empty or all buttons have empty text.';
+        });
+      }
+    } else if (speechPhrase != null && speechPhrase.isNotEmpty) {
+      setState(() {
+        questionDisplay = speechPhrase;
+      });
+      await announceViaBackend(speechPhrase);
+    } else {
+      setState(() {
+        statusMessage = 'No action for this button.';
+      });
+    }
+  }
+
+  Future<void> fetchGridDataForPage(String pageName) async {
+    setState(() {
+      isLoading = true;
+    });
+    try {
+      final response = await http.get(
+        Uri.parse('https://talkwithbravo.com/pages?name=$pageName'),
+        headers: {
+          'Authorization': 'Bearer ${widget.idToken}',
+          'X-User-ID': widget.aacUserId,
+          'Content-Type': 'application/json',
+        },
+      );
+      if (response.statusCode == 200) {
+        final List<dynamic> data = json.decode(response.body);
+        Map<String, dynamic>? matchedPage;
+        List<String> pageNames = [];
+        for (final page in data) {
+          final name = (page['name'] ?? page['pageName'] ?? '').toString();
+          pageNames.add(name);
+          if (name.toLowerCase() == pageName.toLowerCase()) {
+            matchedPage = page;
+          }
+        }
+        if (matchedPage != null && matchedPage['buttons'] != null) {
+          setState(() {
+            gridButtons = List<Map<String, dynamic>>.from(
+              matchedPage!['buttons'] ?? [],
+            );
+            currentPageName =
+                (matchedPage['name'] ?? matchedPage['pageName'] ?? pageName)
+                    .toString();
+            currentPageDisplayName =
+                (matchedPage['displayName'] ??
+                        matchedPage['display_name'] ??
+                        currentPageName)
+                    .toString();
+            statusMessage =
+                'Matched page "$pageName". All page names: ' +
+                pageNames.join(', ');
+          });
+          _maybeStartScanning();
+        } else {
+          setState(() {
+            gridButtons = [];
+            currentPageName = pageName;
+            currentPageDisplayName = pageName;
+            statusMessage =
+                'No matching page found for "$pageName". All page names: ' +
+                pageNames.join(', ');
+          });
+        }
+      } else {
+        setState(() {
+          gridButtons = [];
+          currentPageName = pageName;
+          currentPageDisplayName = pageName;
+          statusMessage =
+              'Error fetching page "$pageName". Status: ' +
+              response.statusCode.toString();
+        });
+      }
+    } catch (e) {
+      setState(() {
+        gridButtons = [];
+        currentPageName = pageName;
+        currentPageDisplayName = pageName;
+        statusMessage = 'Exception fetching page "$pageName": $e';
+      });
+    } finally {
+      setState(() {
+        isLoading = false;
+      });
+    }
+  }
+
+void _onAdminButtonPressed(String routeName) {
+  debugPrint('Admin button pressed: $routeName');
+  _stopAuditoryScanning();
+  _wakeWordService?.pauseWakeWordAutoRestart();
+  _wakeWordService?.stopAllRecognizers();
+  Navigator.pushNamed(context, routeName).then((_) {
+    debugPrint('Returned from admin page: $routeName');
+    _maybeStartScanning();
+    _wakeWordService?.resumeWakeWordAutoRestart();
+  });
+}
+
+  void _onButtonSelected(int index) async {
+    _stopAuditoryScanning();
+    final definedButtons = gridButtons
+        .where((btn) => (btn['text'] ?? '').toString().trim().isNotEmpty)
+        .toList();
+    if (index < 0 || index >= definedButtons.length) return;
+    final btn = definedButtons[index];
+    // Only handle the button action; let handleButtonAction manage all TTS/announcement logic
+    await handleButtonAction(btn);
+    // Do NOT restart scanning here. Scanning will be restarted after grid update/navigation.
+  }
+
+  Future<void> _announce(String text) async {
+    // Use backend TTS with force speaker and bracketed silence.mp3 for iOS
+    _wakeWordService?.pauseWakeWordAutoRestart();
+    _wakeWordService?.stopWakeWordListening();
+    await announceViaBackend(text);
+    _wakeWordService?.resumeWakeWordAutoRestart();
+  }
+
+  Future<void> _getLLMResponse(String question) async {
+    try {
+      final settingsProvider = Provider.of<UserSettingsProvider>(context, listen: false);
+      final userSettings = settingsProvider.settings;
+      final llmOptions = userSettings?.llmOptions ?? 10;
+      final summaryInstruction = (userSettings?.summaryOff ?? false)
+          ? 'The "summary" key should contain the exact same FULL text as the "option" key.'
+          : 'If the generated option is more than 5 words, the "summary" key should be a 3-5 word abbreviation of each option, including the exact key words from the option. If the option is 5 words or less, the "summary" key should contain the exact same FULL text as the "option" key.';
+      final promptForLLM =
+          'Provide up to "${llmOptions}" short, single-phrase options related to: "${question}".\n'
+          'Do not include any introductory or concluding text.\n'
+          'Format your response as a JSON list where each item has "option" and "summary" keys.\n'
+          'The "option" key should contain the FULL option text. If the option contains a question and answer, like a joke, the option contain the question and the answer.\n'
+          '[0m${summaryInstruction}\n'
+          'Example: [{"option": "...", "summary": "..."}]';
+      final response = await http.post(
+        Uri.parse('https://talkwithbravo.com/llm'),
+        headers: {
+          'Authorization': 'Bearer ${widget.idToken}',
+          'X-User-ID': widget.aacUserId,
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'prompt': promptForLLM}),
+      );
+      if (response.statusCode == 200) {
+        debugLogLLM(stage: 'LLM Response', response: response.body);
+        final List<dynamic> data = jsonDecode(response.body);
+        List<Map<String, dynamic>> llmButtons = data.map((item) => {
+          'text': item['summary'] ?? item['option'] ?? '',
+          'summary': item['summary'] ?? '',
+          'option': item['option'] ?? '',
+          'speechPhrase': item['option'] ?? '',
+          'isLLMGenerated': true,
+        }).toList();
+        // Add default buttons: Something Else, Go Back
+        int nextIndex = llmButtons.length;
+        llmButtons.add({
+          'text': 'Something Else',
+          'speechPhrase': 'Something Else',
+          'isLLMGenerated': true,
+          'llmSpecial': 'somethingElse',
+          'row': nextIndex,
+          'col': 0,
+        });
+        nextIndex++;
+        llmButtons.add({
+          'text': 'Go Back',
+          'speechPhrase': 'Go Back',
+          'isLLMGenerated': true,
+          'llmSpecial': 'goBack',
+          'row': nextIndex,
+          'col': 0,
+        });
+        _stopAuditoryScanning();
+        setState(() {
+          gridButtons = llmButtons;
+          _isProcessingLLM = false;
+          statusMessage = null;
+        });
+        // Restart scanning after LLM results
+        _maybeStartScanning();
+        //_stopAuditoryScanning();
+        //_startAuditoryScanning();
+      } else {
+        setState(() {
+          _isProcessingLLM = false;
+          statusMessage = 'Error: ${response.body}';
+        });
+      }
+    } catch (e) {
+      setState(() {
+        _isProcessingLLM = false;
+        statusMessage = 'Error: $e';
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: Text(currentPageDisplayName),
+        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.settings),
+            tooltip: 'Admin Settings',
+            onPressed: () {
+              _onAdminButtonPressed('/admin-settings');
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.grid_on),
+            tooltip: 'Admin Pages & Buttons',
+            onPressed: () {
+              _onAdminButtonPressed('/admin-pages');
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.location_on),
+            tooltip: 'User Current Location',
+            onPressed: () {
+              _onAdminButtonPressed('/admin-user-current');
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.info_outline),
+            tooltip: 'User Info & Birthdays',
+            onPressed: () {
+              _onAdminButtonPressed('/admin-user-info');
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.book),
+            tooltip: 'User Diary',
+            onPressed: () {
+              _onAdminButtonPressed('/admin-user-diary');
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.volume_up),
+            tooltip: 'Audio Device Admin',
+            onPressed: () {
+              _onAdminButtonPressed('/admin-audio-devices');
+            },
+          ),
+        ],
+      ),
+      body: Column(
+        children: [
+          // Speech History
+          Padding(
+            padding: const EdgeInsets.all(12.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Speech History:'),
+                SizedBox(
+                  height: 80,
+                  child: TextField(
+                    controller: TextEditingController(text: speechHistory),
+                    readOnly: true,
+                    maxLines: null,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Question Display (only for user questions, not status)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 12.0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                const Text('Question:'),
+                SizedBox(
+                  height: 40,
+                  child: TextField(
+                    controller: TextEditingController(text: questionDisplay),
+                    readOnly: true,
+                    maxLines: 1,
+                    decoration: InputDecoration(
+                      border: const OutlineInputBorder(),
+                      fillColor: _highlightQuestionBox ? Colors.yellow[100] : null,
+                      filled: _highlightQuestionBox,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          // Grid of Buttons
+          Flexible(
+            fit: FlexFit.loose,
+            child: Padding(
+              padding: const EdgeInsets.all(12.0),
+              child: gridButtons.isEmpty
+                  ? const Center(child: Text('No grid buttons available.'))
+                  : _buildDynamicUserGrid(),
+            ),
+          ),
+          // Status message at the bottom
+          if (statusMessage != null && statusMessage!.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.all(8.0),
+              child: Text(
+                statusMessage!,
+                style: const TextStyle(color: Colors.blueGrey),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDynamicUserGrid() {
+    // Responsive grid: fill screen, adjust button/font size
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final settingsProvider = Provider.of<UserSettingsProvider>(context, listen: true);
+        final userSettings = settingsProvider.settings;
+        // Use int gridColumns directly
+        final int gridCols = userSettings?.gridColumns ?? 10;
+        // Set button size based on columns (smaller buttons for more columns)
+        double buttonSizePx;
+        if (gridCols >= 16) {
+          buttonSizePx = 50.0;
+        } else if (gridCols >= 12) {
+          buttonSizePx = 60.0;
+        } else if (gridCols >= 9) {
+          buttonSizePx = 80.0;
+        } else if (gridCols >= 7) {
+          buttonSizePx = 100.0;
+        } else if (gridCols >= 5) {
+          buttonSizePx = 130.0;
+        } else {
+          buttonSizePx = 160.0;
+        }
+        final int numButtons = gridButtons.where((btn) => (btn['text'] ?? '').toString().trim().isNotEmpty).length;
+        final int gridRows = (numButtons / gridCols).ceil();
+        final Color darkColor = userSettings?.darkColor ?? kDefaultDarkColor;
+        final Color lightColor = userSettings?.lightColor ?? kDefaultLightColor;
+        final double gridPadding = 8;
+        final double spacing = 6;
+        final double availableWidth = constraints.maxWidth - gridPadding * 2 - spacing * (gridCols - 1);
+        // final double availableHeight = constraints.maxHeight - gridPadding * 2 - spacing * (gridRows - 1);
+        // Use fixed button size per label, but clamp to available width if needed
+        double effectiveButtonSize = buttonSizePx;
+        if (availableWidth / gridCols < buttonSizePx) {
+          effectiveButtonSize = (availableWidth / gridCols).clamp(40.0, buttonSizePx);
+        }
+        final double fontSize = (effectiveButtonSize / 10).clamp(10.0, 18.0);
+        debugPrint('[DEBUG] _buildDynamicUserGrid: availableWidth=$availableWidth, gridCols=$gridCols, buttonSize=$effectiveButtonSize, fontSize=$fontSize');
+
+        final definedButtons = gridButtons.where((btn) => (btn['text'] ?? '').toString().trim().isNotEmpty).toList();
+        final List<Map<String, dynamic>> visibleButtons = List<Map<String, dynamic>>.from(definedButtons);
+        // No padding: only show defined buttons
+        return Container(
+          color: Colors.grey[100],
+          padding: EdgeInsets.all(gridPadding),
+          child: Scrollbar(
+            thumbVisibility: true,
+            child: GridView.builder(
+              physics: const AlwaysScrollableScrollPhysics(),
+              gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                crossAxisCount: gridCols,
+                childAspectRatio: 1.0,
+                crossAxisSpacing: spacing,
+                mainAxisSpacing: spacing,
+              ),
+              itemCount: visibleButtons.length,
+              itemBuilder: (context, index) {
+                final btn = visibleButtons[index];
+                final isActive = (btn['text'] ?? '').toString().trim().isNotEmpty;
+                return Padding(
+                  padding: const EdgeInsets.all(2.0),
+                  child: SizedBox(
+                    width: effectiveButtonSize,
+                    height: effectiveButtonSize,
+                    child: SpeechBubbleButton(
+                      label: isActive ? (btn['text'] ?? '') : '',
+                      onPressed: isActive ? () => handleButtonAction(btn) : null,
+                      isActive: isActive,
+                      isHighlighted: scanningIndex == index && isScanning,
+                      darkColor: darkColor,
+                      lightColor: lightColor,
+                      fontSize: fontSize,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        );
+      },
+    );
+  }
+}
+
+
+// --- Custom SpeechBubbleButton Widget ---
+class SpeechBubbleButton extends StatelessWidget {
+  final String label;
+  final VoidCallback? onPressed;
+  final bool isActive;
+  final bool isHighlighted;
+  final Color darkColor;
+  final Color lightColor;
+  final double fontSize;
+
+  const SpeechBubbleButton({
+    super.key,
+    required this.label,
+    required this.onPressed,
+    required this.isActive,
+    required this.isHighlighted,
+    required this.darkColor,
+    required this.lightColor,
+    required this.fontSize,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: isActive ? onPressed : null,
+      child: Stack(
+        alignment: Alignment.center,
+        children: [
+          // Outer glow only when highlighted
+          if (isHighlighted)
+            Positioned.fill(
+              child: IgnorePointer(
+                child: CustomPaint(
+                  painter: _SpeechBubbleGlowPainter(
+                    glowColor: lightColor,
+                  ),
+                ),
+              ),
+            ),
+          CustomPaint(
+            painter: _SpeechBubbleTailPainter(
+              borderColor: darkColor,
+              fillColor: Colors.white,
+            ),
+            child: Container(
+              margin: const EdgeInsets.only(bottom: 6, left: 0, right: 0, top: 0),
+              color: Colors.transparent, // Paint handled by CustomPainter
+              child: Center(
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 6.0),
+                  child: Text(
+                    label,
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.black,
+                      fontWeight: FontWeight.bold,
+                      fontSize: fontSize,
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// Outer glow painter for highlight effect
+class _SpeechBubbleGlowPainter extends CustomPainter {
+  final Color glowColor;
+  _SpeechBubbleGlowPainter({required this.glowColor});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double radius = 18.0;
+    final double tailWidth = 24.0;
+    final double tailHeight = 20.0;
+    final double tailBaseY = size.height - tailHeight;
+    final double tailBaseX = 0.0;
+
+    // Outline path (bubble + tail)
+    final Rect bubbleRect = Rect.fromLTWH(0, 0, size.width, size.height - tailHeight);
+    final RRect rrect = RRect.fromRectAndRadius(bubbleRect, Radius.circular(radius));
+    final Path outline = Path()
+      ..addRRect(rrect)
+      ..moveTo(tailBaseX + 16, tailBaseY)
+      ..lineTo(tailBaseX + 6, tailBaseY + tailHeight)
+      ..lineTo(tailBaseX + 36, tailBaseY)
+      ..close();
+
+    final Paint glowPaint = Paint()
+      ..color = glowColor.withOpacity(0.55)
+      ..maskFilter = const MaskFilter.blur(BlurStyle.outer, 18);
+    canvas.drawPath(outline, glowPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant _SpeechBubbleGlowPainter oldDelegate) {
+    return oldDelegate.glowColor != glowColor;
+  }
+}
+
+class _SpeechBubbleTailPainter extends CustomPainter {
+  final Color borderColor;
+  final Color fillColor;
+  _SpeechBubbleTailPainter({required this.borderColor, required this.fillColor});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final double radius = 18.0;
+    final double tailWidth = 24.0;
+    final double tailHeight = 20.0;
+    final double tailBaseY = size.height - tailHeight;
+    final double tailBaseX = 0.0;
+    final double borderWidth = 2.0;
+
+    // --- 1. 3D Beveled Gradient Fill ---
+    final Rect bubbleRect = Rect.fromLTWH(0, 0, size.width, size.height - tailHeight);
+    final RRect rrect = RRect.fromRectAndRadius(bubbleRect, Radius.circular(radius));
+    final Paint gradientPaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          Colors.white,
+          Colors.grey[100]!,
+          Colors.grey[300]!,
+        ],
+        stops: [0.0, 0.6, 1.0],
+      ).createShader(bubbleRect)
+      ..style = PaintingStyle.fill;
+
+    // --- 2. Soft shadow for 3D effect ---
+    canvas.save();
+    canvas.drawShadow(Path()..addRRect(rrect), Colors.black.withOpacity(0.20), 10, false);
+    canvas.restore();
+
+    // --- 3. Draw bubble fill with gradient ---
+    canvas.drawRRect(rrect, gradientPaint);
+
+    // --- 4. Draw tail (simple triangle, like the image) ---
+    final Path tailPath = Path();
+    tailPath.moveTo(tailBaseX + 16, tailBaseY); // base of tail at bubble bottom left
+    tailPath.lineTo(tailBaseX + 6, tailBaseY + tailHeight); // tip of tail (down and left)
+    tailPath.lineTo(tailBaseX + 36, tailBaseY); // base of tail at bubble bottom (right of left corner)
+    tailPath.close();
+
+    // --- 5. Tail gradient fill (match bubble) ---
+    final Rect tailRect = Rect.fromLTWH(tailBaseX, tailBaseY, tailWidth + 20, tailHeight);
+    final Paint tailGradientPaint = Paint()
+      ..shader = LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [
+          Colors.white,
+          Colors.grey[100]!,
+          Colors.grey[300]!,
+        ],
+        stops: [0.0, 0.6, 1.0],
+      ).createShader(tailRect)
+      ..style = PaintingStyle.fill;
+    canvas.drawPath(tailPath, tailGradientPaint);
+
+    // --- 6. Draw border for bubble and tail as one piece ---
+    final Path outline = Path()
+      ..addRRect(rrect)
+      ..moveTo(tailBaseX + 16, tailBaseY)
+      ..lineTo(tailBaseX + 6, tailBaseY + tailHeight)
+      ..lineTo(tailBaseX + 36, tailBaseY)
+      ..close();
+    final Paint borderPaint = Paint()
+      ..color = borderColor
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = borderWidth;
+    canvas.drawPath(outline, borderPaint);
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+}

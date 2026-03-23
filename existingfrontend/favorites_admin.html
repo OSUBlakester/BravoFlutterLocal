@@ -1,0 +1,616 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Admin - Manage Favorites</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+  <script src="/static/interactive-guide.js"></script>
+  <script src="/static/favorites-admin-guide.js"></script>
+  <script src="/static/favorites_admin.js" defer></script>
+  <style>
+    /* Custom base styles */
+    body {
+      font-family: 'Inter', sans-serif;
+    }
+    
+    /* Style for the button grid cells */
+    #buttonGrid {
+      display: grid;
+      grid-template-columns: repeat(10, minmax(120px, 1fr));
+      gap: 8px;
+      width: 100%;
+      border: 1px solid #ccc;
+      margin-top: 1rem;
+      margin-bottom: 1rem;
+      background-color: #f0f0f0;
+      overflow-x: auto;
+      padding: 8px;
+    }
+
+    .visual-button {
+      border: 2px solid #d1d5db;
+      border-radius: 8px;
+      padding: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background-color: white;
+      min-height: 80px;
+      cursor: pointer;
+      transition: all 0.2s ease;
+      font-size: 0.875rem;
+      font-weight: 500;
+      text-align: center;
+      word-wrap: break-word;
+      position: relative;
+    }
+
+    .visual-button:hover {
+      border-color: #3b82f6;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+      transform: translateY(-1px);
+    }
+
+    .visual-button.filled {
+      background-color: #e0f2fe;
+      border-color: #0288d1;
+      color: #01579b;
+    }
+
+    .visual-button.empty {
+      background-color: #f9f9f9;
+      border-color: #e0e0e0;
+      color: #9e9e9e;
+      font-style: italic;
+    }
+
+    .visual-button.drag-over {
+      background-color: #fff3cd;
+      border-color: #ffc107;
+    }
+
+    .button-actions {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+    }
+
+    .visual-button:hover .button-actions {
+      opacity: 1;
+    }
+
+    .action-btn {
+      background: rgba(255, 255, 255, 0.9);
+      border: none;
+      border-radius: 4px;
+      width: 20px;
+      height: 20px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      margin-left: 2px;
+      cursor: pointer;
+      font-size: 10px;
+    }
+
+    .action-btn:hover {
+      background: white;
+    }
+
+    /* Modal styles */
+    .modal {
+      display: none;
+      position: fixed;
+      z-index: 1000;
+      left: 0;
+      top: 0;
+      width: 100%;
+      height: 100%;
+      background-color: rgba(0, 0, 0, 0.5);
+    }
+
+    .modal.show {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .modal-content {
+      background-color: white;
+      padding: 20px;
+      border-radius: 8px;
+      width: 90%;
+      max-width: 600px;
+      max-height: 90vh;
+      overflow-y: auto;
+      position: relative;
+    }
+
+    .wizard-step {
+      display: none;
+    }
+
+    .wizard-step.active {
+      display: block;
+    }
+
+    .test-results {
+      margin-top: 16px;
+      padding: 12px;
+      border-radius: 6px;
+      border: 1px solid #d1d5db;
+    }
+
+    .test-results.success {
+      background-color: #f0f9ff;
+      border-color: #0ea5e9;
+      color: #0c4a6e;
+    }
+
+    .test-results.error {
+      background-color: #fef2f2;
+      border-color: #f87171;
+      color: #7f1d1d;
+    }
+  </style>
+</head>
+<body class="bg-gray-100">
+
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+
+    <script>
+        // --- DYNAMIC AUTHENTICATION & CONFIGURATION CONTEXT ---
+        (async () => {
+            // 1. Fetch Firebase config dynamically
+            let firebaseConfig;
+            try {
+                const response = await fetch('/api/frontend-config');
+                if (!response.ok) throw new Error(`Server error (${response.status})`);
+                const configData = await response.json();
+                firebaseConfig = configData.firebase_config || configData;
+                if (!firebaseConfig || !firebaseConfig.apiKey) throw new Error('Invalid config from server.');
+            } catch (error) {
+                console.error('Fatal: Could not load application configuration.', error);
+                document.body.innerHTML = `<div style="padding: 2rem; text-align: center; color: red; font-family: sans-serif;">Failed to load application configuration. Please refresh the page.</div>`;
+                return;
+            }
+
+            // 2. Initialize Firebase
+            firebase.initializeApp(firebaseConfig);
+            const auth = firebase.auth();
+            console.log(`Firebase initialized for project: ${firebaseConfig.projectId}`);
+
+            // 3. Check for logged-in user and set up context using onAuthStateChanged
+            auth.onAuthStateChanged(async (user) => {
+                if (user) {
+                    const currentAacUserId = sessionStorage.getItem("currentAacUserId");
+                    const tokenFromUser = await user.getIdToken();
+                    sessionStorage.setItem("firebaseIdToken", tokenFromUser);
+
+                    if (!currentAacUserId) {
+                        console.warn("No AAC User ID found in session. Redirecting to auth page for user selection.");
+                        window.location.href = 'auth.html';
+                        return;
+                    }
+
+                    window.authenticatedFetch = async (url, options = {}) => {
+                        const headers = options.headers || {};
+                        headers['Authorization'] = `Bearer ${tokenFromUser}`;
+                        headers['X-User-ID'] = currentAacUserId;
+                        
+                        // Check for admin context and add target account header if needed
+                        const adminTargetAccountId = sessionStorage.getItem('adminTargetAccountId');
+                        if (adminTargetAccountId) {
+                            headers['X-Admin-Target-Account'] = adminTargetAccountId;
+                        }
+                        
+                        options.headers = headers;
+
+                        const response = await fetch(url, options);
+                        if (response.status === 401 || response.status === 403) {
+                            console.error('Authentication failed, redirecting to auth page');
+                            window.location.href = '/static/auth.html';
+                            throw new Error('Authentication failed');
+                        }
+                        return response;
+                    };
+
+                    // Update page title with profile name
+                    window.updatePageTitleWithProfile = async function() {
+                        try {
+                            const response = await window.authenticatedFetch('/api/account/users');
+                            if (!response.ok) return;
+                            
+                            const profiles = await response.json();
+                            const currentProfile = profiles.find(profile => profile.aac_user_id === currentAacUserId);
+                            
+                            if (currentProfile && currentProfile.display_name) {
+                                const titleElement = document.getElementById('dynamic-page-title');
+                                if (titleElement) {
+                                    const baseTitle = 'Manage Favorites Topics';
+                                    titleElement.textContent = `${baseTitle} - ${currentProfile.display_name}`;
+                                    console.log(`Updated favorites admin page title to include profile: ${currentProfile.display_name}`);
+                                }
+                            }
+                        } catch (error) {
+                            console.error('Error updating page title with profile:', error);
+                        }
+                    };
+
+                    // Call the profile update function
+                    await window.updatePageTitleWithProfile();
+
+                } else {
+                    console.warn("No logged-in user detected. Redirecting to auth.");
+                    window.location.href = 'auth.html';
+                }
+            });
+        })();
+    </script>
+
+    <div class="page-banner flex items-center justify-between bg-[#002244] text-[#FB4F14] px-4 py-2 shadow">
+        <div class="flex items-center gap-2">
+            <button onclick="window.navigateToHome ? window.navigateToHome() : window.location.href='gridpage.html?page=home'" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100 focus:outline-none focus:ring-2 focus:ring-orange-500" title="Home">
+                <i class="fas fa-home"></i>
+            </button>
+            <h1 id="dynamic-page-title" class="ml-2 text-xl font-semibold">Manage Favorites Topics</h1>
+        </div>
+        <div class="admin-toolbar flex items-center gap-2">
+            <a href="admin_pages.html" title="Pages &amp; Buttons" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-th-large"></i></a>
+            <a href="admin_settings.html" title="Global Settings" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-cog"></i></a>
+            <a href="user_current_admin.html" title="User Current Location" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-map-marker-alt"></i></a>
+            <a href="user_info_admin.html" title="User Info &amp; Birthdays" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-info-circle"></i></a>
+            <a href="user_diary_admin.html" title="User Diary" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-book-open"></i></a>
+            <a href="audio_admin.html" title="Audio Devices" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-volume-up"></i></a>
+            <a href="favorites_admin.html" title="Event Sources" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-star"></i></a>
+            <a href="admin_audit_report.html" title="Activity Reports" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-clipboard-list"></i></a>
+            <span class="border-l border-white h-6 mx-1"></span>
+            <button id="switch-user-button" title="Switch User Profile" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-users"></i></button>
+            <button id="logout-button" title="Logout" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-sign-out-alt"></i></button>
+            <button id="help-icon" title="Help" aria-label="Help" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full ml-2 transition-colors duration-200 text-base hover:bg-orange-100 focus:outline-none focus:ring-2 focus:ring-orange-500">
+                <i class="fas fa-question-circle"></i>
+            </button>
+        </div>
+    </div>
+
+  <!-- Main Content -->
+  <div class="container mx-auto mt-6 p-4">
+    <!-- Status Message Area -->
+    <div id="status-message-area" class="mb-4"></div>
+
+    <!-- Action Buttons -->
+    <div class="flex flex-wrap gap-4 mb-6">
+      <button id="saveChangesBtn" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors">
+        <i class="fas fa-save mr-2"></i>Save Changes
+      </button>
+      <button id="clearAllBtn" class="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors">
+        <i class="fas fa-trash mr-2"></i>Clear All
+      </button>
+    </div>
+
+    <!-- Button Grid -->
+    <div class="bg-white rounded-lg shadow-sm border border-gray-200 p-6">
+      <h2 class="text-lg font-medium text-gray-900 mb-4">Favorites Topics Grid</h2>
+      <div id="buttonGrid">
+        <!-- Grid cells will be generated dynamically -->
+      </div>
+    </div>
+  </div>
+
+  <!-- Button Editor Modal -->
+  <div id="buttonEditorModal" class="modal">
+    <div class="modal-content">
+      <div class="flex justify-between items-center mb-4">
+        <h3 class="text-lg font-semibold">Edit Favorite Topic</h3>
+        <button id="closeEditorModal" class="text-gray-400 hover:text-gray-600">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+      
+      <form id="buttonEditorForm">
+        <div class="mb-4">
+          <label for="buttonText" class="block text-sm font-medium text-gray-700 mb-2">Topic Name *</label>
+          <input type="text" id="buttonText" name="buttonText" required maxlength="50" 
+                 class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                 placeholder="e.g., Denver Broncos, Disney Movies">
+        </div>
+
+        <div class="mb-4">
+          <label for="speechPhrase" class="block text-sm font-medium text-gray-700 mb-2">Speech Phrase (Optional)</label>
+          <input type="text" id="speechPhrase" name="speechPhrase" 
+                 class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                 placeholder="What to say before scraping, e.g., 'Let me get the latest Denver Broncos news'">
+        </div>
+
+        <div class="mb-6">
+          <button type="button" id="configureScrapingBtn" class="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors">
+            <i class="fas fa-cog mr-2"></i>Configure Web Scraping
+          </button>
+          <div id="scrapingConfigStatus" class="mt-2 text-sm text-gray-600"></div>
+        </div>
+
+        <div class="flex justify-end space-x-3">
+          <button type="button" id="deleteButtonBtn" class="bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors">
+            <i class="fas fa-trash mr-2"></i>Delete
+          </button>
+          <button type="button" id="cancelEditorBtn" class="bg-gray-300 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-400 transition-colors">Cancel</button>
+          <button type="submit" id="saveButtonBtn" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors">Save</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Scraping Configuration Wizard Modal -->
+  <div id="scrapingWizardModal" class="modal">
+    <div class="modal-content">
+      <div class="flex justify-between items-center mb-4">
+        <h3 class="text-lg font-semibold">Web Scraping Configuration Wizard</h3>
+        <button id="closeWizardModal" class="text-gray-400 hover:text-gray-600">
+          <i class="fas fa-times"></i>
+        </button>
+      </div>
+
+      <!-- Step 1: Basic Setup -->
+      <div id="wizardStep1" class="wizard-step active">
+        <h4 class="text-md font-medium mb-4">Step 1: Choose Your News Source</h4>
+        
+        <!-- Popular Sites -->
+        <div class="mb-6">
+          <label class="block text-sm font-medium text-gray-700 mb-3">Popular News Sites (Click to use)</label>
+          <div class="grid grid-cols-2 gap-3">
+            <button type="button" class="site-template-btn p-3 border border-gray-300 rounded-lg hover:bg-blue-50 hover:border-blue-300 text-left" data-site="cnn" data-keywords="breaking news, politics, world">
+              <div class="font-medium">CNN</div>
+              <div class="text-xs text-gray-500">CNN.com sections</div>
+              <div class="text-xs text-blue-600 mt-1">Keywords: breaking news, politics, world</div>
+            </button>
+            <button type="button" class="site-template-btn p-3 border border-gray-300 rounded-lg hover:bg-blue-50 hover:border-blue-300 text-left" data-site="bbc" data-keywords="UK, world news, breaking">
+              <div class="font-medium">BBC News</div>
+              <div class="text-xs text-gray-500">BBC.com sections</div>
+              <div class="text-xs text-blue-600 mt-1">Keywords: UK, world news, breaking</div>
+            </button>
+            <button type="button" class="site-template-btn p-3 border border-gray-300 rounded-lg hover:bg-blue-50 hover:border-blue-300 text-left" data-site="espn" data-keywords="NFL, NBA, MLB, sports">
+              <div class="font-medium">ESPN</div>
+              <div class="text-xs text-gray-500">Sports news sections</div>
+              <div class="text-xs text-blue-600 mt-1">Keywords: NFL, NBA, MLB, sports</div>
+            </button>
+            <button type="button" class="site-template-btn p-3 border border-gray-300 rounded-lg hover:bg-blue-50 hover:border-blue-300 text-left" data-site="reddit" data-keywords="">
+              <div class="font-medium">Reddit</div>
+              <div class="text-xs text-gray-500">Subreddit posts</div>
+              <div class="text-xs text-blue-600 mt-1">Keywords: (use subreddit topics)</div>
+            </button>
+          </div>
+        </div>
+        
+        <!-- Manual URL Entry -->
+        <div class="mb-4">
+          <label class="block text-sm font-medium text-gray-700 mb-2">Or Enter Any Website URL</label>
+          <input type="url" id="anyWebsiteUrl" 
+                 class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                 placeholder="https://example.com/sports/broncos/">
+          <p class="text-sm text-gray-600 mt-1">Paste any news section URL and we'll figure out how to read it</p>
+        </div>
+        
+        <!-- Keywords for filtering -->
+        <div class="mb-4">
+          <label class="block text-sm font-medium text-gray-700 mb-2">Keywords (Optional)</label>
+          <input type="text" id="step1Keywords" 
+                 class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                 placeholder="Broncos, Denver, NFL (comma-separated)">
+          <p class="text-sm text-gray-600 mt-1">Filter articles to only include these keywords</p>
+        </div>
+        
+        <!-- Sample Article URL (shown when smart analysis fails) -->
+        <div id="sampleArticleSection" class="mb-4 hidden">
+          <label class="block text-sm font-medium text-gray-700 mb-2">Sample Article URL (Optional)</label>
+          <input type="url" id="sampleArticleUrl" 
+                 class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                 placeholder="https://example.com/sports/broncos/specific-article-title">
+          <p class="text-sm text-gray-600 mt-1">Paste a link to a specific article from this site to help our AI understand the structure better</p>
+        </div>
+        
+        <div class="mb-4">
+          <button type="button" id="smartAnalyzeBtn" class="w-full bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors">
+            <i class="fas fa-brain mr-2"></i>Smart Analysis - Let AI Figure It Out
+          </button>
+          <p class="text-sm text-gray-600 mt-1">Our AI will visit the page and automatically learn how to read articles from it</p>
+        </div>
+        
+        <!-- Analysis Status -->
+        <div id="analysisStatus" class="mb-4 hidden">
+          <div id="analysisResults" class="p-3 rounded-lg text-sm"></div>
+        </div>
+        
+        <div class="border-t pt-4">
+          <h5 class="text-sm font-medium text-gray-700 mb-2">Selected Configuration:</h5>
+          <div id="selectedConfig" class="text-sm text-gray-600 bg-gray-50 p-3 rounded-lg">
+            Choose a popular site above or enter a URL for smart analysis
+          </div>
+        </div>
+        
+        <div class="flex justify-end mt-4">
+          <button type="button" id="step1NextBtn" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors" disabled>Next</button>
+        </div>
+      </div>
+
+      <!-- Step 2: Selectors -->
+            <!-- Step 2: Review & Test -->
+      <div id="wizardStep2" class="wizard-step">
+        <h4 class="text-md font-medium mb-4">Step 2: Review What We Found</h4>
+        
+        <div id="configurationSummary" class="mb-6 p-4 bg-gray-50 rounded-lg">
+          <h5 class="font-medium mb-2">Configuration Summary:</h5>
+          <div id="summaryContent" class="text-sm text-gray-600">
+            Configuration will appear here after Step 1
+          </div>
+        </div>
+        
+        <div class="mb-4">
+          <button type="button" id="testNowBtn" class="w-full bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors">
+            <i class="fas fa-play mr-2"></i>Test - Show Me Articles From This Site
+          </button>
+          <p class="text-sm text-gray-600 mt-1">Click to see what articles we can find right now</p>
+        </div>
+        
+        <div id="testResultsDisplay" class="hidden mb-4">
+          <h5 class="font-medium mb-2">Articles Found:</h5>
+          <div id="articlesPreview" class="max-h-60 overflow-y-auto border border-gray-200 rounded-lg p-3 bg-white">
+            <!-- Test results will appear here -->
+          </div>
+        </div>
+        
+        <div id="troubleshootingSection" class="hidden mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+          <h5 class="font-medium text-yellow-800 mb-2">Having Issues?</h5>
+          <div class="text-sm text-yellow-700 space-y-2">
+            <p>If no articles appear, or they look wrong:</p>
+            <ul class="list-disc list-inside space-y-1">
+              <li>Try a different URL from the same website</li>
+              <li>Make sure the URL shows a list of articles, not just one article</li>
+              <li>Some websites block automated access - try a different news site</li>
+            </ul>
+            <button type="button" id="tryDifferentSiteBtn" class="mt-2 bg-yellow-600 text-white px-3 py-1 rounded text-sm hover:bg-yellow-700">
+              Try Different Website
+            </button>
+          </div>
+        </div>
+        
+        <div class="flex justify-between">
+          <button type="button" id="step2BackBtn" class="border border-gray-300 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-50 transition-colors">Back</button>
+          <button type="button" id="step2NextBtn" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors" disabled>Next</button>
+        </div>
+      </div>
+
+      <!-- Step 3: Keywords and Testing -->
+      <div id="wizardStep3" class="wizard-step">
+        <h4 class="text-md font-medium mb-4">Step 3: Keywords & Testing</h4>
+        <div class="mb-4">
+          <label for="keywords" class="block text-sm font-medium text-gray-700 mb-2">Keywords (Optional)</label>
+          <input type="text" id="keywords" 
+                 class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                 placeholder="Broncos, Denver, NFL (comma-separated)">
+          <p class="text-sm text-gray-600 mt-1">Filter content by these keywords</p>
+        </div>
+        
+        <div class="mb-4">
+          <button type="button" id="testScrapingBtn" class="bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 transition-colors">
+            <i class="fas fa-vial mr-2"></i>Test Configuration
+          </button>
+        </div>
+
+        <div id="testResults" class="test-results" style="display: none;">
+          <!-- Test results will be displayed here -->
+        </div>
+
+        <div class="flex justify-between">
+          <button type="button" id="step3BackBtn" class="bg-gray-300 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-400 transition-colors">Back</button>
+          <button type="button" id="saveScrapingConfigBtn" class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors">Save Configuration</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+
+  <script>
+    // --- DYNAMIC AUTHENTICATION & CONFIGURATION CONTEXT ---
+    (async () => {
+        // 1. Fetch Firebase config dynamically
+        let firebaseConfig;
+        try {
+            const response = await fetch('/api/frontend-config');
+            if (!response.ok) throw new Error(`Server error (${response.status})`);
+            const configData = await response.json();
+            firebaseConfig = configData.firebase_config || configData;
+            if (!firebaseConfig || !firebaseConfig.apiKey) throw new Error('Invalid config from server.');
+        } catch (error) {
+            console.error('Fatal: Could not load application configuration.', error);
+            document.body.innerHTML = `<div style="padding: 2rem; text-align: center; color: red; font-family: sans-serif;">Failed to load application configuration. Please refresh the page.</div>`;
+            return;
+        }
+
+        // 2. Initialize Firebase
+        firebase.initializeApp(firebaseConfig);
+        const auth = firebase.auth();
+        console.log(`Firebase initialized for project: ${firebaseConfig.projectId}`);
+
+        // 3. Check for logged-in user and set up context using onAuthStateChanged
+        auth.onAuthStateChanged(async (user) => {
+            if (user) {
+                const currentAacUserId = sessionStorage.getItem("currentAacUserId");
+                const tokenFromUser = await user.getIdToken();
+                sessionStorage.setItem("firebaseIdToken", tokenFromUser);
+
+                if (!currentAacUserId) {
+                    console.warn("No AAC User ID found in session. Redirecting to auth page for user selection.");
+                    window.location.href = 'auth.html';
+                    return;
+                }
+
+                // 6. Define and expose a global authenticatedFetch function
+                window.authenticatedFetch = async (url, options = {}) => {
+                    const headers = options.headers || {};
+                    headers['Authorization'] = `Bearer ${tokenFromUser}`;
+                    headers['X-User-ID'] = currentAacUserId;
+                    
+                    // For admin access, include the target account ID
+                    const adminTargetAccountId = sessionStorage.getItem('adminTargetAccountId');
+                    if (adminTargetAccountId) {
+                        headers['X-Admin-Target-Account'] = adminTargetAccountId;
+                        console.log(`Setting admin target account header: ${adminTargetAccountId}`);
+                    }
+                    
+                    options.headers = headers;
+                    const response = await fetch(url, options);
+                    if (response.status === 401 || response.status === 403) {
+                        console.warn(`Auth failed (${response.status}). Redirecting to login.`);
+                        sessionStorage.clear();
+                        window.location.href = 'auth.html';
+                        throw new Error("Session expired.");
+                    }
+                    return response;
+                };
+
+                // 7. Expose context and notify deferred scripts that the context is ready
+                window.currentAacUserId = currentAacUserId;
+                window.firebaseIdToken = tokenFromUser;
+                window.adminContextInitializedByInlineScript = true;
+                
+                // Global function to update page title with profile name
+                window.updatePageTitleWithProfile = async (baseTitle) => {
+                    try {
+                        const response = await window.authenticatedFetch('/api/account/users');
+                        if (!response.ok) return;
+                        
+                        const profiles = await response.json();
+                        const currentProfile = profiles.find(profile => profile.aac_user_id === currentAacUserId);
+                        
+                        if (currentProfile && currentProfile.display_name) {
+                            const titleElement = document.getElementById('dynamic-page-title');
+                            if (titleElement) {
+                                titleElement.textContent = `${baseTitle} - ${currentProfile.display_name}`;
+                            }
+                        }
+                    } catch (error) {
+                        console.error('Error updating page title with profile:', error);
+                    }
+                };
+                
+                document.dispatchEvent(new Event('adminUserContextReady'));
+                console.log(`Admin context ready for AAC User ID: ${currentAacUserId}`);
+
+            } else {
+                console.log("No Firebase user session found. Redirecting to auth.html.");
+                sessionStorage.clear();
+                window.location.href = 'auth.html';
+            }
+        });
+    })();
+  </script>
+</body>
+</html>

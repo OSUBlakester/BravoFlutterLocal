@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "894197055102",
+    "project_id": "bravo-prod-465323",
+    "storage_bucket": "bravo-prod-465323.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:894197055102:android:d71bf54b2166ca8a",
+        "android_client_info": {
+          "package_name": "com.bravoaac.bravo"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "894197055102-generated.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyC2e0vPcs20iUfKYd_KF8jESrvbsEa1AAg"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "894197055102-generated.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Panel - Configuration</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <script src="/static/interactive-guide.js"></script>
+    <script src="/static/admin-guide.js"></script>
+    <style>
+        /* Custom base styles */
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        /* Style for the button grid cells */
+        #buttonGrid {
+            display: grid;
+            grid-template-columns: repeat(10, minmax(180px, 1fr)); /* Increased min width */
+            gap: 5px; /* Keep gap relatively small */
+            width: 100%; /* Allow grid to take full width */
+            /* Removed fixed height/width and aspect-ratio */
+            border: 1px solid #ccc;
+            margin-top: 1rem;
+            margin-bottom: 1rem;
+            background-color: #f0f0f0; /* Lighter background for contrast */
+            overflow-x: auto; /* Allow horizontal scroll on small screens if needed */
+            padding: 5px; /* Add padding around the grid */
+        }
+
+        .gridCell {
+            border: 1px solid #b0b0b0; /* Darker border for cells */
+            padding: 12px; /* Increased padding */
+            display: flex;
+            flex-direction: column;
+            align-items: stretch; /* Stretch items to fill width */
+            justify-content: space-between; /* Distribute space */
+            background-color: white;
+            min-height: 130px; /* Ensure minimum height for content */
+            box-sizing: border-box;
+        }
+
+        .gridCell input[type="text"],
+        .gridCell textarea
+         {
+            width: 100%; /* Use full width */
+            font-size: 0.75rem; /* Slightly larger font */
+            padding: 3px 4px; /* Adjust padding */
+            border: 1px solid #d1d5db; /* Tailwind gray-300 */
+            border-radius: 3px;
+            text-align: center;
+            box-sizing: border-box;
+            margin-bottom: 4px; /* Space below inputs */
+        }
+         .gridCell textarea {
+             /* Let textarea take more space naturally */
+             min-height: 40px;
+             resize: vertical; /* Allow vertical resize */
+             text-align: left; /* Align text left */
+             padding: 4px;
+         }
+        .gridCell label {
+             /* Labels are removed, using placeholders */
+        }
+         .arrowButtons {
+             display: flex;
+             justify-content: center;
+             gap: 3px; /* Space between arrow buttons */
+             margin-top: auto; /* Push arrows to bottom */
+             padding-top: 4px; /* Space above arrows */
+         }
+         .arrowButtons button {
+             padding: 1px 4px; /* Adjust padding */
+             font-size: 0.9rem; /* Slightly larger arrows */
+             line-height: 1.2;
+             background-color: #e5e7eb; /* Tailwind gray-200 */
+             border: 1px solid #9ca3af; /* Tailwind gray-400 */
+             border-radius: 3px;
+             cursor: pointer;
+             color: #374151; /* Tailwind gray-700 */
+         }
+         .arrowButtons button:hover {
+             background-color: #d1d5db; /* Tailwind gray-300 */
+         }
+
+
+        /* Basic styling for form elements using Tailwind */
+        label {
+            @apply block text-sm font-medium text-gray-700 mb-1;
+        }
+        input[type="text"],
+        input[type="url"],
+        input[type="number"],
+        textarea,
+        select {
+             /* Apply styles outside the grid */
+            @apply mt-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm placeholder-gray-400 focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 sm:text-sm;
+        }
+        /* Ensure grid textareas don't inherit large min-heights */
+        #buttonGrid textarea {
+             min-height: 40px;
+        }
+
+        button, .button-link {
+             @apply inline-flex items-center justify-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white focus:outline-none focus:ring-2 focus:ring-offset-2;
+        }
+        .button-primary {
+             @apply bg-blue-600 hover:bg-blue-700 focus:ring-blue-500;
+        }
+         .button-secondary {
+             @apply bg-gray-600 hover:bg-gray-700 focus:ring-gray-500;
+         }
+        .button-danger {
+             @apply bg-red-600 hover:bg-red-700 focus:ring-red-500;
+         }
+         .button-success {
+              @apply bg-green-600 hover:bg-green-700 focus:ring-green-500;
+         }
+        .button-link i, button i {
+             @apply mr-2;
+        }
+
+    </style>
+</head>
+<body class="bg-gray-100">
+
+    <nav class="bg-gray-800 text-white p-4 shadow-md sticky top-0 z-50">
+        <div class="container mx-auto flex justify-between items-center">
+            <h1 class="text-xl font-semibold">General Admin</h1>
+            <div class="space-x-4">
+                <a href="help_admin.html" class="button-link button-secondary">
+                    <i class="fas fa-question-circle"></i> Help Admin
+                </a>
+                <a href="admin_nav.html" class="button-link button-secondary">
+                    <i class="fas fa-th-large"></i> Admin Nav
+                </a>
+                <a href="gridpage.html?page=home" class="button-link button-secondary">
+                     <i class="fas fa-home"></i> Home
+                </a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="container mx-auto mt-6 p-4">
+        <div class="bg-white p-6 rounded-lg shadow-lg mb-6">
+             <h2 class="text-2xl font-bold text-gray-800 mb-4 border-b pb-2">Global Settings</h2>
+             <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
+                 <div>
+                     <label for="scanDelay" class="block text-lg font-medium text-gray-700 mb-2">Auditory Scan Speed (ms):</label>
+                     <input type="number" id="scanDelay" name="scanDelay" min="100" step="100" class="w-full max-w-xs" placeholder="e.g., 3500">
+                     <p class="text-xs text-gray-500 mt-1">Delay between highlighting buttons (milliseconds).</p>
+                 </div>
+                 <div>
+                     <label class="block text-lg font-medium text-gray-700 mb-2">Wake Word:</label>
+                     <div class="flex space-x-2 items-center">
+                         <input type="text" id="wakeWordInterjection" name="wakeWordInterjection" placeholder="Interjection (e.g., Hey)" class="flex-1">
+                         <input type="text" id="wakeWordName" name="wakeWordName" placeholder="Name (e.g., Bravo)" class="flex-1">
+                     </div>
+                      <p class="text-xs text-gray-500 mt-1">The phrase used to activate voice commands (e.g., "Hey Bravo").</p>
+                 </div>
+                 <div>
+                    <label class="block text-lg font-medium text-gray-700 mb-2">Location:</label>
+                    <div class="flex space-x-2 items-center">
+                        <input type="text" id="CountryCode" name="CountryCode" placeholder="2 Letter Country Code" class="flex-1">
+                        <input type="text" id="StateCode" name="StateCode" placeholder="2 Letter State Code" class="flex-1">
+                    </div>
+                     <p class="text-xs text-gray-500 mt-1">Location Country and State to determine local info.  Use 2-letter codes.</p>
+                </div>
+                <div>
+                    <label for="speechRate" class="block text-lg font-medium text-gray-700 mb-2">Announcement Speech Rate (WPM):</label>
+                    <input type="number" id="speechRate" name="speechRate" min="100" max="300" step="10" class="w-full max-w-xs" placeholder="e.g., 180">
+                    <p class="text-xs text-gray-500 mt-1">Words Per Minute for server-side announcements (e.g., 100-300, default ~180).</p>
+                </div>
+             </div>
+             <button type="button" id="saveSettingsButton" class="button-success">
+                 <i class="fas fa-cog mr-2"></i> Save Global Settings
+             </button>
+             <p id="settings-status" class="text-sm text-green-600 mt-2 h-4"></p>
+        </div>
+
+        <div class="bg-white p-6 rounded-lg shadow-lg">
+            <h2 class="text-2xl font-bold text-gray-800 mb-6 border-b pb-2">Page Configuration</h2>
+
+            <div class="mb-6">
+                <label for="selectPage" class="block text-lg font-medium text-gray-700 mb-2">Select Page to Edit</label>
+                <select id="selectPage" name="selectPage" class="w-full max-w-xs"></select>
+            </div>
+
+            <form id="pageForm">
+                <h3 class="text-xl font-semibold text-gray-800 mb-4">Page Details</h3>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+                    <div>
+                        <label for="pageName">Page Name:</label>
+                        <input type="text" id="pageName" name="pageName" required>
+                    </div>
+                </div>
+
+                <h3 class="text-xl font-semibold text-gray-800 mb-4">Button Grid Layout</h3>
+                <p class="text-sm text-gray-600 mb-4">Configure the buttons for this page. Enter the text to display and the target page name it should link to.</p>
+
+                <div class="mt-6 flex flex-wrap gap-4">
+                    <button type="submit" class="button-primary">
+                         <i class="fas fa-save mr-2"></i> Save Page Config
+                    </button>
+                    <button type="button" id="deletePage" class="button-danger">
+                         <i class="fas fa-trash-alt mr-2"></i> Delete Page
+                    </button>
+                </div>
+
+                <div id="buttonGrid" class="mx-auto md:mx-0">
+
+                </div>
+                
+            </form>
+        </div>
+    </div>
+
+    <script src="static/admin.js"></script>
+
+</body>
+</html>

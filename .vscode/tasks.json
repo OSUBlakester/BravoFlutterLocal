@@ -1,0 +1,89 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "switch-to-dev",
+            "type": "shell",
+            "command": "./scripts/switch_env.sh",
+            "args": ["dev"],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "switch-to-test",
+            "type": "shell", 
+            "command": "./scripts/switch_env.sh",
+            "args": ["test"],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "switch-to-prod",
+            "type": "shell",
+            "command": "./scripts/switch_env.sh", 
+            "args": ["prod"],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "build-dev-web",
+            "type": "shell",
+            "command": "./scripts/build_environment.sh",
+            "args": ["dev", "web"],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always", 
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "build-test-web",
+            "type": "shell",
+            "command": "./scripts/build_environment.sh",
+            "args": ["test", "web"],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        },
+        {
+            "label": "build-prod-web",
+            "type": "shell",
+            "command": "./scripts/build_environment.sh",
+            "args": ["prod", "web"],
+            "group": "build",
+            "presentation": {
+                "echo": true,
+                "reveal": "always",
+                "focus": false,
+                "panel": "shared"
+            },
+            "problemMatcher": []
+        }
+    ]
+}

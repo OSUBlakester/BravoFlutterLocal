@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Favorites</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link rel="stylesheet" href="/static/splash-screen.css">
+    <link rel="stylesheet" href="/static/mood-selection.css">
+    <style>
+        /* --- Basic Body Style --- */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0; /* Remove default body margin to ensure banner spans full width */
+            padding: 0;
+            background-color: #f4f7f6; /* Optional: Light background for the page body */
+        }
+
+        /* --- Admin Toolbar Styles --- */
+        .admin-toolbar {
+            background-color: #ffffff;
+            padding: 0.25rem 0.5rem; /* Reduced padding for more compact look */
+            display: flex;
+            justify-content: flex-end; /* Align to right side of header */
+            align-items: center;
+            gap: 0.4rem; /* Reduced gap between buttons */
+            flex-wrap: wrap; /* Allow buttons to wrap on smaller screens */
+        }
+
+        /* --- Page Banner Styles --- */
+        .page-banner {
+            background-color: #002244; /* Dark grey, similar to admin page navs */
+            color: #FB4F14;
+            padding: 0.75em 1.5em; /* Reduced vertical padding to accommodate toolbar */
+            display: flex; /* Use flexbox for layout */
+            justify-content: space-between; /* Space between title and toolbar */
+            align-items: center; /* Center align vertically */
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1); /* Optional subtle shadow */
+        }
+        .page-banner h1 {
+            margin: 0;
+            font-size: 1.75em; /* Adjust size as needed */
+            font-weight: 500; /* Medium weight */
+            text-align: left; /* Left justify the title */
+        }
+        /* --- Original Styles --- */
+        #gridContainer {
+            display: grid;
+            /* grid-template-columns will be set dynamically by JavaScript based on gridColumns setting */
+            gap: 10px;
+            padding: 20px;
+            --button-font-size: 16px; /* CSS custom property for dynamic font sizing */
+        }
+
+        #gridContainer button {
+            position: relative; /* Needed for the tail pseudo-elements */
+            padding: 15px 20px; /* Adjust padding as needed for text */
+            font-size: var(--button-font-size); /* Use the CSS custom property */
+            font-weight: 500; /* Slightly bolder text */
+            cursor: pointer;
+            background-color: white;   /* White inside */
+            color: #002244;           /* Dark blue text */
+            border: 2px solid #002244; /* Dark blue border, 2px thick */
+            border-radius: 12px;       /* Somewhat rounded corners */
+            text-align: center;
+            min-height: 50px;          /* Ensure buttons have some height */
+            display: flex;             /* For centering text */
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 18px; /* Add space below for the tail + grid gap consideration */
+            box-shadow: 0 1px 3px rgba(0,0,0,0.12); /* Optional: subtle shadow for depth */
+            transition: transform 0.1s ease-out, font-size 0.2s ease-out; /* Smooth transitions */
+            word-wrap: break-word;     /* Allow text to wrap if needed */
+            hyphens: auto;             /* Enable automatic hyphenation */
+            line-height: 1.2;          /* Better line spacing for readability */
+        }
+         #gridContainer button:hover {
+             /* You can add a subtle hover effect if desired, e.g., slight brightness change */
+             filter: brightness(97%);
+         }
+
+         #gridContainer button:active, /* Optional: press effect */
+         #gridContainer button.active { /* Visual feedback for spacebar activation */
+            transform: scale(0.97);
+         }
+
+        /* Speech Bubble Tail */
+        #gridContainer button::before,
+        #gridContainer button::after {
+            content: "";
+            width: 0px;
+            height: 0px;
+            position: absolute;
+            border-right: 10px solid transparent;  /* Makes the shape triangular on the right */
+            border-bottom: 10px solid transparent; /* Makes the shape triangular on the bottom */
+        }
+        #gridContainer button::before { /* This creates the dark blue border of the tail */
+            border-left: 10px solid #002244;
+            border-top: 10px solid #002244;
+            left: 15px;  /* Position from the left edge of the button */
+            bottom: -18px; /* Positions the tail below the button */
+        }
+        #gridContainer button::after { /* This creates the white fill of the tail */
+            border-left: 10px solid white;
+            border-top: 10px solid white;
+            left: 17px;  /* Offset by 2px from ::before (button border thickness) */
+            bottom: -16px; /* Offset by 2px from ::before (button border thickness) */
+            z-index: 1;  /* Ensures the white fill is on top of the blue tail border */
+        }
+
+        /* Scanning highlight style - higher specificity to override button styles */
+        #gridContainer button.scanning {
+            box-shadow: 0 0 10px 4px #FB4F14 !important; /* Orange glow with !important to ensure it shows */
+            outline: none; /* Prevent default browser focus outline */
+            transition: box-shadow 0.2s ease-in-out; /* Keep existing transition if any, or add */
+        }
+
+        /* LLM button styling (if needed, keep separate) */
+        .llm-button {
+            padding: 10px 20px;
+            font-size: 16px;
+            background-color: #e0e0e0;
+            border: 1px solid #ccc;
+            border-radius: 5px;
+            cursor: pointer;
+            margin: 5px;
+        }
+        .llm-button:hover {
+            background-color: #d0d0d0;
+        }
+
+        /* Text area styling */
+        #chat-history-container, #question-container {
+            width: 100%;
+            margin-bottom: 12px; /* Reduced from 15px (20% smaller) */
+            padding: 0 16px; /* Reduced from 20px (20% smaller) */
+            box-sizing: border-box; /* Include padding in width */
+        }
+
+        #speech-history, #question-display {
+            width: 100%; /* Take full width of container */
+            box-sizing: border-box;
+            padding: 6px; /* Reduced from 8px (25% smaller for better proportion) */
+            border: 1px solid #aaa; /* Slightly darker border for textareas */
+            border-radius: 4px;
+            font-family: inherit;
+            font-size: 1.5rem; /* Increased from 1rem */
+            margin-top: 4px; /* Reduced from 5px (20% smaller) */
+        }
+
+        #speech-history {
+            min-height: 60px; /* Reduced from 150px to accommodate ~3 lines of text */
+            resize: vertical;
+        }
+         #question-display {
+            min-height: 32px; /* Reduced from 40px (20% smaller) */
+         }
+
+        /* --- Styles for Clear and Admin Buttons --- */
+        .history-controls {
+             margin-top: 6px; /* Reduced from 8px (25% smaller) */
+        }
+
+        /* Label styling for speech history and question */
+        #chat-history-container label, #question-container label {
+            font-size: 0.9rem; /* Slightly smaller labels */
+            font-weight: 500;
+            color: #374151; /* Tailwind gray-700 */
+        }
+
+        /* Spinner styles (Original border spinner - kept for reference if needed) */
+        .spinner {
+          border: 16px solid #f3f3f3;
+          border-top: 16px solid #3498db;
+          border-radius: 50%;
+          width: 120px;
+          height: 120px;
+          animation: spin 2s linear infinite;
+        }
+
+        @keyframes spin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+
+        /* Style for loading indicator */
+        #loading-indicator {
+            /* display: none; */ /* Initial hiding is done via inline style */
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.6); /* Semi-transparent background */
+            z-index: 1000; /* Ensure it's on top */
+
+            /* --- CSS for Centering Content --- */
+            display: flex; /* Use flexbox */
+            flex-direction: column; /* Stack spinner and text vertically */
+            align-items: center; /* Center horizontally */
+            justify-content: center; /* Center vertically */
+            /* --- End Centering --- */
+        }
+
+         #loading-indicator p { /* Style text below spinner */
+             color: white;
+             margin-top: 15px; /* More space */
+             font-size: 1.2em; /* Slightly larger text */
+         }
+
+         /* Class for image spinner */
+         .image-spinner {
+            width: 120px;  /* Spinner size */
+            height: 120px; /* Spinner size */
+            animation: spin 1.5s linear infinite; /* Apply the spin animation */
+         }
+
+         .highlight-listening {
+            /* Orange glow for highlighted state */
+            box-shadow: 0 0 10px 4px #FB4F14; /* Orange glow */
+            outline: none; /* Prevent default browser focus outline */
+            transition: box-shadow 0.2s ease-in-out; /* Keep existing transition if any, or add */
+        }
+
+        .box {
+            width: 100px;
+            margin: 50px auto;
+            border: 4px solid #002244;
+            padding: 20px;
+            text-align: center;
+            font-weight: 900;
+            color: #002244;
+            font-family: arial;
+            position: relative;
+        }
+
+        .sb1:before {
+            content: "";
+            width: 0px;
+            height: 0px;
+            position: absolute;
+            border-left: 10px solid #002244;
+            border-right: 10px solid transparent;
+            border-top: 10px solid #002244;
+            border-bottom: 10px solid transparent;
+            left: 20px;
+            bottom: -23px;
+            }
+
+            .sb1:after {
+            content: "";
+            width: 0px;
+            height: 0px;
+            position: absolute;
+            border-left: 10px solid #fff;
+            border-right: 10px solid transparent;
+            border-top: 10px solid #fff;
+            border-bottom: 10px solid transparent;
+            left: 24px;
+            bottom: -13px;
+            }
+
+    </style>
+</head>
+<body>
+
+    <div class="page-banner">
+        <h1 id="dynamic-page-title">Favorites</h1> <!-- This H1 will be updated by JavaScript -->
+        <div class="admin-toolbar">
+            <!-- Always visible lock icon -->
+            <button id="lock-icon" title="Admin Toolbar" class="h-8 w-8 flex items-center justify-center text-gray-600 bg-gray-100 rounded-full transition-colors duration-200 text-sm hover:bg-blue-100 hover:text-blue-600">
+                <i class="fas fa-lock"></i>
+            </button>
+            <!-- Admin toolbar icons - initially hidden -->
+            <div id="admin-icons" class="hidden flex items-center gap-0.4rem">
+                <button id="lock-toolbar-button" title="Lock Admin Toolbar" class="h-8 w-8 flex items-center justify-center text-gray-600 bg-gray-100 rounded-full transition-colors duration-200 text-sm hover:bg-red-100 hover:text-red-600"><i class="fas fa-lock"></i></button>
+                <span class="border-l border-gray-300 h-6 mx-1"></span> <!-- Separator -->
+                <a href="admin_pages.html" title="Pages & Buttons" class="h-8 w-8 flex items-center justify-center text-gray-600 bg-gray-100 rounded-full transition-colors duration-200 text-sm hover:bg-blue-100 hover:text-blue-600"><i class="fas fa-th-large"></i></a>
+                <a href="admin_settings.html" title="Global Settings" class="h-8 w-8 flex items-center justify-center text-gray-600 bg-gray-100 rounded-full transition-colors duration-200 text-sm hover:bg-blue-100 hover:text-blue-600"><i class="fas fa-cog"></i></a>
+                <a href="user_current_admin.html" title="User Current Location" class="h-8 w-8 flex items-center justify-center text-gray-600 bg-gray-100 rounded-full transition-colors duration-200 text-sm hover:bg-blue-100 hover:text-blue-600"><i class="fas fa-map-marker-alt"></i></a>
+                <a href="user_info_admin.html" title="User Info & Birthdays" class="h-8 w-8 flex items-center justify-center text-gray-600 bg-gray-100 rounded-full transition-colors duration-200 text-sm hover:bg-blue-100 hover:text-blue-600"><i class="fas fa-info-circle"></i></a>
+                <a href="user_diary_admin.html" title="User Diary" class="h-8 w-8 flex items-center justify-center text-gray-600 bg-gray-100 rounded-full transition-colors duration-200 text-sm hover:bg-blue-100 hover:text-blue-600"><i class="fas fa-book-open"></i></a>
+                <a href="audio_admin.html" title="Audio Devices" class="h-8 w-8 flex items-center justify-center text-gray-600 bg-gray-100 rounded-full transition-colors duration-200 text-sm hover:bg-blue-100 hover:text-blue-600"><i class="fas fa-volume-up"></i></a>
+                <a href="favorites_admin.html" title="Favorites Topics" class="h-8 w-8 flex items-center justify-center text-gray-600 bg-gray-100 rounded-full transition-colors duration-200 text-sm hover:bg-blue-100 hover:text-blue-600"><i class="fas fa-star"></i></a>
+                <a href="admin_audit_report.html" title="Activity Reports" class="h-8 w-8 flex items-center justify-center text-gray-600 bg-gray-100 rounded-full transition-colors duration-200 text-sm hover:bg-blue-100 hover:text-blue-600"><i class="fas fa-clipboard-list"></i></a>
+                <span class="border-l border-gray-300 h-6 mx-1"></span> <!-- Separator - made smaller -->
+                <button id="switch-user-button" title="Switch User Profile" class="h-8 w-8 flex items-center justify-center text-gray-600 bg-gray-100 rounded-full transition-colors duration-200 text-sm hover:bg-blue-100 hover:text-blue-600"><i class="fas fa-users"></i></button>
+                <button id="logout-button" title="Logout" class="h-8 w-8 flex items-center justify-center text-gray-600 bg-gray-100 rounded-full transition-colors duration-200 text-sm hover:bg-blue-100 hover:text-blue-600"><i class="fas fa-sign-out-alt"></i></button>
+            </div>
+            <!-- Help icon, always visible, to the right of admin toolbar -->
+            <button id="help-icon" title="Help" aria-label="Help" class="h-8 w-8 flex items-center justify-center text-gray-600 bg-gray-100 rounded-full ml-2 transition-colors duration-200 text-sm hover:bg-green-100 hover:text-green-600 focus:outline-none focus:ring-2 focus:ring-green-500">
+                <i class="fas fa-question-circle"></i>
+            </button>
+        </div>
+    <!-- Help Modal -->
+    <div id="help-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white p-8 rounded-2xl shadow-2xl w-[90vw] h-[90vh] max-w-5xl max-h-[90vh] mx-2 relative flex flex-col">
+            <button id="help-modal-close" class="absolute top-4 right-6 text-gray-500 hover:text-red-500 text-3xl font-bold focus:outline-none" aria-label="Close Help">&times;</button>
+            <div class="flex justify-between items-center mb-2">
+                <h2 class="text-2xl font-bold text-gray-800">Help &amp; User Guide</h2>
+                <a href="https://docs.google.com/document/d/e/2PACX-1vTartmB8DUzCYfFOkZtCaaZxD8TJMEMYThAEwM1v6_ccYgZOReamVGpG2XE0XdzJ5NTyw9aJLm5Yh6G/pub" target="_blank" rel="noopener" class="bg-green-100 text-green-700 px-4 py-2 rounded-md font-semibold hover:bg-green-200 transition">View Full Help</a>
+            </div>
+            <div id="help-modal-content" class="overflow-y-auto flex-1 px-0 py-0">
+                <!-- Help content will be loaded here dynamically -->
+                <div id="help-loading" class="text-center text-gray-400">Loading help...</div>
+            </div>
+            <div class="mt-4 text-center">
+                <a href="#" id="open-contact-modal" class="inline-block text-green-700 font-semibold underline hover:text-green-900">Contact Support</a>
+            </div>
+    <!-- Contact Support Modal -->
+    <div id="contact-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white p-8 rounded-2xl shadow-2xl w-[90vw] max-w-md mx-2 relative flex flex-col">
+            <button id="contact-modal-close" class="absolute top-4 right-6 text-gray-500 hover:text-red-500 text-3xl font-bold focus:outline-none" aria-label="Close Contact">&times;</button>
+            <h3 class="text-lg font-semibold mb-4">Contact Support</h3>
+            <form id="contact-support-form" class="space-y-2" method="POST" action="https://formspree.io/f/myzpzero">
+                <input type="text" id="support-name" name="name" placeholder="Your Name" class="w-full px-3 py-2 border border-gray-300 rounded-md" required>
+                <input type="email" id="support-email" name="email" placeholder="Your Email" class="w-full px-3 py-2 border border-gray-300 rounded-md" required>
+                <textarea id="support-message" name="message" placeholder="How can we help you?" class="w-full px-3 py-2 border border-gray-300 rounded-md" rows="3" required></textarea>
+                <button type="submit" class="w-full bg-green-600 text-white py-2 rounded-md hover:bg-green-700">Send to Support</button>
+            </form>
+            <div id="support-success" class="hidden text-green-600 mt-2">Thank you! Your message has been sent.</div>
+            <div id="support-error" class="hidden text-red-600 mt-2">There was an error sending your message. Please try again or email admin@talkwithbravo.com.</div>
+        </div>
+    </div>
+        </div>
+    </div>
+    </div>
+
+    <!-- PIN Modal -->
+    <div id="pin-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full mx-4">
+            <h3 class="text-lg font-semibold text-gray-800 mb-4">Enter Admin PIN</h3>
+            <input type="text" id="pin-input" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500" placeholder="Enter PIN" maxlength="10">
+            <div class="flex justify-end space-x-3 mt-4">
+                <button id="pin-cancel" class="px-4 py-2 text-gray-600 bg-gray-200 rounded-md hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-500">Cancel</button>
+                <button id="pin-submit" class="px-4 py-2 text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500">Submit</button>
+            </div>
+            <p id="pin-error" class="text-red-500 text-sm mt-2 hidden">Incorrect PIN. Please try again.</p>
+        </div>
+    </div>
+
+    <div id="chat-history-container">
+        <label for="speech-history">Speech History:</label>
+        <textarea id="speech-history" readonly></textarea>
+        <div class="history-controls">
+            <button id="clear-history" class="control-button">Clear</button>
+        </div>
+    </div>
+
+    <div id="question-container">
+        <label for="question-display">Question:</label>
+        <textarea id="question-display" readonly></textarea>
+    </div>
+
+    <div id="gridContainer">
+        <!-- Favorites buttons will be loaded here -->
+    </div>
+
+    <!-- Loading indicator -->
+    <div id="loading-indicator" style="display: none;">
+        <img src="/static/images/speech_bubble_spinner.png" alt="Loading..." class="image-spinner">
+        <p>Loading content...</p>
+    </div>
+
+    <script src="/static/favorites.js"></script>
+</body>
+</html>

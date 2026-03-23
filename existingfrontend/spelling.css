@@ -1,0 +1,137 @@
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    margin: 0;
+    padding: 20px;
+    background: #e2e8f0;
+    min-height: 100vh;
+    box-sizing: border-box;
+    display: flex;
+    justify-content: center;
+}
+
+#app-container {
+    width: 100%;
+    max-width: 1200px;
+    background-color: #f8fafc;
+    border-radius: 40px;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(0, 0, 0, 0.05);
+    overflow: hidden;
+    min-height: calc(100vh - 40px);
+    display: flex;
+    flex-direction: column;
+}
+
+.page-banner {
+    background-color: #002244;
+    color: #FB4F14;
+    padding: 0.75rem 1rem;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.page-banner h1 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 600;
+}
+
+.spelling-page {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px;
+}
+
+.spell-section {
+    background: #ffffff;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 12px;
+}
+
+.section-title {
+    margin: 0 0 8px;
+    font-size: 1rem;
+    font-weight: 600;
+    color: #1e293b;
+}
+
+.current-word-wrap {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.current-word-input {
+    width: 100%;
+    box-sizing: border-box;
+    border: 2px solid #0ea5e9;
+    border-radius: 8px;
+    font-size: 1.2rem;
+    padding: 10px;
+    font-weight: 600;
+    color: #0f172a;
+    background: #f8fafc;
+}
+
+.word-controls {
+    display: grid;
+    gap: 8px;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.word-control-btn,
+.letter-btn,
+.prediction-btn {
+    border: 1px solid #cbd5e1;
+    border-radius: 10px;
+    background: #f8fafc;
+    color: #0f172a;
+    font-weight: 700;
+    min-height: 52px;
+    cursor: pointer;
+    font-size: 1rem;
+}
+
+.add-btn {
+    background: #dcfce7;
+}
+
+.clear-btn,
+.backspace-btn {
+    background: #fee2e2;
+}
+
+.home-action-btn {
+    background: #dbeafe;
+}
+
+.word-predictions-grid {
+    display: grid;
+    gap: 8px;
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.alphabet-grid {
+    display: grid;
+    gap: 8px;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+}
+
+.disabled-letter {
+    opacity: 0.35;
+}
+
+.scanned {
+    outline: 4px solid #f59e0b;
+    outline-offset: 2px;
+    background: #fef3c7;
+}
+
+@media (max-width: 900px) {
+    .word-predictions-grid,
+    .alphabet-grid {
+        grid-template-columns: repeat(5, minmax(0, 1fr));
+    }
+}

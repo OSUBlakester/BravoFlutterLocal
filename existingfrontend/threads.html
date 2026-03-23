@@ -1,0 +1,310 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Thread Communication</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link rel="stylesheet" href="/static/splash-screen.css">
+    <style>
+        /* --- Basic Body Style --- */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f7f6;
+        }
+
+        /* --- Admin Toolbar Styles (copied from gridpage.html) --- */
+        .admin-toolbar {
+            background-color: #ffffff;
+            padding: 0.25rem 0.5rem;
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            gap: 0.4rem;
+            flex-wrap: wrap;
+        }
+
+        .admin-toolbar button {
+            padding: 0.25rem 0.5rem;
+            border: 1px solid #ccc;
+            background-color: #f8f9fa;
+            border-radius: 0.25rem;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .admin-toolbar button:hover {
+            background-color: #e9ecef;
+            border-color: #adb5bd;
+        }
+
+        /* --- Page Banner Styles (copied from gridpage.html) --- */
+        .page-banner {
+            background-color: #002244;
+            color: #FB4F14;
+            padding: 0.75em 1.5em;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .page-banner h1 {
+            margin: 0;
+            font-size: 1.75em;
+        }
+
+        /* --- Thread History Styles (iMessage-like) --- */
+        #thread-history-container {
+            background: white;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            padding: 1rem;
+            margin: 1rem;
+            height: 200px;
+            overflow-y: auto;
+        }
+
+        .message {
+            margin-bottom: 0.75rem;
+            display: flex;
+            align-items: flex-end;
+        }
+
+        .message.user {
+            justify-content: flex-end;
+        }
+
+        .message.incoming {
+            justify-content: flex-start;
+        }
+
+        .message-bubble {
+            max-width: 70%;
+            padding: 0.5rem 0.75rem;
+            border-radius: 18px;
+            font-size: 0.9rem;
+            line-height: 1.4;
+            word-wrap: break-word;
+        }
+
+        .message.user .message-bubble {
+            background-color: #007AFF;
+            color: white;
+        }
+
+        .message.incoming .message-bubble {
+            background-color: #E5E5EA;
+            color: black;
+        }
+
+        .message-time {
+            font-size: 0.7rem;
+            color: #999;
+            margin: 0 0.5rem;
+            white-space: nowrap;
+        }
+
+        /* --- Grid Styles (copied and adapted from gridpage.html) --- */
+        #gridContainer {
+            display: grid;
+            gap: 10px;
+            padding: 15px;
+            margin: 0 auto;
+            max-width: 100%;
+            grid-template-columns: repeat(var(--grid-columns, 10), 1fr);
+            justify-items: center;
+            align-items: center;
+        }
+
+        #gridContainer button {
+            position: relative; /* Needed for the tail pseudo-elements */
+            padding: 15px 20px; /* Adjust padding as needed for text */
+            font-size: var(--button-font-size, 16px); /* Use the CSS custom property */
+            font-weight: 500; /* Slightly bolder text */
+            cursor: pointer;
+            background-color: white;   /* White inside */
+            color: #002244;           /* Dark blue text */
+            border: 2px solid #002244; /* Dark blue border, 2px thick */
+            border-radius: 12px;       /* Somewhat rounded corners */
+            text-align: center;
+            min-height: 50px;          /* Ensure buttons have some height */
+            display: flex;             /* For centering text */
+            align-items: center;
+            justify-content: center;
+            margin-bottom: 18px; /* Add space below for the tail + grid gap consideration */
+            box-shadow: 0 1px 3px rgba(0,0,0,0.12); /* Optional: subtle shadow for depth */
+            transition: transform 0.1s ease-out, font-size 0.2s ease-out; /* Smooth transitions */
+            word-wrap: break-word;     /* Allow text to wrap if needed */
+            hyphens: auto;             /* Enable automatic hyphenation */
+            line-height: 1.2;          /* Better line spacing for readability */
+        }
+
+        #gridContainer button:hover {
+            /* You can add a subtle hover effect if desired, e.g., slight brightness change */
+            filter: brightness(97%);
+        }
+
+        #gridContainer button:active { /* Optional: press effect */
+            transform: scale(0.97);
+        }
+
+        /* Speech Bubble Tail */
+        #gridContainer button::before,
+        #gridContainer button::after {
+            content: "";
+            width: 0px;
+            height: 0px;
+            position: absolute;
+            border-right: 10px solid transparent;  /* Makes the shape triangular on the right */
+            border-bottom: 10px solid transparent; /* Makes the shape triangular on the bottom */
+        }
+        #gridContainer button::before { /* This creates the dark blue border of the tail */
+            border-left: 10px solid #002244;
+            border-top: 10px solid #002244;
+            left: 15px;  /* Position from the left edge of the button */
+            bottom: -18px; /* Positions the tail below the button */
+        }
+        #gridContainer button::after { /* This creates the white fill of the tail */
+            border-left: 10px solid white;
+            border-top: 10px solid white;
+            left: 17px;  /* Offset by 2px from ::before (button border thickness) */
+            bottom: -16px; /* Offset by 2px from ::before (button border thickness) */
+            z-index: 1;  /* Ensures the white fill is on top of the blue tail border */
+        }
+
+        /* Question container styling */
+        #question-container {
+            margin: 1rem;
+            padding: 0.75rem;
+            background: white;
+            border-radius: 8px;
+            border: 1px solid #e0e0e0;
+        }
+
+        #question-display {
+            width: 100%;
+            min-height: 40px;
+            padding: 0.5rem;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            resize: vertical;
+            font-family: inherit;
+            font-size: 0.9rem;
+        }
+
+        /* Highlight style for listening state */
+        .highlight-listening {
+            border-color: #FB4F14 !important;
+            box-shadow: 0 0 8px rgba(251, 79, 20, 0.3) !important;
+            background-color: #FFF7F0 !important;
+        }
+
+        /* Loading indicator styles */
+        #loading-indicator {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.7);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 9999;
+        }
+
+        #loading-indicator .spinner-image {
+            width: 120px;
+            height: 120px;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        /* Scanning highlight */
+        .scanning {
+            box-shadow: 0 0 10px 4px #FB4F14 !important;
+            outline: none !important;
+        }
+        .active {
+            transform: scale(0.95);
+            opacity: 0.8;
+        }
+    </style>
+</head>
+<body>
+    <div class="page-banner">
+        <h1 id="dynamic-page-title">Thread Communication</h1>
+        <div class="admin-toolbar">
+            <!-- Always visible lock icon -->
+            <button id="lock-icon" title="Admin Toolbar" class="h-8 w-8 flex items-center justify-center text-gray-600 bg-gray-100 rounded-full transition-colors duration-200 text-sm hover:bg-blue-100 hover:text-blue-600">
+                <i class="fas fa-lock"></i>
+            </button>
+            <!-- Admin toolbar icons - initially hidden -->
+            <div id="admin-icons" class="hidden flex items-center gap-0.4rem">
+                <button id="lock-toolbar-button" title="Lock Admin Toolbar" class="h-8 w-8 flex items-center justify-center text-gray-600 bg-gray-100 rounded-full transition-colors duration-200 text-sm hover:bg-red-100 hover:text-red-600"><i class="fas fa-lock"></i></button>
+                <span class="border-l border-gray-300 h-6 mx-1"></span> <!-- Separator -->
+                <a href="admin_pages.html" title="Pages & Buttons" class="h-8 w-8 flex items-center justify-center text-gray-600 bg-gray-100 rounded-full transition-colors duration-200 text-sm hover:bg-blue-100 hover:text-blue-600"><i class="fas fa-th-large"></i></a>
+                <a href="admin_settings.html" title="Global Settings" class="h-8 w-8 flex items-center justify-center text-gray-600 bg-gray-100 rounded-full transition-colors duration-200 text-sm hover:bg-blue-100 hover:text-blue-600"><i class="fas fa-cog"></i></a>
+                <a href="user_current_admin.html" title="User Current Location" class="h-8 w-8 flex items-center justify-center text-gray-600 bg-gray-100 rounded-full transition-colors duration-200 text-sm hover:bg-blue-100 hover:text-blue-600"><i class="fas fa-map-marker-alt"></i></a>
+                <a href="user_info_admin.html" title="User Info & Birthdays" class="h-8 w-8 flex items-center justify-center text-gray-600 bg-gray-100 rounded-full transition-colors duration-200 text-sm hover:bg-blue-100 hover:text-blue-600"><i class="fas fa-info-circle"></i></a>
+                <a href="user_diary_admin.html" title="User Diary" class="h-8 w-8 flex items-center justify-center text-gray-600 bg-gray-100 rounded-full transition-colors duration-200 text-sm hover:bg-blue-100 hover:text-blue-600"><i class="fas fa-book-open"></i></a>
+                <a href="audio_admin.html" title="Audio Devices" class="h-8 w-8 flex items-center justify-center text-gray-600 bg-gray-100 rounded-full transition-colors duration-200 text-sm hover:bg-blue-100 hover:text-blue-600"><i class="fas fa-volume-up"></i></a>
+                <a href="favorites_admin.html" title="Event Sources" class="h-8 w-8 flex items-center justify-center text-gray-600 bg-gray-100 rounded-full transition-colors duration-200 text-sm hover:bg-blue-100 hover:text-blue-600"><i class="fas fa-star"></i></a>
+                <a href="admin_audit_report.html" title="Activity Reports" class="h-8 w-8 flex items-center justify-center text-gray-600 bg-gray-100 rounded-full transition-colors duration-200 text-sm hover:bg-blue-100 hover:text-blue-600"><i class="fas fa-clipboard-list"></i></a>
+                <span class="border-l border-gray-300 h-6 mx-1"></span> <!-- Separator - made smaller -->
+                <button id="switch-user-button" title="Switch User Profile" class="h-8 w-8 flex items-center justify-center text-gray-600 bg-gray-100 rounded-full transition-colors duration-200 text-sm hover:bg-blue-100 hover:text-blue-600"><i class="fas fa-users"></i></button>
+                <button id="logout-button" title="Logout" class="h-8 w-8 flex items-center justify-center text-gray-600 bg-gray-100 rounded-full transition-colors duration-200 text-sm hover:bg-blue-100 hover:text-blue-600"><i class="fas fa-sign-out-alt"></i></button>
+            </div>
+            <!-- Help icon, always visible, to the right of admin toolbar -->
+            <button id="help-icon" title="Help" aria-label="Help" class="h-8 w-8 flex items-center justify-center text-gray-600 bg-gray-100 rounded-full ml-2 transition-colors duration-200 text-sm hover:bg-green-100 hover:text-green-600 focus:outline-none focus:ring-2 focus:ring-green-500">
+                <i class="fas fa-question-circle"></i>
+            </button>
+        </div>
+    </div>
+
+    <!-- Thread History Container (replaces Speech History) -->
+    <div id="thread-history-container">
+        <div id="thread-messages">
+            <!-- Messages will be dynamically populated here -->
+        </div>
+    </div>
+
+    <!-- Question Container (similar to gridpage) -->
+    <div id="question-container">
+        <label for="question-display">Question or Comment:</label>
+        <textarea id="question-display" readonly placeholder="Listening for questions or comments..."></textarea>
+    </div>
+
+    <!-- Grid Container for options -->
+    <div id="gridContainer">
+        <!-- Buttons will be dynamically generated here -->
+    </div>
+
+    <!-- Loading Indicator -->
+    <div id="loading-indicator" style="display: none;">
+        <img src="/static/images/speech_bubble_spinner.png" alt="Loading..." class="spinner-image" />
+    </div>
+
+    <!-- PIN Modal -->
+    <div id="pin-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white p-6 rounded-lg shadow-xl max-w-sm w-full mx-4">
+            <h3 class="text-lg font-semibold text-gray-800 mb-4">Enter Admin PIN</h3>
+            <input type="text" id="pin-input" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500" placeholder="Enter PIN" maxlength="10">
+            <div class="flex justify-end space-x-3 mt-4">
+                <button id="pin-cancel" class="px-4 py-2 text-gray-600 bg-gray-200 rounded-md hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-500">Cancel</button>
+                <button id="pin-submit" class="px-4 py-2 text-white bg-blue-600 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500">Submit</button>
+            </div>
+            <p id="pin-error" class="text-red-500 text-sm mt-2 hidden">Incorrect PIN. Please try again.</p>
+        </div>
+    </div>
+
+    <script src="/static/splash-screen.js"></script>
+    <script src="/static/threads.js"></script>
+</body>
+</html>

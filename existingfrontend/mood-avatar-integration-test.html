@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mood-Avatar Integration Test</title>
+    
+    <!-- Load styles -->
+    <link rel="stylesheet" href="/static/mood-selection.css">
+    
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 2rem;
+            background-color: #f7fafc;
+        }
+        
+        .test-container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        
+        .test-header {
+            text-align: center;
+            margin-bottom: 2rem;
+        }
+        
+        .test-header h1 {
+            color: #2d3748;
+            margin-bottom: 0.5rem;
+        }
+        
+        .test-header p {
+            color: #4a5568;
+            font-size: 1.1rem;
+        }
+        
+        .test-controls {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 12px;
+            margin-bottom: 2rem;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        
+        .control-group {
+            margin-bottom: 1rem;
+        }
+        
+        .control-group:last-child {
+            margin-bottom: 0;
+        }
+        
+        .control-group label {
+            display: inline-block;
+            width: 150px;
+            font-weight: 500;
+            color: #2d3748;
+        }
+        
+        .control-group button {
+            background: #3182ce;
+            color: white;
+            border: none;
+            padding: 0.5rem 1rem;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 500;
+            margin-right: 0.5rem;
+        }
+        
+        .control-group button:hover {
+            background: #2c5282;
+        }
+        
+        .control-group button.secondary {
+            background: #e2e8f0;
+            color: #2d3748;
+        }
+        
+        .control-group button.secondary:hover {
+            background: #cbd5e0;
+        }
+        
+        .status-display {
+            background: white;
+            padding: 1.5rem;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        
+        .status-display h3 {
+            margin-top: 0;
+            color: #2d3748;
+        }
+        
+        .status-item {
+            margin-bottom: 0.5rem;
+        }
+        
+        .status-label {
+            font-weight: 500;
+            color: #4a5568;
+            display: inline-block;
+            width: 120px;
+        }
+        
+        .status-value {
+            color: #2d3748;
+        }
+        
+        .avatar-preview {
+            margin-top: 1rem;
+            text-align: center;
+        }
+        
+        .avatar-preview img {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            border: 2px solid #e2e8f0;
+            margin: 0 0.5rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="test-container">
+        <div class="test-header">
+            <h1>🧑‍💻 Mood-Avatar Integration Test</h1>
+            <p>Testing the integration between mood selection and personalized avatars</p>
+        </div>
+        
+        <div class="test-controls">
+            <div class="control-group">
+                <label>Mood Selection:</label>
+                <button onclick="showMoodSelectionModal()">Show Mood Selection</button>
+                <button class="secondary" onclick="clearCurrentMood()">Reset Mood</button>
+            </div>
+            
+            <div class="control-group">
+                <label>Avatar System:</label>
+                <button onclick="generateRandomAvatar()">Random Avatar</button>
+                <button onclick="window.open('/avatar-selector', '_blank')" class="secondary">Open Avatar Selector</button>
+            </div>
+            
+            <div class="control-group">
+                <label>Integration Test:</label>
+                <button onclick="testAvatarGeneration()">Test Avatar Generation</button>
+                <button onclick="toggleAvatarMode()" class="secondary">Toggle Avatar/Emoji Mode</button>
+            </div>
+        </div>
+        
+        <div class="status-display">
+            <h3>Status</h3>
+            <div class="status-item">
+                <span class="status-label">Current Mood:</span>
+                <span class="status-value" id="current-mood">None</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Avatar Mode:</span>
+                <span class="status-value" id="avatar-mode">Enabled</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Avatar Loaded:</span>
+                <span class="status-value" id="avatar-loaded">Unknown</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">Integration:</span>
+                <span class="status-value" id="integration-status">Ready</span>
+            </div>
+            
+            <div class="avatar-preview" id="avatar-preview">
+                <h4>Sample Mood Avatars:</h4>
+                <!-- Will be populated by JavaScript -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Load the avatar selector and mood selection scripts -->
+    <script src="/static/avatar-selector.js"></script>
+    <script src="/static/mood-selection.js"></script>
+    
+    <script>
+        // Initialize the test environment
+        let globalAvatarSelector = null;
+        
+        // Initialize avatar selector when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('Test page loaded, initializing...');
+            
+            // Create global avatar selector instance
+            globalAvatarSelector = new AvatarSelector();
+            window.avatarSelector = globalAvatarSelector;
+            
+            updateStatus();
+            
+            // Generate sample mood avatars for preview
+            setTimeout(() => {
+                generateSampleAvatars();
+            }, 1000);
+        });
+        
+        function showMoodSelectionModal() {
+            console.log('Showing mood selection modal...');
+            
+            if (window.showMoodSelection) {
+                showMoodSelection((selectedMood) => {
+                    console.log('Mood selection completed:', selectedMood);
+                    updateStatus();
+                });
+            } else {
+                alert('Mood selection not available. Make sure mood-selection.js is loaded.');
+            }
+        }
+        
+        function clearCurrentMood() {
+            if (window.clearCurrentMood) {
+                clearCurrentMood();
+                updateStatus();
+                console.log('Mood cleared');
+            }
+        }
+        
+        function generateRandomAvatar() {
+            if (globalAvatarSelector) {
+                globalAvatarSelector.generateRandomAvatar();
+                updateStatus();
+                console.log('Generated random avatar');
+                
+                // Regenerate sample avatars with new base
+                setTimeout(() => {
+                    generateSampleAvatars();
+                }, 500);
+            }
+        }
+        
+        function testAvatarGeneration() {
+            console.log('Testing avatar generation...');
+            
+            const testMoods = ['happy', 'sad', 'angry', 'excited', 'confused'];
+            const moodSelection = new MoodSelection();
+            
+            moodSelection.initializeAvatarGeneration().then(() => {
+                testMoods.forEach(emotion => {
+                    const url = moodSelection.generateMoodAvatarURL(emotion);
+                    console.log(`${emotion}:`, url);
+                });
+                
+                document.getElementById('integration-status').textContent = 'Test Complete';
+            });
+        }
+        
+        function toggleAvatarMode() {
+            // This would toggle between avatar and emoji mode
+            // For now, just toggle the display
+            const currentMode = document.getElementById('avatar-mode').textContent;
+            const newMode = currentMode === 'Enabled' ? 'Disabled' : 'Enabled';
+            document.getElementById('avatar-mode').textContent = newMode;
+            console.log('Avatar mode toggled to:', newMode);
+        }
+        
+        function updateStatus() {
+            // Update current mood
+            const currentMood = window.getCurrentMood ? getCurrentMood() : 'Unknown';
+            document.getElementById('current-mood').textContent = currentMood || 'None';
+            
+            // Update avatar loaded status
+            const avatarLoaded = globalAvatarSelector ? 'Yes' : 'No';
+            document.getElementById('avatar-loaded').textContent = avatarLoaded;
+            
+            console.log('Status updated - Mood:', currentMood, 'Avatar loaded:', avatarLoaded);
+        }
+        
+        function generateSampleAvatars() {
+            const previewContainer = document.getElementById('avatar-preview');
+            const existingContent = previewContainer.querySelector('h4');
+            previewContainer.innerHTML = '';
+            previewContainer.appendChild(existingContent);
+            
+            const sampleMoods = [
+                { name: 'Happy', emotion: 'happy' },
+                { name: 'Sad', emotion: 'sad' },
+                { name: 'Angry', emotion: 'angry' },
+                { name: 'Excited', emotion: 'excited' },
+                { name: 'Confused', emotion: 'confused' }
+            ];
+            
+            const moodSelection = new MoodSelection();
+            moodSelection.initializeAvatarGeneration().then(() => {
+                sampleMoods.forEach(mood => {
+                    const avatarUrl = moodSelection.generateMoodAvatarURL(mood.emotion);
+                    if (avatarUrl) {
+                        const img = document.createElement('img');
+                        img.src = avatarUrl;
+                        img.alt = mood.name;
+                        img.title = mood.name;
+                        previewContainer.appendChild(img);
+                    }
+                });
+            });
+        }
+    </script>
+</body>
+</html>

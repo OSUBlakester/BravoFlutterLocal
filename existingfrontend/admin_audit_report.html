@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Button Click Activity Report</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <script src="/static/admin_audit_report.js" defer></script>
+    <style>
+        .table-cell {
+            padding: 8px;
+            border: 1px solid #e2e8f0;
+            text-align: left;
+            font-size: 0.875rem; /* text-sm */
+            word-break: break-word;
+            white-space: nowrap; /* Prevent text wrapping */
+        }
+        .table-header {
+            background-color: #f7fafc; /* bg-gray-50 */
+            font-weight: 600; /* font-semibold */
+        }
+
+        /* Hamburger Menu Styles */
+        .hamburger-menu {
+            position: relative;
+            display: inline-block;
+        }
+        #hamburger-btn {
+            background-color: #4A5568; /* Tailwind gray-700 or similar */
+            color: white;
+            padding: 8px 12px; /* Adjust for a good size */
+            font-size: 20px; /* Hamburger icon size */
+            border: none;
+            cursor: pointer;
+            border-radius: 5px;
+            line-height: 1; /* Ensure icon is centered vertically */
+        }
+        #hamburger-btn:hover {
+            background-color: #2D3748; /* Darker shade for hover */
+        }
+        .dropdown-content {
+            display: none; /* Hidden by default */
+            position: absolute;
+            background-color: #ffffff; /* White background for dropdown */
+            min-width: 260px; /* Adjust as needed */
+            box-shadow: 0px 8px 16px 0px rgba(0,0,0,0.2);
+            z-index: 1000; /* Ensure it's on top */
+            left: 0; /* Align to the left of the button */
+            border-radius: 5px;
+            border: 1px solid #ddd; /* Light border for the dropdown */
+        }
+        .dropdown-content a {
+            color: #333; /* Dark text for links */
+            padding: 10px 15px;
+            text-decoration: none;
+            display: block;
+            font-size: 14px; /* Standard font size for menu items */
+        }
+        .dropdown-content a:hover {
+            background-color: #f0f0f0; /* Hover effect for links */
+        }
+        .dropdown-content hr {
+            border: 0;
+            height: 1px;
+            background-color: #e0e0e0; /* Separator color */
+            margin: 5px 0;
+        }
+
+    </style>
+</head>
+<body class="bg-gray-100">
+
+        <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+
+    <script>
+        // --- DYNAMIC AUTHENTICATION & CONFIGURATION CONTEXT ---
+        (async () => {
+            // 1. Fetch Firebase config dynamically
+            let firebaseConfig;
+            try {
+                const response = await fetch('/api/frontend-config');
+                if (!response.ok) throw new Error(`Server error (${response.status})`);
+                const configData = await response.json();
+                firebaseConfig = configData.firebase_config || configData;
+                if (!firebaseConfig || !firebaseConfig.apiKey) throw new Error('Invalid config from server.');
+            } catch (error) {
+                console.error('Fatal: Could not load application configuration.', error);
+                document.body.innerHTML = `<div style="padding: 2rem; text-align: center; color: red; font-family: sans-serif;">Failed to load application configuration. Please refresh the page.</div>`;
+                return;
+            }
+
+            // 2. Initialize Firebase
+            firebase.initializeApp(firebaseConfig);
+            const auth = firebase.auth();
+            console.log(`Firebase initialized for project: ${firebaseConfig.projectId}`);
+
+            // 3. Check for logged-in user and set up context using onAuthStateChanged
+            auth.onAuthStateChanged(async (user) => {
+                if (user) {
+                    const currentAacUserId = sessionStorage.getItem("currentAacUserId");
+                    const tokenFromUser = await user.getIdToken();
+                    sessionStorage.setItem("firebaseIdToken", tokenFromUser);
+
+                    if (!currentAacUserId) {
+                        console.warn("No AAC User ID found in session. Redirecting to auth page for user selection.");
+                        window.location.href = 'auth.html';
+                        return;
+                    }
+
+                    window.authenticatedFetch = async (url, options = {}) => {
+                        const headers = options.headers || {};
+                        headers['Authorization'] = `Bearer ${tokenFromUser}`;
+                        headers['X-User-ID'] = currentAacUserId;
+                        
+                        // For admin access, include the target account ID
+                        const adminTargetAccountId = sessionStorage.getItem('adminTargetAccountId');
+                        if (adminTargetAccountId) {
+                            headers['X-Admin-Target-Account'] = adminTargetAccountId;
+                            console.log(`Setting admin target account header: ${adminTargetAccountId}`);
+                        }
+                        
+                        options.headers = headers;
+                        const response = await fetch(url, options);
+                        if (response.status === 401 || response.status === 403) {
+                            console.warn(`Auth failed (${response.status}). Redirecting to login.`);
+                            sessionStorage.clear(); window.location.href = 'auth.html'; throw new Error("Session expired.");
+                        }
+                        return response;
+                    };
+
+                    window.currentAacUserId = currentAacUserId;
+                    window.firebaseIdToken = tokenFromUser;
+                    window.adminContextInitializedByInlineScript = true;
+                    
+                    // Global function to update page title with profile name
+                    window.updatePageTitleWithProfile = async (baseTitle) => {
+                        try {
+                            const response = await window.authenticatedFetch('/api/account/users');
+                            if (!response.ok) return;
+                            
+                            const profiles = await response.json();
+                            const currentProfile = profiles.find(profile => profile.aac_user_id === currentAacUserId);
+                            
+                            if (currentProfile && currentProfile.display_name) {
+                                const titleElement = document.getElementById('dynamic-page-title');
+                                if (titleElement) {
+                                    titleElement.textContent = `${baseTitle} - ${currentProfile.display_name}`;
+                                }
+                            }
+                        } catch (error) {
+                            console.error('Error updating page title with profile:', error);
+                        }
+                    };
+                    
+                    document.dispatchEvent(new Event('adminUserContextReady'));
+                    console.log(`Admin context ready for AAC User ID: ${currentAacUserId}`);
+
+                } else {
+                    console.log("No Firebase user session found. Redirecting to auth.html.");
+                    sessionStorage.clear();
+                    window.location.href = 'auth.html';
+                }
+            });
+        })();
+    </script>
+
+
+    <div class="page-banner flex items-center justify-between bg-[#002244] text-[#FB4F14] px-4 py-2 shadow">
+        <div class="flex items-center gap-2">
+            <button onclick="window.navigateToHome ? window.navigateToHome() : window.location.href='gridpage.html?page=home'" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100 focus:outline-none focus:ring-2 focus:ring-orange-500" title="Home">
+                <i class="fas fa-home"></i>
+            </button>
+            <h1 id="dynamic-page-title" class="ml-2 text-xl font-semibold">User Activity Reports</h1>
+        </div>
+        <div class="admin-toolbar flex items-center gap-2">
+            <a href="admin_pages.html" title="Pages &amp; Buttons" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-th-large"></i></a>
+            <a href="admin_settings.html" title="Global Settings" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-cog"></i></a>
+            <a href="user_current_admin.html" title="User Current Location" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-map-marker-alt"></i></a>
+            <a href="user_info_admin.html" title="User Info &amp; Birthdays" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-info-circle"></i></a>
+            <a href="user_diary_admin.html" title="User Diary" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-book-open"></i></a>
+            <a href="audio_admin.html" title="Audio Devices" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-volume-up"></i></a>
+            <a href="favorites_admin.html" title="Event Sources" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-star"></i></a>
+            <a href="admin_audit_report.html" title="Activity Reports" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-clipboard-list"></i></a>
+            <span class="border-l border-white h-6 mx-1"></span>
+            <button id="switch-user-button" title="Switch User Profile" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-users"></i></button>
+            <button id="logout-button" title="Logout" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-sign-out-alt"></i></button>
+            <button id="help-icon" title="Help" aria-label="Help" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full ml-2 transition-colors duration-200 text-base hover:bg-orange-100 focus:outline-none focus:ring-2 focus:ring-orange-500">
+                <i class="fas fa-question-circle"></i>
+            </button>
+        </div>
+    </div>
+
+
+    <div class="container mx-auto p-4 sm:p-6 lg:p-8">
+        <header class="mb-6 text-center">
+            <h1 class="text-2xl sm:text-3xl font-bold text-gray-800">Button Click Activity Report</h1>
+            <p class="text-sm text-gray-600">Review user button interactions within a specified date range.</p>
+        </header>
+
+        <!-- Global Page Activity Report Section -->
+        <div class="bg-white p-6 rounded-lg shadow-lg mb-8">
+            <h2 class="text-xl font-semibold mb-3 text-gray-700">Global Page Activity Report</h2>
+            <p class="text-sm text-gray-600 mb-4">Shows page visit counts (excluding 'home'). Includes all defined pages to identify unused ones. Click counts are based on the date range selected below for the raw data.</p>
+            <div class="flex space-x-2 mb-4">
+                <button id="fetchGlobalActivityReportButton" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded-md text-sm">
+                    Generate Global Page Report
+                </button>
+                <button id="toggleGlobalChartTypeButton" class="bg-indigo-500 hover:bg-indigo-600 text-white font-bold py-2 px-4 rounded-md text-sm">Show Pie Chart</button>
+            </div>
+            <div id="globalActivityReportStatus" class="mb-4 text-sm"></div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div class="h-96"> <!-- Added h-96 to constrain chart height -->
+                    <h3 class="text-lg font-medium mb-2 text-gray-600">Page Clicks Chart</h3>
+                    <canvas id="globalPageActivityChart"></canvas>
+                </div>
+                <div>
+                    <h3 class="text-lg font-medium mb-2 text-gray-600">Page Clicks List</h3>
+                    <div id="globalPageActivityListContainer" class="max-h-96 overflow-y-auto border border-gray-200 rounded-md p-3 bg-gray-50">
+                        <ul id="globalPageActivityList" class="list-disc pl-5 text-sm text-gray-700"></ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Page Scope Button Activity Report Section -->
+        <div class="bg-white p-6 rounded-lg shadow-lg mb-8">
+            <h2 class="text-xl font-semibold mb-3 text-gray-700">Page Specific Button Activity</h2>
+            <p class="text-sm text-gray-600 mb-4">Select a page to see its button click counts. Includes all defined static buttons and any LLM-generated buttons clicked on that page.</p>
+            
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4 items-end">
+                <div>
+                    <label for="pageSelectorDropdown" class="block text-sm font-medium text-gray-700">Select Page:</label>
+                    <select id="pageSelectorDropdown" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2">
+                        <option value="">Loading pages...</option>
+                    </select>
+                </div>
+                <button id="fetchPageButtonReportButton" class="bg-purple-600 hover:bg-purple-700 text-white font-bold py-2 px-4 rounded-md text-sm h-10 self-end">
+                    Generate Page Button Report
+                </button>
+            </div>
+            <div id="pageButtonReportStatus" class="mb-4 text-sm"></div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div class="h-96">
+                    <h3 class="text-lg font-medium mb-2 text-gray-600">Button Clicks Chart (Per Page)</h3>
+                    <canvas id="pageButtonActivityChart"></canvas>
+                </div>
+                <div>
+                    <h3 class="text-lg font-medium mb-2 text-gray-600">Button Clicks List (Per Page)</h3>
+                    <div id="pageButtonActivityListContainer" class="max-h-96 overflow-y-auto border border-gray-200 rounded-md p-3 bg-gray-50">
+                        <ul id="pageButtonActivityList" class="list-disc pl-5 text-sm text-gray-700"></ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="bg-white p-6 rounded-lg shadow-lg">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6 items-end">
+                <div>
+                    <label for="startDate" class="block text-sm font-medium text-gray-700">Start Date & Time:</label>
+                    <input type="datetime-local" id="startDate" name="startDate" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2">
+                </div>
+                <div>
+                    <label for="endDate" class="block text-sm font-medium text-gray-700">End Date & Time:</label>
+                    <input type="datetime-local" id="endDate" name="endDate" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm p-2">
+                </div>
+                <button id="fetchReportButton" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 h-10">
+                    Fetch Report
+                </button>
+            </div>
+
+            <div id="reportStatus" class="mb-4 text-sm"></div>
+
+            <!-- Toggle for Raw Data Table -->
+            <button id="toggleRawDataButton" class="mb-4 bg-gray-200 hover:bg-gray-300 text-gray-700 font-semibold py-2 px-4 rounded-md text-sm">Show Raw Data Table</button>
+
+            <div id="rawDataTableContainer" class="overflow-x-auto hidden">
+                <table class="min-w-full divide-y divide-gray-200 border border-gray-300">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="table-cell table-header">Timestamp</th>
+                            <th class="table-cell table-header">Page Name</th>
+                            <th class="table-cell table-header">Button Text</th>
+                            <th class="table-cell table-header">Button Summary</th>
+                            <th class="table-cell table-header">LLM Generated?</th>
+                            <th class="table-cell table-header">Originating Button</th>
+                            <th class="table-cell table-header">Page Context/Prompt</th>
+                        </tr>
+                    </thead>
+                    <tbody id="reportTableBody" class="bg-white divide-y divide-gray-200">
+                        <!-- Report data will be inserted here -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Update page title when admin context is ready
+        document.addEventListener('adminUserContextReady', async function() {
+            if (window.updatePageTitleWithProfile) {
+                await window.updatePageTitleWithProfile('User Activity Reports');
+            }
+        });
+    </script>
+
+</body>
+</html>

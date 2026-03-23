@@ -1,0 +1,58 @@
+name: bravo_aac
+description: "Bravo AAC - Augmentative and Alternative Communication"
+publish_to: 'none'
+
+version: 1.0.2+35
+
+environment:
+  sdk: ^3.8.1
+
+dependencies:
+  flutter:
+    sdk: flutter
+  firebase_core: ^3.15.1
+  firebase_auth: ^5.6.2
+  cloud_firestore: ^5.0.0
+  flutter_tts: ^4.0.2
+  cupertino_icons: ^1.0.8
+  http: ^1.2.1
+  shared_preferences: ^2.5.3
+  provider: any
+  just_audio: ^0.10.4
+  speech_to_text: ^7.2.0
+  google_fonts: ^6.2.1
+  permission_handler: ^11.3.1
+  flutter_secure_storage: ^9.2.2
+  flutter_image_compress: ^2.3.0
+  image_picker: ^1.1.2
+  file_picker: ^8.0.7
+  intl: ^0.20.2
+  url_launcher: ^6.3.1
+  # firebase_app_distribution: ^1.1.1  # Temporarily disabled for Android build
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^6.0.0
+  flutter_launcher_icons: ^0.13.1
+
+flutter_launcher_icons:
+  android: "launcher_icon"
+  ios: true
+  image_path: "assets/bravo_icon.png"
+  image_path_ios: "assets/bravo_icon.png"
+  min_sdk_android: 21
+  remove_alpha_ios: true
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/test.mp3
+    - assets/silence.mp3
+    - assets/volumetesttone.mp3
+    - assets/dolch_sight_words.json
+    - assets/silence_1000MS.mp3
+    - assets/silence_2500MS.mp3
+    - assets/speech_bubble_spinner.png
+    - assets/whitespeechbubble.jpg
+    - assets/dolch_sight_words.json

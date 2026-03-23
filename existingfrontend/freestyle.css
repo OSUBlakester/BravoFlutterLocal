@@ -1,0 +1,945 @@
+/* Freestyle Communication Styles */
+
+/* Build Space Styles */
+.build-space-container {
+    width: 100%;
+    margin: 20px;
+    padding: 0 20px;
+    box-sizing: border-box;
+}
+
+.build-space-container label {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #374151;
+    display: block;
+    margin-bottom: 8px;
+}
+
+.build-space-textarea {
+    width: 50%;
+    min-height: 60px;
+    padding: 10px;
+    border: 3px solid #002244;
+    border-radius: 12px;
+    font-size: 0.9rem;
+    font-family: inherit;
+    background-color: white;
+    color: #002244;
+    resize: vertical;
+    box-sizing: border-box;
+    line-height: 1.4;
+}
+
+.build-space-textarea:focus {
+    outline: none;
+    border-color: #FB4F14;
+    box-shadow: 0 0 0 2px rgba(251, 79, 20, 0.2);
+}
+
+/* Control Buttons */
+.control-buttons {
+    display: flex;
+    gap: 15px;
+    margin-top: 15px;
+    flex-wrap: wrap;
+}
+
+.control-btn {
+    position: relative; /* Needed for speech bubble tails */
+    padding: 6px 12px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    border: 2px solid #002244;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 24px;
+    margin-bottom: 18px; /* Space for tail */
+}
+
+/* Speech Bubble Tail for main control buttons */
+.control-btn::before,
+.control-btn::after {
+    content: "";
+    width: 0px;
+    height: 0px;
+    position: absolute;
+    border-right: 8px solid transparent;
+    border-bottom: 8px solid transparent;
+}
+
+.control-btn::before {
+    border-left: 8px solid #002244; /* Default border color */
+    border-top: 8px solid #002244;
+    left: 12px;
+    bottom: -16px;
+}
+
+.control-btn::after {
+    border-left: 8px solid currentColor; /* Will be overridden per button type */
+    border-top: 8px solid currentColor;
+    left: 14px;
+    bottom: -14px;
+    z-index: 1;
+}
+
+.speak-btn {
+    background-color: #10B981;
+    color: white;
+    border-color: #10B981;
+}
+
+.speak-btn:hover {
+    background-color: #059669;
+    border-color: #059669;
+}
+
+.speak-btn::after {
+    border-left-color: #10B981;
+    border-top-color: #10B981;
+}
+
+.clear-btn {
+    background-color: #EF4444;
+    color: white;
+    border-color: #EF4444;
+}
+
+.clear-btn:hover {
+    background-color: #DC2626;
+    border-color: #DC2626;
+}
+
+.clear-btn::after {
+    border-left-color: #EF4444;
+    border-top-color: #EF4444;
+}
+
+.back-btn {
+    background-color: #6B7280;
+    color: white;
+    border-color: #6B7280;
+}
+
+.back-btn:hover {
+    background-color: #4B5563;
+    border-color: #4B5563;
+}
+
+.back-btn::after {
+    border-left-color: #6B7280;
+    border-top-color: #6B7280;
+}
+
+.spell-button {
+    background-color: #3B82F6;
+    color: white;
+    border-color: #3B82F6;
+}
+
+.spell-button:hover {
+    background-color: #2563EB;
+    border-color: #2563EB;
+}
+
+.spell-button::after {
+    border-left-color: #3B82F6;
+    border-top-color: #3B82F6;
+}
+
+.choose-word-button {
+    background-color: #8B5CF6;
+    color: white;
+    border-color: #8B5CF6;
+}
+
+.choose-word-button:hover {
+    background-color: #7C3AED;
+    border-color: #7C3AED;
+}
+
+.choose-word-button::after {
+    border-left-color: #8B5CF6;
+    border-top-color: #8B5CF6;
+}
+
+/* Word Generation Section */
+.word-generation-container {
+    margin: 20px;
+    padding: 0 20px;
+}
+
+/* Word Options Grid */
+.word-options-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); /* Default, will be updated dynamically */
+    gap: 15px;
+    margin-top: 20px;
+    margin-bottom: 25px; /* Extra space for speech bubble tails */
+    padding-bottom: 10px; /* Additional padding for tails */
+    --word-option-font-size: 16px; /* CSS custom property for dynamic font sizing */
+}
+
+.word-option-btn {
+    position: relative; /* Needed for proper positioning */
+    padding: 15px 20px; /* Match gridpage exactly */
+    font-size: var(--word-option-font-size); /* Use the CSS custom property */
+    font-weight: 500; /* Match gridpage exactly */
+    cursor: pointer;
+    background-color: white;   /* Match gridpage exactly - White inside */
+    color: #002244;           /* Match gridpage exactly - Dark blue text */
+    border: 2px solid #002244; /* Match gridpage exactly - Dark blue border, 2px thick */
+    border-radius: 12px;       /* Match gridpage exactly - Somewhat rounded corners */
+    text-align: center;
+    min-height: 50px;          /* Match gridpage exactly */
+    display: flex;             /* Match gridpage exactly - For centering text */
+    align-items: center;       /* Match gridpage exactly */
+    justify-content: center;   /* Match gridpage exactly */
+    margin-bottom: 18px; /* Match gridpage spacing for the tail + grid gap consideration */
+    word-wrap: break-word;     /* Allow text to wrap if needed */
+    line-height: 1.2;          /* Better line spacing for readability */
+}
+
+.word-option-btn:hover {
+    background-color: #d0d0d0; /* Match gridpage LLM button hover color */
+}
+
+.word-option-btn:active {
+    transform: scale(0.97);
+}
+
+/* Speech Bubble Tail for word option buttons - exactly matching gridpage */
+.word-option-btn::before,
+.word-option-btn::after {
+    content: "";
+    width: 0px;
+    height: 0px;
+    position: absolute;
+    border-right: 10px solid transparent;  /* Makes the shape triangular on the right */
+    border-bottom: 10px solid transparent; /* Makes the shape triangular on the bottom */
+}
+
+.word-option-btn::before { /* This creates the dark blue border of the tail */
+    border-left: 10px solid #002244;
+    border-top: 10px solid #002244;
+    left: 15px;  /* Position from the left edge of the button */
+    bottom: -18px; /* Positions the tail below the button */
+}
+
+.word-option-btn::after { /* This creates the white fill of the tail */
+    border-left: 10px solid white;
+    border-top: 10px solid white;
+    left: 17px;  /* Offset by 2px from ::before (button border thickness) */
+    bottom: -16px; /* Offset by 2px from ::before (button border thickness) */
+    z-index: 1;  /* Ensures the white fill is on top of the blue tail border */
+}
+
+/* Scanning highlight styles (matching gridpage.html) */
+.scanning-highlight {
+    /* Orange glow for highlighted state */
+    box-shadow: 0 0 10px 4px #FB4F14 !important; /* Orange glow */
+    outline: none; /* Prevent default browser focus outline */
+    transition: box-shadow 0.2s ease-in-out; /* Smooth transition */
+}
+
+/* Modal Styles */
+.modal-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.75);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+
+.modal-content {
+    background-color: white;
+    border-radius: 12px;
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+    max-width: 90vw;
+    max-height: 90vh;
+    overflow-y: auto;
+    margin: 20px;
+    width: 800px;
+}
+
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 20px 24px;
+    border-bottom: 1px solid #E5E7EB;
+}
+
+.modal-header h3 {
+    margin: 0;
+    font-size: 1.5rem;
+    font-weight: 600;
+    color: #002244;
+}
+
+.close-btn {
+    background: none;
+    border: none;
+    font-size: 1.5rem;
+    cursor: pointer;
+    color: #6B7280;
+    padding: 4px;
+}
+
+.close-btn:hover {
+    color: #374151;
+}
+
+.close-btn::after {
+    border-left-color: #6B7280;
+    border-top-color: #6B7280;
+}
+
+/* Close button when used as word control button */
+.word-control-btn.close-btn {
+    background-color: #6B7280;
+    color: white;
+    border-color: #6B7280;
+    border: 2px solid #6B7280;
+    font-size: 0.9rem;
+    padding: 8px 16px;
+}
+
+.word-control-btn.close-btn:hover {
+    background-color: #4B5563;
+    border-color: #4B5563;
+}
+
+/* Spelling Modal Content */
+.spelling-content {
+    padding: 24px;
+}
+
+.current-word-section {
+    margin-bottom: 24px;
+}
+
+.current-word-section label {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #374151;
+    display: block;
+    margin-bottom: 8px;
+}
+
+.current-word-input {
+    width: 50%;
+    padding: 6px 8px;
+    border: 2px solid #002244;
+    border-radius: 8px;
+    font-size: 0.9rem;
+    font-weight: 600;
+    background-color: #F9FAFB;
+    color: #002244;
+    text-align: center;
+    box-sizing: border-box;
+}
+
+.word-controls {
+    display: flex;
+    gap: 10px;
+    margin-top: 12px;
+    flex-wrap: wrap;
+}
+
+.word-control-btn {
+    position: relative; /* Needed for speech bubble tails */
+    padding: 6px 12px;
+    font-size: 0.8rem;
+    font-weight: 500;
+    border: 2px solid;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 16px; /* Space for tail */
+}
+
+/* Speech Bubble Tail for word control buttons */
+.word-control-btn::before,
+.word-control-btn::after {
+    content: "";
+    width: 0px;
+    height: 0px;
+    position: absolute;
+    border-right: 6px solid transparent;
+    border-bottom: 6px solid transparent;
+}
+
+.word-control-btn::before {
+    border-left: 6px solid currentColor; /* Use border color */
+    border-top: 6px solid currentColor;
+    left: 10px;
+    bottom: -12px;
+}
+
+.word-control-btn::after {
+    border-left: 6px solid currentColor; /* Will be overridden per button type */
+    border-top: 6px solid currentColor;
+    left: 12px;
+    bottom: -10px;
+    z-index: 1;
+}
+
+.add-btn {
+    background-color: #10B981;
+    color: white;
+    border-color: #10B981;
+}
+
+.add-btn:hover {
+    background-color: #059669;
+}
+
+.add-btn::after {
+    border-left-color: #10B981;
+    border-top-color: #10B981;
+}
+
+.clear-btn {
+    background-color: #EF4444;
+    color: white;
+    border-color: #EF4444;
+}
+
+.clear-btn:hover {
+    background-color: #DC2626;
+}
+
+.clear-btn::after {
+    border-left-color: #EF4444;
+    border-top-color: #EF4444;
+}
+
+.backspace-btn {
+    background-color: #F59E0B;
+    color: white;
+    border-color: #F59E0B;
+}
+
+.backspace-btn:hover {
+    background-color: #D97706;
+}
+
+.backspace-btn::after {
+    border-left-color: #F59E0B;
+    border-top-color: #F59E0B;
+}
+
+/* Alphabet Section */
+.alphabet-section {
+    margin-bottom: 24px;
+}
+
+.alphabet-section h4 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #374151;
+    margin-bottom: 12px;
+}
+
+.alphabet-grid {
+    display: grid;
+    grid-template-columns: repeat(6, 1fr); /* Default, will be updated dynamically */
+    gap: 8px;
+    margin-bottom: 25px; /* Extra space for speech bubble tails */
+    padding-bottom: 10px; /* Additional padding for tails */
+    --letter-font-size: 16px; /* CSS custom property for dynamic font sizing */
+}
+
+.letter-btn {
+    position: relative;
+    padding: 12px;
+    font-size: var(--letter-font-size); /* Use the CSS custom property */
+    font-weight: 500;
+    cursor: pointer;
+    background-color: white;
+    color: #002244;
+    border: 2px solid #002244;
+    border-radius: 12px;
+    text-align: center;
+    min-height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 18px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+    transition: transform 0.1s ease-out, box-shadow 0.2s ease-out, font-size 0.2s ease-out;
+}
+
+.letter-btn:hover {
+    filter: brightness(97%);
+}
+
+.letter-btn:active {
+    transform: scale(0.97);
+}
+
+/* Speech Bubble Tail for letter buttons */
+.letter-btn::before,
+.letter-btn::after {
+    content: "";
+    width: 0px;
+    height: 0px;
+    position: absolute;
+    border-right: 8px solid transparent;
+    border-bottom: 8px solid transparent;
+}
+
+.letter-btn::before {
+    border-left: 8px solid #002244;
+    border-top: 8px solid #002244;
+    left: 12px;
+    bottom: -14px;
+}
+
+.letter-btn::after {
+    border-left: 8px solid white;
+    border-top: 8px solid white;
+    left: 14px;
+    bottom: -12px;
+    z-index: 1;
+}
+
+/* Disabled letter styling */
+.letter-btn.disabled-letter,
+.letter-btn[disabled] {
+    opacity: 0.3;
+    background-color: #f3f4f6;
+    color: #9ca3af;
+    border-color: #d1d5db;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.letter-btn.disabled-letter::before {
+    border-left-color: #d1d5db;
+    border-top-color: #d1d5db;
+}
+
+.letter-btn.disabled-letter::after {
+    border-left-color: #f3f4f6;
+    border-top-color: #f3f4f6;
+}
+
+/* Predictions Section */
+.predictions-section h4 {
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: #374151;
+    margin-bottom: 12px;
+}
+
+.word-predictions-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); /* Default, will be updated dynamically */
+    gap: 10px;
+    margin-bottom: 25px; /* Extra space for speech bubble tails */
+    padding-bottom: 10px; /* Additional padding for tails */
+    --prediction-font-size: 14px; /* CSS custom property for dynamic font sizing */
+}
+
+.prediction-btn {
+    position: relative;
+    padding: 10px 16px;
+    font-size: var(--prediction-font-size); /* Use the CSS custom property */
+    font-weight: 500;
+    cursor: pointer;
+    background-color: white;
+    color: #002244;
+    border: 2px solid #002244;
+    border-radius: 12px;
+    text-align: center;
+    min-height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 16px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+    transition: transform 0.1s ease-out, box-shadow 0.2s ease-out, font-size 0.2s ease-out;
+}
+
+.prediction-btn:hover {
+    filter: brightness(97%);
+}
+
+.prediction-btn:active {
+    transform: scale(0.97);
+}
+
+/* Speech Bubble Tail for prediction buttons */
+.prediction-btn::before,
+.prediction-btn::after {
+    content: "";
+    width: 0px;
+    height: 0px;
+    position: absolute;
+    border-right: 8px solid transparent;
+    border-bottom: 8px solid transparent;
+}
+
+.prediction-btn::before {
+    border-left: 8px solid #002244;
+    border-top: 8px solid #002244;
+    left: 12px;
+    bottom: -14px;
+}
+
+.prediction-btn::after {
+    border-left: 8px solid white;
+    border-top: 8px solid white;
+    left: 14px;
+    bottom: -12px;
+    z-index: 1;
+}
+
+/* Loading Indicator */
+#loading-indicator {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.6);
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+#loading-indicator p {
+    color: white;
+    font-size: 1.2rem;
+    font-weight: 500;
+    margin-top: 20px;
+}
+
+.image-spinner {
+    width: 64px;
+    height: 64px;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .control-buttons {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .control-btn {
+        justify-content: center;
+    }
+    
+    .word-options-grid {
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 10px;
+    }
+    
+    .alphabet-grid {
+        grid-template-columns: repeat(4, 1fr);
+    }
+    
+    .word-predictions-grid {
+        grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+    }
+    
+    .modal-content {
+        margin: 10px;
+        width: calc(100vw - 20px);
+    }
+}
+
+/* Choose Word Modal Styles */
+.choose-word-content {
+    max-height: 70vh;
+    overflow-y: auto;
+    padding: 20px 0;
+}
+
+.category-section,
+.word-options-section {
+    padding: 0 20px;
+}
+
+.category-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin: 20px 0;
+}
+
+.category-btn {
+    position: relative;
+    padding: 12px 16px;
+    background-color: #002244;
+    color: white;
+    border: 3px solid #002244;
+    border-radius: 12px;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s ease;
+    text-align: center;
+    min-height: 50px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.category-btn:hover {
+    background-color: #FB4F14;
+    border-color: #FB4F14;
+    transform: translateY(-1px);
+}
+
+.category-btn.scanned {
+    background-color: #FB4F14;
+    border-color: #FB4F14;
+    box-shadow: 0 0 0 3px rgba(251, 79, 20, 0.3);
+    transform: scale(1.02);
+}
+
+.word-options-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin: 20px 0;
+}
+
+.something-else-btn {
+    background-color: #6B7280 !important;
+    border-color: #6B7280 !important;
+}
+
+.something-else-btn:hover,
+.something-else-btn.scanned {
+    background-color: #FB4F14 !important;
+    border-color: #FB4F14 !important;
+}
+
+/* Freestyle Modal Styles (matching main page layout) */
+.freestyle-modal-container {
+    position: fixed;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    background-color: #f4f7f6;
+    border-radius: 12px;
+    box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04);
+    width: 90vw;
+    max-width: 900px;
+    max-height: 85vh;
+    overflow-y: auto;
+    z-index: 1000;
+    padding: 20px;
+}
+
+.freestyle-modal-header {
+    background-color: #002244;
+    color: #FB4F14;
+    padding: 0.75em 1.5em;
+    border-radius: 8px 8px 0 0;
+    margin: -20px -20px 20px -20px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.freestyle-modal-header h3 {
+    margin: 0;
+    font-size: 1.75em;
+    font-weight: 500;
+    text-align: center;
+}
+
+.freestyle-modal-content {
+    background-color: #f4f7f6;
+    padding: 20px 0;
+}
+
+.freestyle-modal-section h4 {
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: #374151;
+    margin-bottom: 15px;
+    text-align: center;
+}
+
+.freestyle-button-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 15px;
+    padding: 0 10px;
+    margin-bottom: 20px;
+}
+
+.freestyle-modal-btn {
+    position: relative;
+    padding: 15px 20px;
+    font-size: 1rem;
+    font-weight: 500;
+    cursor: pointer;
+    background-color: white;
+    color: #002244;
+    border: 2px solid #002244;
+    border-radius: 12px;
+    text-align: center;
+    min-height: 50px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin-bottom: 18px;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.12);
+    transition: transform 0.1s ease-out, box-shadow 0.2s ease-out, font-size 0.2s ease-out;
+    word-wrap: break-word;
+    hyphens: auto;
+    line-height: 1.2;
+    gap: 8px;
+}
+
+.freestyle-modal-btn:hover {
+    filter: brightness(97%);
+    transform: translateY(-1px);
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+}
+
+.freestyle-modal-btn:active {
+    transform: scale(0.97);
+}
+
+/* Speech bubble tails for freestyle modal buttons */
+.freestyle-modal-btn::before,
+.freestyle-modal-btn::after {
+    content: "";
+    width: 0px;
+    height: 0px;
+    position: absolute;
+    border-right: 10px solid transparent;
+    border-bottom: 10px solid transparent;
+}
+
+.freestyle-modal-btn::before {
+    border-left: 10px solid #002244;
+    border-top: 10px solid #002244;
+    left: 15px;
+    bottom: -18px;
+}
+
+.freestyle-modal-btn::after {
+    border-left: 10px solid white;
+    border-top: 10px solid white;
+    left: 17px;
+    bottom: -16px;
+    z-index: 1;
+}
+
+.freestyle-modal-controls {
+    display: flex;
+    justify-content: center;
+    gap: 15px;
+    margin-top: 20px;
+    flex-wrap: wrap;
+}
+
+/* Special button colors for modal controls */
+.go-back-btn {
+    background-color: #6B7280 !important;
+    color: white !important;
+    border-color: #6B7280 !important;
+}
+
+.go-back-btn:hover {
+    background-color: #4B5563 !important;
+    border-color: #4B5563 !important;
+}
+
+.go-back-btn::after {
+    border-left-color: #6B7280 !important;
+    border-top-color: #6B7280 !important;
+}
+
+.back-to-categories-btn {
+    background-color: #3B82F6 !important;
+    color: white !important;
+    border-color: #3B82F6 !important;
+}
+
+.back-to-categories-btn:hover {
+    background-color: #2563EB !important;
+    border-color: #2563EB !important;
+}
+
+.back-to-categories-btn::after {
+    border-left-color: #3B82F6 !important;
+    border-top-color: #3B82F6 !important;
+}
+
+.something-else-btn {
+    background-color: #F59E0B !important;
+    color: white !important;
+    border-color: #F59E0B !important;
+}
+
+.something-else-btn:hover {
+    background-color: #D97706 !important;
+    border-color: #D97706 !important;
+}
+
+.something-else-btn::after {
+    border-left-color: #F59E0B !important;
+    border-top-color: #F59E0B !important;
+}
+
+@media (max-width: 480px) {
+    .build-space-container,
+    .word-generation-container {
+        margin: 10px;
+        padding: 0 10px;
+    }
+    
+    .alphabet-grid {
+        grid-template-columns: repeat(3, 1fr);
+    }
+    
+    .category-grid,
+    .word-options-grid {
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    }
+
+    .freestyle-modal-container {
+        width: 95vw;
+        max-height: 90vh;
+        padding: 15px;
+    }
+
+    .freestyle-button-grid {
+        grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+        gap: 10px;
+    }
+
+    .freestyle-modal-controls {
+        flex-direction: column;
+        align-items: center;
+    }
+}

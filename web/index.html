@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <!--
+    If you are serving your web app in a path other than the root, change the
+    href value below to reflect the base path you are serving from.
+
+    The path provided below has to start and end with a slash "/" in order for
+    it to work correctly.
+
+    For more details:
+    * https://developer.mozilla.org/en-US/docs/Web/HTML/Element/base
+
+    This is a placeholder for base href that will be replaced by the value of
+    the `--base-href` argument provided to `flutter build`.
+  -->
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="A new Flutter project.">
+
+  <!-- iOS meta tags & icons -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="bravo_flutter">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <title>bravo_flutter</title>
+  <link rel="manifest" href="manifest.json">
+</head>
+<body>
+  <script>
+    window.getAudioDevices = async function() {
+      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+        return [{ id: 'default', name: 'Default Speaker', kind: 'audiooutput' }];
+      }
+      // Request permission to access media devices
+      try {
+        await navigator.mediaDevices.getUserMedia({ audio: true });
+      } catch (e) {
+        // Permission denied or not available
+      }
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      return devices
+        .filter(d => d.kind === 'audiooutput')
+        .map(d => ({
+          id: d.deviceId,
+          name: d.label || 'Speaker',
+          kind: d.kind
+        }));
+    };
+
+    // Bridge for playing audio to a specific output device using setSinkId
+    window.playAudioToDevice = async function(deviceId) {
+      // Remove any existing test audio element
+      let old = document.getElementById('bravo-test-audio');
+      if (old) old.remove();
+      // Create a new audio element
+      let audio = document.createElement('audio');
+      audio.id = 'bravo-test-audio';
+      audio.src = 'assets/test.mp3';
+      audio.autoplay = true;
+      audio.controls = false;
+      audio.style.display = 'none';
+      document.body.appendChild(audio);
+      // Wait for metadata to load
+      await new Promise(resolve => audio.onloadedmetadata = resolve);
+      if (audio.setSinkId) {
+        try {
+          await audio.setSinkId(deviceId);
+        } catch (e) {
+          console.warn('setSinkId failed:', e);
+        }
+      }
+      audio.play();
+    };
+
+    // Bridge for playing TTS audio to a specific output device
+    window.playTTSAudio = async function(base64Audio, deviceId) {
+      // Remove any existing TTS audio element
+      let old = document.getElementById('bravo-tts-audio');
+      if (old) old.remove();
+      
+      // Convert base64 to blob
+      const binaryString = atob(base64Audio);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      const blob = new Blob([bytes], { type: 'audio/wav' });
+      const audioUrl = URL.createObjectURL(blob);
+      
+      // Create a new audio element
+      let audio = document.createElement('audio');
+      audio.id = 'bravo-tts-audio';
+      audio.src = audioUrl;
+      audio.autoplay = true;
+      audio.controls = false;
+      audio.style.display = 'none';
+      document.body.appendChild(audio);
+      
+      // Set the output device if supported
+      if (audio.setSinkId && deviceId) {
+        try {
+          await audio.setSinkId(deviceId);
+        } catch (e) {
+          console.warn('setSinkId failed for TTS:', e);
+        }
+      }
+      
+      // Play the audio
+      audio.play();
+      
+      // Clean up after playing
+      audio.onended = function() {
+        URL.revokeObjectURL(audioUrl);
+        audio.remove();
+      };
+    };
+  </script>
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>

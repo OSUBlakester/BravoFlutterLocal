@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Spelling - Bravo AAC</title>
+
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+    <script src="/static/token-refresh.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link rel="stylesheet" href="/static/spelling.css">
+</head>
+<body>
+    <div id="app-container">
+        <div class="page-banner">
+            <h1>Spelling</h1>
+        </div>
+
+        <main class="spelling-page">
+            <section id="action-section" data-section-id="action" class="spell-section scan-section">
+                <h2 class="section-title">Build Space</h2>
+                <div class="current-word-wrap">
+                    <input type="text" id="current-word" class="current-word-input" readonly>
+                    <div class="word-controls">
+                        <button id="speak-display-btn" class="word-control-btn spell-button add-btn">Speak Display</button>
+                        <button id="backspace-btn" class="word-control-btn spell-button backspace-btn">Backspace</button>
+                        <button id="clear-word-btn" class="word-control-btn spell-button clear-btn">Clear</button>
+                        <button id="home-btn" class="word-control-btn spell-button home-action-btn">
+                            <i class="fas fa-home"></i>
+                            Home
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            <section id="choose-word-section" data-section-id="choose-word" class="spell-section predictions-section scan-section">
+                <h2 class="section-title">Suggested Words</h2>
+                <div id="word-predictions" class="word-predictions-grid"></div>
+            </section>
+
+            <section id="letters-section" data-section-id="letters" class="spell-section alphabet-section scan-section">
+                <h2 class="section-title">Letters</h2>
+                <div id="alphabet-grid" class="alphabet-grid"></div>
+            </section>
+        </main>
+    </div>
+
+    <script src="/static/spelling.js"></script>
+</body>
+</html>

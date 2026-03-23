@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Avatar Selector - Bravo AAC</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <!-- Header -->
+    <div class="bg-white shadow-sm border-b">
+        <div class="max-w-6xl mx-auto px-4 py-4">
+            <div class="flex justify-between items-center">
+                <h1 class="text-2xl font-bold text-gray-900">
+                    <i class="fas fa-user-circle text-blue-600 mr-2"></i>
+                    Avatar Selector
+                </h1>
+                <div class="text-sm text-gray-600">
+                    Choose your AAC avatar
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="max-w-6xl mx-auto px-4 py-6">
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <!-- Avatar Preview Section -->
+            <div class="lg:col-span-1">
+                <div class="bg-white rounded-lg shadow-sm border p-6">
+                    <h2 class="text-lg font-semibold mb-4">Avatar Preview</h2>
+                    <div class="text-center">
+                        <div id="avatar-preview" class="mb-4">
+                            <img id="avatar-image" src="" alt="Avatar Preview" class="w-48 h-48 mx-auto rounded-full border-4 border-blue-100" style="display: none;">
+                            <div id="loading-spinner" class="w-48 h-48 mx-auto bg-gray-100 rounded-full flex items-center justify-center">
+                                <i class="fas fa-spinner fa-spin text-gray-400 text-2xl"></i>
+                            </div>
+                        </div>
+                        <button id="generate-random" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg transition-colors">
+                            <i class="fas fa-dice mr-2"></i>Generate Random
+                        </button>
+                        <button id="save-avatar" class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg ml-2 transition-colors" style="display: none;">
+                            <i class="fas fa-save mr-2"></i>Save Avatar
+                        </button>
+                    </div>
+                    
+                    <!-- AAC Preview Section -->
+                    <div id="aac-preview-container" class="mt-6 p-4 bg-blue-50 rounded-lg" style="display: none;">
+                        <h3 class="text-md font-medium mb-2">AAC Description:</h3>
+                        <div id="aac-preview-content" class="text-sm text-gray-700"></div>
+                        <button id="generate-aac" class="mt-2 bg-purple-600 hover:bg-purple-700 text-white px-3 py-1 text-sm rounded transition-colors">
+                            <i class="fas fa-magic mr-1"></i>Generate AAC Preview
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Customization Options -->
+            <div class="lg:col-span-2">
+                <div class="bg-white rounded-lg shadow-sm border p-6">
+                    <h2 class="text-lg font-semibold mb-4">Customize Your Avatar</h2>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4" id="customization-options">
+                        <!-- Hair Style -->
+                        <div class="space-y-2">
+                            <label class="block text-sm font-medium text-gray-700">Hair Style</label>
+                            <select id="topType" class="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="NoHair">No Hair</option>
+                                <option value="Eyepatch">Eyepatch</option>
+                                <option value="Hat">Hat</option>
+                                <option value="Hijab">Hijab</option>
+                                <option value="Turban">Turban</option>
+                                <option value="WinterHat1">Winter Hat 1</option>
+                                <option value="WinterHat2">Winter Hat 2</option>
+                                <option value="WinterHat3">Winter Hat 3</option>
+                                <option value="WinterHat4">Winter Hat 4</option>
+                                <option value="LongHairBigHair">Long Hair Big Hair</option>
+                                <option value="LongHairBob">Long Hair Bob</option>
+                                <option value="LongHairBun">Long Hair Bun</option>
+                                <option value="LongHairCurly">Long Hair Curly</option>
+                                <option value="LongHairCurvy">Long Hair Curvy</option>
+                                <option value="LongHairDreads">Long Hair Dreads</option>
+                                <option value="LongHairFrida">Long Hair Frida</option>
+                                <option value="LongHairFro">Long Hair Fro</option>
+                                <option value="LongHairFroBand">Long Hair Fro Band</option>
+                                <option value="LongHairNotTooLong">Long Hair Not Too Long</option>
+                                <option value="LongHairShavedSides">Long Hair Shaved Sides</option>
+                                <option value="LongHairMiaWallace">Long Hair Mia Wallace</option>
+                                <option value="LongHairStraight">Long Hair Straight</option>
+                                <option value="LongHairStraight2">Long Hair Straight 2</option>
+                                <option value="LongHairStraightStrand">Long Hair Straight Strand</option>
+                                <option value="ShortHairDreads01">Short Hair Dreads 01</option>
+                                <option value="ShortHairDreads02">Short Hair Dreads 02</option>
+                                <option value="ShortHairFrizzle">Short Hair Frizzle</option>
+                                <option value="ShortHairShaggyMullet">Short Hair Shaggy Mullet</option>
+                                <option value="ShortHairShortCurly">Short Hair Short Curly</option>
+                                <option value="ShortHairShortFlat" selected>Short Hair Short Flat</option>
+                                <option value="ShortHairShortRound">Short Hair Short Round</option>
+                                <option value="ShortHairShortWaved">Short Hair Short Waved</option>
+                                <option value="ShortHairSides">Short Hair Sides</option>
+                                <option value="ShortHairTheCaesar">Short Hair The Caesar</option>
+                                <option value="ShortHairTheCaesarSidePart">Short Hair The Caesar Side Part</option>
+                            </select>
+                        </div>
+
+                        <!-- Hair Color -->
+                        <div class="space-y-2">
+                            <label class="block text-sm font-medium text-gray-700">Hair Color</label>
+                            <select id="hairColor" class="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="Auburn">Auburn</option>
+                                <option value="Black">Black</option>
+                                <option value="Blonde">Blonde</option>
+                                <option value="BlondeGolden">Blonde Golden</option>
+                                <option value="Brown" selected>Brown</option>
+                                <option value="BrownDark">Brown Dark</option>
+                                <option value="PastelPink">Pastel Pink</option>
+                                <option value="Platinum">Platinum</option>
+                                <option value="Red">Red</option>
+                                <option value="SilverGray">Silver Gray</option>
+                            </select>
+                        </div>
+
+                        <!-- Facial Hair -->
+                        <div class="space-y-2">
+                            <label class="block text-sm font-medium text-gray-700">Facial Hair</label>
+                            <select id="facialHairType" class="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="Blank" selected>None</option>
+                                <option value="BeardMedium">Beard Medium</option>
+                                <option value="BeardLight">Beard Light</option>
+                                <option value="BeardMajestic">Beard Majestic</option>
+                                <option value="MoustacheFancy">Moustache Fancy</option>
+                                <option value="MoustacheMagnum">Moustache Magnum</option>
+                            </select>
+                        </div>
+
+                        <!-- Facial Hair Color -->
+                        <div class="space-y-2">
+                            <label class="block text-sm font-medium text-gray-700">Facial Hair Color</label>
+                            <select id="facialHairColor" class="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="Auburn">Auburn</option>
+                                <option value="Black">Black</option>
+                                <option value="Blonde">Blonde</option>
+                                <option value="BlondeGolden">Blonde Golden</option>
+                                <option value="Brown" selected>Brown</option>
+                                <option value="BrownDark">Brown Dark</option>
+                                <option value="Platinum">Platinum</option>
+                                <option value="Red">Red</option>
+                            </select>
+                        </div>
+
+                        <!-- Accessories -->
+                        <div class="space-y-2">
+                            <label class="block text-sm font-medium text-gray-700">Accessories</label>
+                            <select id="accessoriesType" class="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="Blank" selected>None</option>
+                                <option value="Kurt">Kurt</option>
+                                <option value="Prescription01">Glasses Prescription 01</option>
+                                <option value="Prescription02">Glasses Prescription 02</option>
+                                <option value="Round">Glasses Round</option>
+                                <option value="Sunglasses">Sunglasses</option>
+                                <option value="Wayfarers">Wayfarers</option>
+                            </select>
+                        </div>
+
+                        <!-- Clothing -->
+                        <div class="space-y-2">
+                            <label class="block text-sm font-medium text-gray-700">Clothing</label>
+                            <select id="clotheType" class="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="BlazerShirt">Blazer Shirt</option>
+                                <option value="BlazerSweater">Blazer Sweater</option>
+                                <option value="CollarSweater" selected>Collar Sweater</option>
+                                <option value="GraphicShirt">Graphic Shirt</option>
+                                <option value="Hoodie">Hoodie</option>
+                                <option value="Overall">Overall</option>
+                                <option value="ShirtCrewNeck">Shirt Crew Neck</option>
+                                <option value="ShirtScoopNeck">Shirt Scoop Neck</option>
+                                <option value="ShirtVNeck">Shirt V Neck</option>
+                            </select>
+                        </div>
+
+                        <!-- Clothing Color -->
+                        <div class="space-y-2">
+                            <label class="block text-sm font-medium text-gray-700">Clothing Color</label>
+                            <select id="clotheColor" class="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="Black">Black</option>
+                                <option value="Blue01">Blue 01</option>
+                                <option value="Blue02">Blue 02</option>
+                                <option value="Blue03" selected>Blue 03</option>
+                                <option value="Gray01">Gray 01</option>
+                                <option value="Gray02">Gray 02</option>
+                                <option value="Heather">Heather</option>
+                                <option value="PastelBlue">Pastel Blue</option>
+                                <option value="PastelGreen">Pastel Green</option>
+                                <option value="PastelOrange">Pastel Orange</option>
+                                <option value="PastelRed">Pastel Red</option>
+                                <option value="PastelYellow">Pastel Yellow</option>
+                                <option value="Pink">Pink</option>
+                                <option value="Red">Red</option>
+                                <option value="White">White</option>
+                            </select>
+                        </div>
+
+                        <!-- Emotional variations will be generated automatically -->
+
+                        <!-- Skin Color -->
+                        <div class="space-y-2">
+                            <label class="block text-sm font-medium text-gray-700">Skin Color</label>
+                            <select id="skinColor" class="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500">
+                                <option value="Tanned">Tanned</option>
+                                <option value="Yellow">Yellow</option>
+                                <option value="Pale" selected>Pale</option>
+                                <option value="Light">Light</option>
+                                <option value="Brown">Brown</option>
+                                <option value="DarkBrown">Dark Brown</option>
+                                <option value="Black">Black</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Load our custom JavaScript -->
+    <script src="/static/avatar-selector.js"></script>
+</body>
+</html>

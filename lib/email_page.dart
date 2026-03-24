@@ -15,12 +15,15 @@ class EmailPage extends StatefulWidget {
   final String idToken;
   final String aacUserId;
   final String displayName;
+  final Future<void> Function({String seedText, String documentType})?
+  onEnterComposeMode;
 
   const EmailPage({
     super.key,
     required this.idToken,
     required this.aacUserId,
     required this.displayName,
+    this.onEnterComposeMode,
   });
 
   @override
@@ -392,6 +395,33 @@ $contentForPrompt
         _statusMessage = 'Unable to send email: $e';
       });
     }
+  }
+
+  Future<void> _enterAacComposeMode() async {
+    if (widget.onEnterComposeMode == null) {
+      setState(() {
+        _statusMessage = 'AAC Compose mode is not available from this screen.';
+      });
+      return;
+    }
+
+    final subject = _subjectController.text.trim();
+    final body = _bodyController.text.trim();
+    final seed = [if (subject.isNotEmpty) subject, if (body.isNotEmpty) body]
+        .join('\n\n')
+        .trim();
+
+    await widget.onEnterComposeMode!(
+      seedText: seed,
+      documentType: 'email',
+    );
+
+    if (!mounted) return;
+    Navigator.of(context).pop();
+    if (!mounted) return;
+    setState(() {
+      _statusMessage = 'Opened AAC compose mode.';
+    });
   }
 
   Future<void> _loadProviderStatus() async {
@@ -949,6 +979,12 @@ $contentForPrompt
         ),
         const SizedBox(height: 12),
         _buildPrimaryButton(
+          label: 'Use AAC Compose',
+          icon: Icons.edit_note,
+          onPressed: _enterAacComposeMode,
+        ),
+        const SizedBox(height: 12),
+        _buildPrimaryButton(
           label: 'Refresh Contacts',
           icon: Icons.refresh,
           onPressed: _loadContacts,
@@ -1050,6 +1086,12 @@ $contentForPrompt
           label: 'Send Email',
           icon: Icons.send,
           onPressed: recipient.trim().isEmpty ? null : _sendComposeDraft,
+        ),
+        const SizedBox(height: 12),
+        _buildPrimaryButton(
+          label: 'Use AAC Compose',
+          icon: Icons.edit_note,
+          onPressed: _enterAacComposeMode,
         ),
         const SizedBox(height: 12),
         _buildPrimaryButton(

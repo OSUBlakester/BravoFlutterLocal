@@ -38,6 +38,7 @@ class FreestylePage extends StatefulWidget {
   final String? sourcePage;     // The page name that led to freestyle  
   final bool isLLMGenerated;    // Whether the source was LLM-generated
   final String? originatingButtonText; // The text of the button that started the LLM query
+  final void Function(String text)? onComposeAppend;
 
   const FreestylePage({
     super.key,
@@ -48,6 +49,7 @@ class FreestylePage extends StatefulWidget {
     this.sourcePage,
     this.isLLMGenerated = false,
     this.originatingButtonText,
+    this.onComposeAppend,
   });
 
   @override
@@ -1125,6 +1127,10 @@ void dispose() {
     
     // Use system routing for speech display (same as main page for consistency)
     await _announceWithTimeout(textToSpeak, routing: "system");
+
+    if (textToSpeak.trim().isNotEmpty) {
+      widget.onComposeAppend?.call(textToSpeak.trim());
+    }
     
     // Record to speech history
     _recordToSpeechHistory(textToSpeak);

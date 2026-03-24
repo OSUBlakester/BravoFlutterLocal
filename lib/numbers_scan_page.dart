@@ -21,6 +21,7 @@ class NumbersScanPage extends StatefulWidget {
   })
   announceFunction;
   final Future<void> Function(String text)? scanPromptFunction;
+  final void Function(String text)? onComposeAppend;
 
   const NumbersScanPage({
     super.key,
@@ -28,6 +29,7 @@ class NumbersScanPage extends StatefulWidget {
     required this.aacUserId,
     required this.announceFunction,
     this.scanPromptFunction,
+    this.onComposeAppend,
   });
 
   @override
@@ -452,6 +454,7 @@ class _NumbersScanPageState extends State<NumbersScanPage> {
 
   Future<void> _handleNumberSelection(String value) async {
     _stopScanning();
+    widget.onComposeAppend?.call(value);
     await _announceWithLocalSpeechBubble(value, routing: 'system');
     await _recordChatHistory(value);
     _resetToRowsAndRestart(delayMs: 180);

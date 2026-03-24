@@ -12,6 +12,7 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
+import 'package:file_picker/file_picker.dart';
 import 'services/user_settings_provider.dart';
 import 'services/pictogram_service.dart';
 import 'services/sight_word_service.dart';
@@ -19,6 +20,7 @@ import 'services/audio_device_provider.dart';
 import 'services/audio_device_service.dart';
 import 'services/chat_history_service.dart';
 import 'services/authenticated_http_client.dart';
+import 'services/compose_session_service.dart';
 import 'admin_pages_buttons.dart';
 import 'user_current_admin_page.dart';
 import 'user_info_admin_page.dart';
@@ -3975,7 +3977,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
         'X-User-ID': widget.aacUserId,
         'Content-Type': 'application/json',
       },
-      body: json.encode({'prompt': followUpPrompt}),
+      body: json.encode(_buildLlmRequestBody(followUpPrompt)),
       timeoutSeconds: 30,
     );
 
@@ -4259,13 +4261,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
     await _speakPersonalVoice("Scanning resumed");
 
     // Speak the current button (where we paused) before starting the timer
-    final definedButtons = gridButtons
-        .where(
-          (btn) =>
-              (btn['hidden'] != true) &&
-              ((btn['text'] ?? '').toString().trim().isNotEmpty),
-        )
-        .toList();
+    final definedButtons = _effectiveGridButtons();
     if (definedButtons.isNotEmpty &&
         scanningIndex != null &&
         scanningIndex! < definedButtons.length) {
@@ -4309,13 +4305,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       return;
     }
 
-    final definedButtons = gridButtons
-        .where(
-          (btn) =>
-              (btn['hidden'] != true) &&
-              ((btn['text'] ?? '').toString().trim().isNotEmpty),
-        )
-        .toList();
+    final definedButtons = _effectiveGridButtons();
     if (definedButtons.isEmpty) {
       debugPrint('scanStep: No defined buttons');
       return;
@@ -4388,6 +4378,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
   String? previousPageName; // Store previous page name for LLM
 
   String speechHistory = '';
+  ComposeSessionData _composeSession = const ComposeSessionData.inactive();
   String questionDisplay = '';
   bool _isSpeechHistoryMaximized = false;
   bool isLoading = false;
@@ -4502,6 +4493,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
   @override
   void initState() {
     super.initState();
+    unawaited(_loadComposeSession());
     print(
       '🔵 GridPageState - initState called with aacUserId: ${widget.aacUserId}',
     );
@@ -6727,26 +6719,19 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
                     final duration = await player.duration;
                     final position = await player.position;
 
-                    if (duration != null && position != null) {
-                      // Allow 200ms tolerance for completion detection
-                      final remainingMs =
-                          duration.inMilliseconds - position.inMilliseconds;
-                      if (remainingMs <= 200) {
-                        debugPrint(
-                          'Android base64: Audio truly completed (position: ${position.inSeconds}s, duration: ${duration.inSeconds}s)',
-                        );
-                        if (!completer.isCompleted) completer.complete();
-                      } else {
-                        debugPrint(
-                          'Android base64: False completion detected - ${remainingMs}ms remaining, continuing playback',
-                        );
-                      }
-                    } else {
-                      // Fallback: if duration/position unavailable, trust the completed state
+                    // Allow 200ms tolerance for completion detection
+                    final remainingMs =
+                        (duration?.inMilliseconds ?? 0) -
+                        position.inMilliseconds;
+                    if (remainingMs <= 200) {
                       debugPrint(
-                        'Android base64: Duration/position unavailable, trusting completed state',
+                        'Android base64: Audio truly completed (position: ${position.inSeconds}s, duration: ${duration?.inSeconds ?? 0}s)',
                       );
                       if (!completer.isCompleted) completer.complete();
+                    } else {
+                      debugPrint(
+                        'Android base64: False completion detected - ${remainingMs}ms remaining, continuing playback',
+                      );
                     }
                   }
                 });
@@ -6792,26 +6777,19 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
                     final duration = await player.duration;
                     final position = await player.position;
 
-                    if (duration != null && position != null) {
-                      // Allow 200ms tolerance for completion detection
-                      final remainingMs =
-                          duration.inMilliseconds - position.inMilliseconds;
-                      if (remainingMs <= 200) {
-                        debugPrint(
-                          'Android audioUrl: Audio truly completed (position: ${position.inSeconds}s, duration: ${duration.inSeconds}s)',
-                        );
-                        if (!completer.isCompleted) completer.complete();
-                      } else {
-                        debugPrint(
-                          'Android audioUrl: False completion detected - ${remainingMs}ms remaining, continuing playback',
-                        );
-                      }
-                    } else {
-                      // Fallback: if duration/position unavailable, trust the completed state
+                    // Allow 200ms tolerance for completion detection
+                    final remainingMs =
+                        (duration?.inMilliseconds ?? 0) -
+                        position.inMilliseconds;
+                    if (remainingMs <= 200) {
                       debugPrint(
-                        'Android audioUrl: Duration/position unavailable, trusting completed state',
+                        'Android audioUrl: Audio truly completed (position: ${position.inSeconds}s, duration: ${duration?.inSeconds ?? 0}s)',
                       );
                       if (!completer.isCompleted) completer.complete();
+                    } else {
+                      debugPrint(
+                        'Android audioUrl: False completion detected - ${remainingMs}ms remaining, continuing playback',
+                      );
                     }
                   }
                 });
@@ -7712,7 +7690,16 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
     final customAudioFile = buttonData['customAudioFile'] as String?;
     final navigationType =
         buttonData['navigationType'] as String?; // NEW: Get navigation type
+    final composeSpecial = buttonData['composeSpecial'] as String?;
     final keepFollowUpContext = buttonData['keepFollowUpContext'] == true;
+
+    if (composeSpecial == 'exit_creation') {
+      await _showComposeFinalizeMenu();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _maybeStartScanning();
+      });
+      return;
+    }
     // Debug: print entry to handleButtonAction with FULL button data
     debugPrint(
       'handleButtonAction called. llmQuery: $llmQuery, queryType: $queryType, isLLMGenerated: ${buttonData['isLLMGenerated']}',
@@ -7811,7 +7798,9 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
         debugPrint('LLM PROMPT: ' + prompt);
         debugLogLLM(stage: 'LLM Prompt Sent', prompt: prompt);
         debugPrint('LLM REQUEST URL: ${EnvironmentConfig.apiBaseUrl}/llm');
-        debugPrint('LLM REQUEST BODY: ' + json.encode({'prompt': prompt}));
+        debugPrint(
+          'LLM REQUEST BODY: ' + json.encode(_buildLlmRequestBody(prompt)),
+        );
 
         // Add 30-second timeout to LLM requests to prevent hanging
         final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
@@ -7821,7 +7810,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
             'X-User-ID': widget.aacUserId,
             'Content-Type': 'application/json',
           },
-          body: json.encode({'prompt': prompt}),
+          body: json.encode(_buildLlmRequestBody(prompt)),
           timeoutSeconds: 30,
         );
 
@@ -8377,7 +8366,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
             'X-User-ID': widget.aacUserId,
             'Content-Type': 'application/json',
           },
-          body: json.encode({'prompt': newPrompt}),
+          body: json.encode(_buildLlmRequestBody(newPrompt)),
           timeoutSeconds: 30,
         );
         if (response.statusCode == 200) {
@@ -8451,6 +8440,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
               sourcePage: currentPageName,
               isLLMGenerated: isLLMGenerated,
               originatingButtonText: capturedOriginatingButtonText,
+              onComposeAppend: _appendToComposeText,
             ),
           ),
         );
@@ -8501,6 +8491,8 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
                 speechHistory;
           }
         });
+
+        unawaited(_appendToComposeText(optionText));
 
         // Record to chat history (same as web app)
         final chatService = ChatHistoryService();
@@ -8936,7 +8928,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       });
 
       // Announce first, then navigate
-      if (speechPhrase != null && speechPhrase.isNotEmpty) {
+      if (speechPhrase.isNotEmpty) {
         await _announceWithTimeout(speechPhrase, routing: 'system');
       }
 
@@ -8964,7 +8956,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       debugPrint('handleButtonAction: GO-BACK-PAGE navigation triggered');
 
       // Announce speech phrase if present
-      if (speechPhrase != null && speechPhrase.isNotEmpty) {
+      if (speechPhrase.isNotEmpty) {
         setState(() {
           statusMessage = '';
           _suppressScanning = true;
@@ -9023,7 +9015,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       if (targetPage.startsWith('!')) {
         final specialPage = targetPage.substring(1); // Remove the ! prefix
 
-        if (speechPhrase != null && speechPhrase.isNotEmpty) {
+        if (speechPhrase.isNotEmpty) {
           setState(() {
             statusMessage = ''; // Clear status
           });
@@ -9070,6 +9062,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
                     false, // Special page navigation is typically from admin pages
                 originatingButtonText:
                     null, // No originating button for special page navigation
+                onComposeAppend: _appendToComposeText,
               ),
             ),
           );
@@ -9098,7 +9091,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           });
 
           // Announce first, then navigate
-          if (speechPhrase != null && speechPhrase.isNotEmpty) {
+          if (speechPhrase.isNotEmpty) {
             await announceViaBackend(speechPhrase, routing: 'system');
           }
 
@@ -9152,6 +9145,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
                 idToken: widget.idToken,
                 aacUserId: widget.aacUserId,
                 displayName: widget.displayName,
+                onEnterComposeMode: _activateComposeFromEmail,
               ),
             ),
           );
@@ -9191,6 +9185,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
                 aacUserId: widget.aacUserId,
                 announceFunction: announceViaBackend,
                 scanPromptFunction: _speakPersonalVoice,
+                onComposeAppend: _appendToComposeText,
               ),
             ),
           );
@@ -9206,9 +9201,12 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
                 aacUserId: widget.aacUserId,
                 announceFunction: announceViaBackend,
                 scanPromptFunction: _speakPersonalVoice,
+                onComposeAppend: _appendToComposeText,
               ),
             ),
           );
+        } else if (specialPage == 'compose' || specialPage == 'composition') {
+          await _showComposeEntryMenu();
         } else {
           setState(() {
             statusMessage = 'Unknown special page: $specialPage';
@@ -9218,7 +9216,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       }
 
       // If speechPhrase is present, announce it first, then navigate
-      if (speechPhrase != null && speechPhrase.isNotEmpty) {
+      if (speechPhrase.isNotEmpty) {
         setState(() {
           statusMessage = ''; // Clear status
           // CRITICAL: Suppress scanning and rebuilds during announcement
@@ -9321,11 +9319,19 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
               '" is empty or all buttons have empty text.';
         });
       }
-    } else if (speechPhrase != null && speechPhrase.isNotEmpty) {
-      setState(() {
-        questionDisplay = speechPhrase;
-      });
-      await announceViaBackend(speechPhrase, routing: 'system');
+    } else if (speechPhrase.isNotEmpty) {
+      if (_composeSession.active) {
+        await _appendToComposeText(speechPhrase);
+        setState(() {
+          questionDisplay = speechPhrase;
+          statusMessage = 'Added to creation.';
+        });
+      } else {
+        setState(() {
+          questionDisplay = speechPhrase;
+        });
+        await announceViaBackend(speechPhrase, routing: 'system');
+      }
 
       // Play custom MP3 audio file if assigned (after TTS)
       if (customAudioFile != null && customAudioFile.isNotEmpty) {
@@ -9556,6 +9562,550 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
     }
   }
 
+  Future<void> _loadComposeSession() async {
+    final loaded = await ComposeSessionService.load(widget.aacUserId);
+    if (!mounted) return;
+    setState(() {
+      _composeSession = loaded;
+    });
+  }
+
+  Future<void> _persistComposeSession() async {
+    await ComposeSessionService.save(widget.aacUserId, _composeSession);
+  }
+
+  Map<String, dynamic> _buildLlmRequestBody(String prompt) {
+    return {
+      'prompt': prompt,
+      'compose_mode': _composeSession.active,
+      'compose_body': _composeSession.active ? _composeSession.text : '',
+    };
+  }
+
+  List<Map<String, dynamic>> _effectiveGridButtons() {
+    final baseButtons = gridButtons
+        .where(
+          (btn) =>
+              (btn['hidden'] != true) &&
+              ((btn['text'] ?? '').toString().trim().isNotEmpty),
+        )
+        .map((btn) => Map<String, dynamic>.from(btn))
+        .toList();
+
+    if (_composeSession.active && currentPageName == 'home') {
+      baseButtons.add({
+        'text': 'Exit Creation',
+        'speechPhrase': 'Exit Creation',
+        'composeSpecial': 'exit_creation',
+        'hidden': false,
+      });
+    }
+
+    return baseButtons;
+  }
+
+  Future<void> _appendToComposeText(String rawText) async {
+    if (!_composeSession.active) return;
+    final normalized = rawText
+        .replaceAll('[PAUSE]', ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (normalized.isEmpty) return;
+
+    final existing = _composeSession.text.trim();
+    final merged = existing.isEmpty ? normalized : '$existing $normalized';
+
+    if (!mounted) return;
+    setState(() {
+      _composeSession = _composeSession.copyWith(text: merged);
+      statusMessage = 'Creation in progress';
+    });
+    await _persistComposeSession();
+  }
+
+  Future<void> _startComposeSession({
+    required String documentType,
+    String seedText = '',
+    String? documentId,
+    String title = '',
+  }) async {
+    final now = DateTime.now().toUtc().toIso8601String();
+    setState(() {
+      _composeSession = ComposeSessionData(
+        active: true,
+        documentType: documentType,
+        documentId: documentId,
+        title: title,
+        text: seedText.trim(),
+        startedAt: now,
+        sourceFrom: currentPageName,
+      );
+      statusMessage = 'Creation in progress';
+    });
+    await _persistComposeSession();
+
+    if (currentPageName != 'home') {
+      await fetchGridDataForPage('home');
+    }
+  }
+
+  Future<void> _showComposeEntryMenu() async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Create'),
+          content: const Text('Start new or open existing creation?'),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                await _startComposeSession(documentType: 'story');
+              },
+              child: const Text('Create New'),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                await _openExistingComposeDocument();
+              },
+              child: const Text('Open Existing'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _openExistingComposeDocument() async {
+    setState(() {
+      isLoading = true;
+      statusMessage = 'Loading saved creations...';
+    });
+
+    try {
+      final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+        'GET',
+        '${EnvironmentConfig.apiBaseUrl}/api/compose/documents',
+        baseHeaders: {'X-User-ID': widget.aacUserId},
+      );
+
+      if (response.statusCode != 200) {
+        if (!mounted) return;
+        setState(() {
+          statusMessage = 'Unable to load creations (${response.statusCode}).';
+        });
+        return;
+      }
+
+      final decoded = json.decode(response.body);
+      final docs = (decoded is Map<String, dynamic>
+              ? decoded['documents'] as List<dynamic>?
+              : null) ??
+          <dynamic>[];
+
+      if (docs.isEmpty) {
+        if (!mounted) return;
+        setState(() {
+          statusMessage = 'No saved creations yet.';
+        });
+        return;
+      }
+
+      if (!mounted) return;
+      final selected = await showDialog<Map<String, dynamic>>(
+        context: context,
+        builder: (context) {
+          return AlertDialog(
+            title: const Text('Open Existing Creation'),
+            content: SizedBox(
+              width: 520,
+              height: 420,
+              child: ListView.builder(
+                itemCount: docs.length,
+                itemBuilder: (context, index) {
+                  final doc = docs[index] as Map<String, dynamic>;
+                  final title = (doc['title'] ?? 'Untitled').toString();
+                  final type = (doc['document_type'] ?? 'story').toString();
+                  return ListTile(
+                    title: Text(title),
+                    subtitle: Text(type),
+                    onTap: () => Navigator.of(context).pop(doc),
+                  );
+                },
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(context).pop(),
+                child: const Text('Cancel'),
+              ),
+            ],
+          );
+        },
+      );
+
+      if (selected == null) return;
+      await _startComposeSession(
+        documentType: (selected['document_type'] ?? 'story').toString(),
+        seedText: (selected['body'] ?? '').toString(),
+        documentId: (selected['id'] ?? '').toString().trim().isEmpty
+            ? null
+            : (selected['id'] ?? '').toString().trim(),
+        title: (selected['title'] ?? '').toString(),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        statusMessage = 'Unable to load creations: $e';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          isLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _saveComposeAndExit() async {
+    final body = _composeSession.text.trim();
+    if (body.isEmpty) {
+      setState(() {
+        statusMessage = 'Creation is empty. Add words before saving.';
+      });
+      return;
+    }
+
+    setState(() {
+      isLoading = true;
+      statusMessage = 'Saving creation...';
+    });
+
+    try {
+      String generatedTitle = _composeSession.title.trim();
+      if (generatedTitle.isEmpty) {
+        final titleResp = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+          'POST',
+          '${EnvironmentConfig.apiBaseUrl}/api/compose/generate-title',
+          baseHeaders: {
+            'X-User-ID': widget.aacUserId,
+            'Content-Type': 'application/json',
+          },
+          body: json.encode({'body': body}),
+        );
+        if (titleResp.statusCode == 200) {
+          final titleData = json.decode(titleResp.body);
+          final candidate = (titleData['title'] ?? '').toString().trim();
+          if (candidate.isNotEmpty) {
+            generatedTitle = candidate;
+          }
+        }
+      }
+
+      if (generatedTitle.isEmpty) {
+        generatedTitle = 'Untitled Creation';
+      }
+
+      final payload = {
+        'document_type': _composeSession.documentType,
+        'title': generatedTitle,
+        'body': body,
+        'to': const <String>[],
+        'cc': const <String>[],
+        'bcc': const <String>[],
+        'subject': '',
+      };
+
+      final isUpdate = (_composeSession.documentId ?? '').trim().isNotEmpty;
+      final endpoint = isUpdate
+          ? '${EnvironmentConfig.apiBaseUrl}/api/compose/documents/${Uri.encodeComponent(_composeSession.documentId!.trim())}'
+          : '${EnvironmentConfig.apiBaseUrl}/api/compose/documents';
+
+      final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+        isUpdate ? 'PUT' : 'POST',
+        endpoint,
+        baseHeaders: {
+          'X-User-ID': widget.aacUserId,
+          'Content-Type': 'application/json',
+        },
+        body: json.encode(payload),
+      );
+
+      if (response.statusCode != 200) {
+        setState(() {
+          statusMessage = 'Save failed (${response.statusCode}).';
+        });
+        return;
+      }
+
+      setState(() {
+        _composeSession = const ComposeSessionData.inactive();
+        statusMessage = 'Creation saved.';
+      });
+      await ComposeSessionService.clear(widget.aacUserId);
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        statusMessage = 'Save failed: $e';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          isLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _discardComposeAndExit() async {
+    setState(() {
+      _composeSession = const ComposeSessionData.inactive();
+      statusMessage = 'Creation discarded.';
+    });
+    await ComposeSessionService.clear(widget.aacUserId);
+  }
+
+  Future<void> _aiEditCompose() async {
+    final body = _composeSession.text.trim();
+    if (body.isEmpty) {
+      setState(() {
+        statusMessage = 'Creation is empty. Add words before AI edit.';
+      });
+      return;
+    }
+
+    setState(() {
+      isLoading = true;
+      statusMessage = 'AI editing creation...';
+    });
+
+    try {
+      final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+        'POST',
+        '${EnvironmentConfig.apiBaseUrl}/api/compose/ai-edit',
+        baseHeaders: {
+          'X-User-ID': widget.aacUserId,
+          'Content-Type': 'application/json',
+        },
+        body: json.encode({'body': body}),
+      );
+
+      if (response.statusCode != 200) {
+        setState(() {
+          statusMessage = 'AI edit failed (${response.statusCode}).';
+        });
+        return;
+      }
+
+      final decoded = json.decode(response.body);
+      final edited = (decoded is Map<String, dynamic>
+              ? decoded['edited_body']
+              : '')
+          .toString()
+          .trim();
+
+      if (edited.isEmpty) {
+        setState(() {
+          statusMessage = 'AI edit returned empty content.';
+        });
+        return;
+      }
+
+      setState(() {
+        _composeSession = _composeSession.copyWith(text: edited);
+        statusMessage = 'AI edit complete.';
+      });
+      await _persistComposeSession();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        statusMessage = 'AI edit failed: $e';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          isLoading = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _copyComposeToClipboard() async {
+    final text = _composeSession.text.trim();
+    if (text.isEmpty) {
+      setState(() {
+        statusMessage = 'Creation is empty. Nothing to copy.';
+      });
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: text));
+    if (!mounted) return;
+    setState(() {
+      statusMessage = 'Creation copied to clipboard.';
+    });
+  }
+
+  Future<void> _saveComposeToFile() async {
+    final text = _composeSession.text.trim();
+    if (text.isEmpty) {
+      setState(() {
+        statusMessage = 'Creation is empty. Nothing to export.';
+      });
+      return;
+    }
+
+    final safeTitle = (_composeSession.title.trim().isEmpty
+            ? 'creation_${DateTime.now().toIso8601String().substring(0, 10)}'
+            : _composeSession.title.trim())
+        .replaceAll(RegExp(r'[^a-zA-Z0-9_\-]+'), '_');
+
+    final path = await FilePicker.platform.saveFile(
+      dialogTitle: 'Save creation',
+      fileName: '$safeTitle.txt',
+      type: FileType.custom,
+      allowedExtensions: const ['txt'],
+    );
+
+    if (path == null || path.trim().isEmpty) {
+      return;
+    }
+
+    final file = File(path);
+    await file.writeAsString(text, flush: true);
+    if (!mounted) return;
+    setState(() {
+      statusMessage = 'Creation exported to file.';
+    });
+  }
+
+  Future<void> _showComposeExportMenu() async {
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Export Creation'),
+          content: const Text('Choose an export action.'),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+              child: const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                await _copyComposeToClipboard();
+              },
+              child: const Text('Copy'),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                await _saveComposeToFile();
+              },
+              child: const Text('Save .txt'),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                await _announceWithTimeout(
+                  _composeSession.text.trim().isEmpty
+                      ? 'Creation is empty.'
+                      : _composeSession.text,
+                  routing: 'system',
+                );
+                if (mounted) {
+                  setState(() {
+                    statusMessage = 'Creation read aloud.';
+                  });
+                }
+              },
+              child: const Text('Read Aloud'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _showComposeFinalizeMenu() async {
+    if (!_composeSession.active) return;
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return AlertDialog(
+          title: const Text('Finalize Creation'),
+          content: const Text(
+            'Choose to save, discard, read, export, AI edit, or return to creation.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+              child: const Text('Return'),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                await _saveComposeAndExit();
+              },
+              child: const Text('Save'),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                await _discardComposeAndExit();
+              },
+              child: const Text('Discard'),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                await _announceWithTimeout(
+                  _composeSession.text.trim().isEmpty
+                      ? 'Creation is empty.'
+                      : _composeSession.text,
+                  routing: 'system',
+                );
+              },
+              child: const Text('Read'),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                await _showComposeExportMenu();
+              },
+              child: const Text('Export'),
+            ),
+            TextButton(
+              onPressed: () async {
+                Navigator.of(context).pop();
+                await _aiEditCompose();
+              },
+              child: const Text('AI Edit'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _activateComposeFromEmail({
+    String seedText = '',
+    String documentType = 'email',
+  }) async {
+    await _startComposeSession(documentType: documentType, seedText: seedText);
+  }
+
   void _onAdminButtonPressed(String routeName) {
     debugPrint('Admin button pressed: $routeName');
 
@@ -9584,13 +10134,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
 
   void _onButtonSelected(int index) async {
     _stopAuditoryScanning();
-    final definedButtons = gridButtons
-        .where(
-          (btn) =>
-              (btn['hidden'] != true) &&
-              ((btn['text'] ?? '').toString().trim().isNotEmpty),
-        )
-        .toList();
+    final definedButtons = _effectiveGridButtons();
     if (index < 0 || index >= definedButtons.length) return;
     final btn = definedButtons[index];
     // Only handle the button action; let handleButtonAction manage all TTS/announcement logic
@@ -9781,7 +10325,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
             'X-User-ID': widget.aacUserId,
             'Content-Type': 'application/json',
           },
-          body: jsonEncode({'prompt': promptForLLM}),
+          body: jsonEncode(_buildLlmRequestBody(promptForLLM)),
           timeoutSeconds: 30,
         ),
         operationName: 'LLM Query',
@@ -10987,76 +11531,93 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Row(
-                          children: [
-                            const Text(
-                              'Speech History:',
-                              style: TextStyle(
-                                fontSize: 18,
-                                fontWeight: FontWeight.bold,
-                                color: Colors.black87,
-                              ),
-                            ),
-                            const SizedBox(width: 12),
-                            ElevatedButton(
-                              onPressed: () {
-                                setState(() {
-                                  speechHistory = '';
-                                });
-                              },
-                              child: const Text('Clear'),
-                              style: ElevatedButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                  vertical: 8,
+                        Builder(
+                          builder: (context) {
+                            final composeActive = _composeSession.active;
+                            return Row(
+                              children: [
+                                Text(
+                                  composeActive ? 'Create:' : 'Speech History:',
+                                  style: const TextStyle(
+                                    fontSize: 18,
+                                    fontWeight: FontWeight.bold,
+                                    color: Colors.black87,
+                                  ),
                                 ),
-                                textStyle: const TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.bold,
+                                const SizedBox(width: 12),
+                                ElevatedButton(
+                                  onPressed: () async {
+                                    if (composeActive) {
+                                      setState(() {
+                                        _composeSession = _composeSession
+                                            .copyWith(text: '');
+                                      });
+                                      await _persistComposeSession();
+                                    } else {
+                                      setState(() {
+                                        speechHistory = '';
+                                      });
+                                    }
+                                  },
+                                  child: const Text('Clear'),
+                                  style: ElevatedButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 8,
+                                    ),
+                                    textStyle: const TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                    backgroundColor: Colors.white,
+                                    foregroundColor: Colors.red.shade700,
+                                    elevation: 2,
+                                    shadowColor: Colors.red.withOpacity(0.3),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(20),
+                                      side: BorderSide(
+                                        color: Colors.red.shade100,
+                                      ),
+                                    ),
+                                  ),
                                 ),
-                                backgroundColor: Colors.white,
-                                foregroundColor: Colors.red.shade700,
-                                elevation: 2,
-                                shadowColor: Colors.red.withOpacity(0.3),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(20),
-                                  side: BorderSide(color: Colors.red.shade100),
+                                const Spacer(),
+                                ElevatedButton(
+                                  onPressed: () {
+                                    setState(() {
+                                      _isSpeechHistoryMaximized =
+                                          !_isSpeechHistoryMaximized;
+                                    });
+                                  },
+                                  child: Text(
+                                    _isSpeechHistoryMaximized
+                                        ? 'Minimize'
+                                        : 'Maximize',
+                                  ),
+                                  style: ElevatedButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 8,
+                                    ),
+                                    textStyle: const TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                    backgroundColor: Colors.white,
+                                    foregroundColor: Colors.blue.shade700,
+                                    elevation: 2,
+                                    shadowColor: Colors.blue.withOpacity(0.3),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(20),
+                                      side: BorderSide(
+                                        color: Colors.blue.shade100,
+                                      ),
+                                    ),
+                                  ),
                                 ),
-                              ),
-                            ),
-                            const Spacer(),
-                            ElevatedButton(
-                              onPressed: () {
-                                setState(() {
-                                  _isSpeechHistoryMaximized =
-                                      !_isSpeechHistoryMaximized;
-                                });
-                              },
-                              child: Text(
-                                _isSpeechHistoryMaximized
-                                    ? 'Minimize'
-                                    : 'Maximize',
-                              ),
-                              style: ElevatedButton.styleFrom(
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 16,
-                                  vertical: 8,
-                                ),
-                                textStyle: const TextStyle(
-                                  fontSize: 14,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                                backgroundColor: Colors.white,
-                                foregroundColor: Colors.blue.shade700,
-                                elevation: 2,
-                                shadowColor: Colors.blue.withOpacity(0.3),
-                                shape: RoundedRectangleBorder(
-                                  borderRadius: BorderRadius.circular(20),
-                                  side: BorderSide(color: Colors.blue.shade100),
-                                ),
-                              ),
-                            ),
-                          ],
+                              ],
+                            );
+                          },
                         ),
                         const SizedBox(height: 8),
                         Container(
@@ -11075,7 +11636,9 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
                           ),
                           child: TextField(
                             controller: TextEditingController(
-                              text: speechHistory,
+                              text: _composeSession.active
+                                  ? _composeSession.text
+                                  : speechHistory,
                             ),
                             readOnly: true,
                             maxLines: null,
@@ -11341,13 +11904,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           '[DEBUG] _buildDynamicUserGrid: availableWidth=$availableWidth, gridCols=$gridCols, buttonSize=$effectiveButtonSize, fontSize=$fontSize',
         );
 
-        final definedButtons = gridButtons
-            .where(
-              (btn) =>
-                  (btn['hidden'] != true) &&
-                  ((btn['text'] ?? '').toString().trim().isNotEmpty),
-            )
-            .toList();
+        final definedButtons = _effectiveGridButtons();
         final List<Map<String, dynamic>> visibleButtons =
             List<Map<String, dynamic>>.from(definedButtons);
         // No padding: only show defined buttons

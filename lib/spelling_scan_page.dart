@@ -20,6 +20,7 @@ class SpellingScanPage extends StatefulWidget {
   })
   announceFunction;
   final Future<void> Function(String text)? scanPromptFunction;
+  final void Function(String text)? onComposeAppend;
 
   const SpellingScanPage({
     super.key,
@@ -27,6 +28,7 @@ class SpellingScanPage extends StatefulWidget {
     required this.aacUserId,
     required this.announceFunction,
     this.scanPromptFunction,
+    this.onComposeAppend,
   });
 
   @override
@@ -546,6 +548,7 @@ class _SpellingScanPageState extends State<SpellingScanPage> {
 
   Future<void> _handlePredictionTap(String word) async {
     _stopScanning();
+    widget.onComposeAppend?.call(word);
     _appendWordToBuildSpace(word);
     setState(() {
       _currentSpellingWord = '';

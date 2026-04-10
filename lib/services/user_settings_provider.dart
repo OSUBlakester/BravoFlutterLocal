@@ -63,6 +63,10 @@ class UserSettings {
   // Application volume setting (0-10, where 10 is maximum volume)
   int applicationVolume;
 
+  // Group wake word (universal wake phrase for multi-device / therapist use)
+  // Default: 'hey friends'. Will be persisted via backend when backend support is added.
+  String groupWakeWord;
+
   // Email compose defaults
   String emailDefaultRecipient;
   String emailSubjectTemplate;
@@ -117,6 +121,7 @@ class UserSettings {
     required this.scanMode, // Added scan mode field
     required this.useTapInterface, // Added interface mode field
     required this.applicationVolume, // Added application volume field
+    required this.groupWakeWord,
     required this.emailDefaultRecipient,
     required this.emailSubjectTemplate,
     required this.personalVolume, // Added personal volume field
@@ -167,6 +172,7 @@ class UserSettings {
       scanMode: json['scanMode'] == 'step' ? 'step' : 'auto', // Default to auto
       useTapInterface: json['useTapInterface'] ?? false, // Default to scanning interface
       applicationVolume: json['applicationVolume'] ?? 10, // Default to maximum volume (10/10)
+      groupWakeWord: (json['groupWakeWord'] as String? ?? 'hey friends').trim().toLowerCase().isEmpty ? 'hey friends' : (json['groupWakeWord'] as String? ?? 'hey friends').trim().toLowerCase(),
       emailDefaultRecipient: json['emailDefaultRecipient'] ?? '',
       emailSubjectTemplate: json['emailSubjectTemplate'] ?? 'Message from Bravo AAC',
       personalVolume: json['personalVolume'] ?? 10, // Default to maximum volume
@@ -206,6 +212,7 @@ class UserSettings {
         'scanMode': scanMode, // Added scan mode field
         'useTapInterface': useTapInterface, // Added interface mode field
         'applicationVolume': applicationVolume, // Added application volume field
+        'groupWakeWord': groupWakeWord,
         'emailDefaultRecipient': emailDefaultRecipient,
         'emailSubjectTemplate': emailSubjectTemplate,
         'personalVolume': personalVolume, // Added personal volume field

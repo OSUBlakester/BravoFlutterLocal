@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:just_audio/just_audio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:async';
 import 'dart:convert';
@@ -137,8 +138,13 @@ class _MoodSelectionPageState extends State<MoodSelectionPage> {
         _waitingForInitialSwitch = true;
         _switchStartRequested = false;
       });
-      // Play prompt to user
-      _speakSystemVoice('Press switch to begin scanning');
+      // First spoken guidance happens once per session; later waits use a short notification sound.
+      if (!hasPlayedInitialWaitForSwitchVoicePrompt) {
+        _speakSystemVoice('Press switch to begin scanning');
+        hasPlayedInitialWaitForSwitchVoicePrompt = true;
+      } else {
+        unawaited(_playWaitForSwitchNotification());
+      }
       
       return; // IMPORTANT: Don't start scanning yet, wait for switch press
     }
@@ -274,6 +280,21 @@ class _MoodSelectionPageState extends State<MoodSelectionPage> {
           _isAnnouncingScanningPrompt = false;
         });
       }
+    }
+  }
+
+  Future<void> _playWaitForSwitchNotification() async {
+    final player = AudioPlayer();
+    try {
+      await player.setAsset('assets/notification_v2.mp3');
+      await player.play();
+      await player.playerStateStream.firstWhere(
+        (state) => state.processingState == ProcessingState.completed,
+      ).timeout(const Duration(seconds: 5));
+    } catch (e) {
+      debugPrint('MoodSelection: Error playing wait notification: $e');
+    } finally {
+      await player.dispose();
     }
   }
 

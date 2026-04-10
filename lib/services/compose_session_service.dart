@@ -90,6 +90,9 @@ class ComposeSessionService {
   static String _keyForUser(String aacUserId) =>
       'compose_session_${aacUserId.trim()}';
 
+  static String _docsKeyForUser(String aacUserId) =>
+      'compose_docs_${aacUserId.trim()}';
+
   static Future<ComposeSessionData> load(String aacUserId) async {
     final prefs = await SharedPreferences.getInstance();
     final raw = prefs.getString(_keyForUser(aacUserId));
@@ -123,5 +126,106 @@ class ComposeSessionService {
   static Future<void> clear(String aacUserId) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_keyForUser(aacUserId));
+  }
+
+  static Future<List<Map<String, dynamic>>> loadLocalDocuments(
+    String aacUserId,
+  ) async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString(_docsKeyForUser(aacUserId));
+    if (raw == null || raw.trim().isEmpty) {
+      return <Map<String, dynamic>>[];
+    }
+    try {
+      final decoded = json.decode(raw);
+      if (decoded is! List) {
+        return <Map<String, dynamic>>[];
+      }
+      final docs = decoded
+          .whereType<Map>()
+          .map(
+            (doc) => doc.map(
+              (key, value) => MapEntry(key.toString(), value),
+            ),
+          )
+          .toList();
+
+      docs.sort((a, b) {
+        final aUpdated = (a['updated_at'] ?? '').toString();
+        final bUpdated = (b['updated_at'] ?? '').toString();
+        return bUpdated.compareTo(aUpdated);
+      });
+      return docs;
+    } catch (_) {
+      return <Map<String, dynamic>>[];
+    }
+  }
+
+  static Future<String> upsertLocalDocument(
+    String aacUserId, {
+    String? documentId,
+    required String documentType,
+    required String title,
+    required String body,
+  }) async {
+    final docs = await loadLocalDocuments(aacUserId);
+    final now = DateTime.now().toUtc().toIso8601String();
+    final effectiveId =
+        (documentId ?? '').trim().isNotEmpty
+        ? documentId!.trim()
+        : 'local_${DateTime.now().millisecondsSinceEpoch}';
+
+    final existingIndex = docs.indexWhere(
+      (doc) => (doc['id'] ?? '').toString().trim() == effectiveId,
+    );
+
+    final updatedDoc = <String, dynamic>{
+      'id': effectiveId,
+      'document_type': documentType,
+      'title': title,
+      'body': body,
+      'updated_at': now,
+      'is_local_fallback': true,
+    };
+
+    if (existingIndex >= 0) {
+      final existingCreatedAt =
+          (docs[existingIndex]['created_at'] ?? '').toString().trim();
+      updatedDoc['created_at'] = existingCreatedAt.isEmpty
+          ? now
+          : existingCreatedAt;
+      docs[existingIndex] = updatedDoc;
+    } else {
+      updatedDoc['created_at'] = now;
+      docs.add(updatedDoc);
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_docsKeyForUser(aacUserId), json.encode(docs));
+    return effectiveId;
+  }
+
+  static Future<bool> deleteLocalDocument(
+    String aacUserId,
+    String documentId,
+  ) async {
+    final effectiveId = documentId.trim();
+    if (effectiveId.isEmpty) {
+      return false;
+    }
+
+    final docs = await loadLocalDocuments(aacUserId);
+    final originalLength = docs.length;
+    docs.removeWhere(
+      (doc) => (doc['id'] ?? '').toString().trim() == effectiveId,
+    );
+
+    if (docs.length == originalLength) {
+      return false;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_docsKeyForUser(aacUserId), json.encode(docs));
+    return true;
   }
 }

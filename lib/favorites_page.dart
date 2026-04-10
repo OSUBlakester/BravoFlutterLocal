@@ -64,6 +64,9 @@ class FavoritesPageState extends State<FavoritesPage> with RouteAware, TickerPro
   int _scanningIndex = -1;
   int _scanCycleCount = 0;
   int _scanLoopLimit = 0;
+  bool _waitingForInitialSwitch = false;
+  bool _switchStartRequested = false;
+  DateTime? _lastWaitForSwitchNotificationAt;
   
   // --- Audio State ---
   FlutterTts? _flutterTts;
@@ -453,6 +456,7 @@ class FavoritesPageState extends State<FavoritesPage> with RouteAware, TickerPro
   void _handleBackButton() {
     if (_showingArticles) {
       // Go back to favorites list
+      _stopScanning();
       setState(() {
         _showingArticles = false;
         _articleOptions = [];
@@ -468,33 +472,80 @@ class FavoritesPageState extends State<FavoritesPage> with RouteAware, TickerPro
   // --- Scanning Methods ---
   void _startScanningAfterDelay() {
     if (_scanningOff) return;
-    
-    Timer(Duration(milliseconds: _scanDelay), () {
-      if (mounted && !_isLoading && !_isAnnouncing) {
-        _startScanning();
-      }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      Future.delayed(const Duration(milliseconds: 100), () {
+        if (mounted && !_isLoading && !_isAnnouncing) {
+          _maybeStartScanning();
+        }
+      });
     });
+  }
+
+  void _maybeStartScanning() {
+    if (_scanningOff || _isScanning || _isAnnouncing) return;
+
+    if (!_keyboardFocusNode.hasFocus) {
+      _keyboardFocusNode.requestFocus();
+      debugPrint('FavoritesPage: Re-requesting focus during _maybeStartScanning');
+    }
+
+    final settingsProvider = Provider.of<UserSettingsProvider>(
+      context,
+      listen: false,
+    );
+    final waitForSwitch =
+        settingsProvider.settings?.waitForSwitchToScan ?? false;
+
+    if (waitForSwitch && !_waitingForInitialSwitch) {
+      setState(() {
+        _waitingForInitialSwitch = true;
+        _switchStartRequested = false;
+        _scanningIndex = -1;
+      });
+
+      if (!hasPlayedInitialWaitForSwitchVoicePrompt) {
+        _speakScanningPrompt('Press switch to begin scanning');
+        hasPlayedInitialWaitForSwitchVoicePrompt = true;
+      } else {
+        unawaited(_playWaitForSwitchNotification());
+      }
+      return;
+    }
+
+    _startScanning();
   }
 
   void _startScanning() {
     if (_scanningOff || _isScanning || _isAnnouncing) return;
-    
-    final buttons = _showingArticles ? _articleOptions : _favoriteButtons;
-    if (buttons.isEmpty) return;
-    
+
     // Ensure keyboard focus is maintained
     if (!_keyboardFocusNode.hasFocus) {
       _keyboardFocusNode.requestFocus();
       debugPrint('FavoritesPage: Re-requesting focus during _startScanning');
     }
-    
+
     final settingsProvider = Provider.of<UserSettingsProvider>(context, listen: false);
     final scanMode = settingsProvider.settings?.scanMode ?? 'auto';
+
+    if ((settingsProvider.settings?.waitForSwitchToScan ?? false) &&
+        !_switchStartRequested) {
+      debugPrint('FavoritesPage: Waiting for switch before starting scanning');
+      return;
+    }
+
+    if (_waitingForInitialSwitch) {
+      debugPrint('FavoritesPage: _startScanning blocked while waiting for initial switch');
+      return;
+    }
 
     setState(() {
       _isScanning = true;
       _scanningIndex = -1; // Start with "Go Back" button
       _scanCycleCount = 0;
+      _isScanningPaused = false;
+      _waitingForUserInput = false;
+      _switchStartRequested = false;
     });
 
     // In auto mode, announce and start timer immediately.
@@ -579,6 +630,8 @@ class FavoritesPageState extends State<FavoritesPage> with RouteAware, TickerPro
       _isScanningPaused = false;
       _waitingForUserInput = false;
       _scanningIndex = -1;
+      _waitingForInitialSwitch = false;
+      _switchStartRequested = false;
     });
   }
 
@@ -610,6 +663,16 @@ class FavoritesPageState extends State<FavoritesPage> with RouteAware, TickerPro
 
     if (_isAnnouncing) {
       debugPrint('FavoritesPage: Spacebar ignored while announcement is in progress');
+      return;
+    }
+
+    if (_waitingForInitialSwitch) {
+      debugPrint('FavoritesPage: Initial switch detected, starting scanning');
+      setState(() {
+        _waitingForInitialSwitch = false;
+        _switchStartRequested = true;
+      });
+      _startScanning();
       return;
     }
 
@@ -701,6 +764,32 @@ class FavoritesPageState extends State<FavoritesPage> with RouteAware, TickerPro
       return false;
     } finally {
       await stateSub.cancel();
+    }
+  }
+
+  Future<void> _playWaitForSwitchNotification() async {
+    final now = DateTime.now();
+    if (_lastWaitForSwitchNotificationAt != null &&
+        now.difference(_lastWaitForSwitchNotificationAt!).inMilliseconds <
+            1200) {
+      debugPrint(
+        'FavoritesPage waitForSwitchNotification: Skipping duplicate notification playback',
+      );
+      return;
+    }
+    _lastWaitForSwitchNotificationAt = now;
+
+    final player = AudioPlayer();
+    try {
+      await player.setAsset('assets/notification_v2.mp3');
+      await player.play();
+      await player.playerStateStream.firstWhere(
+        (state) => state.processingState == ProcessingState.completed,
+      );
+    } catch (e) {
+      debugPrint('FavoritesPage waitForSwitchNotification: Playback failed: $e');
+    } finally {
+      await player.dispose();
     }
   }
 

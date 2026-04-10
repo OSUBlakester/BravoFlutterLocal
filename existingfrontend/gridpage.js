@@ -18,7 +18,74 @@ let followUpConversation = {
 
 const COMPOSE_SESSION_STORAGE_KEY = 'bravoComposeSession';
 const COMPOSE_PENDING_APPEND_KEY = 'bravoComposePendingAppend';
+const EMAIL_SESSION_STORAGE_KEY = 'bravoEmailSession';
 let composeSession = null;
+let emailSession = null;
+let composeMenuActionInProgress = false;
+
+function loadEmailSession() {
+    try {
+        const parsed = JSON.parse(sessionStorage.getItem(EMAIL_SESSION_STORAGE_KEY) || '{}');
+        if (!parsed || typeof parsed !== 'object') {
+            return {
+                active: false,
+                mode: 'menu',
+                recipientEmail: '',
+                recipientName: '',
+                sourceFrom: null,
+                threadId: '',
+                inReplyTo: '',
+                references: ''
+            };
+        }
+
+        return {
+            active: parsed.active === true,
+            mode: parsed.mode || 'menu',
+            recipientEmail: parsed.recipientEmail || '',
+            recipientName: parsed.recipientName || '',
+            sourceFrom: parsed.sourceFrom || null,
+            threadId: parsed.threadId || '',
+            inReplyTo: parsed.inReplyTo || '',
+            references: parsed.references || ''
+        };
+    } catch (error) {
+        console.warn('Failed to parse email session:', error);
+        return {
+            active: false,
+            mode: 'menu',
+            recipientEmail: '',
+            recipientName: '',
+            sourceFrom: null,
+            threadId: '',
+            inReplyTo: '',
+            references: ''
+        };
+    }
+}
+
+function saveEmailSession() {
+    if (!emailSession) return;
+    sessionStorage.setItem(EMAIL_SESSION_STORAGE_KEY, JSON.stringify(emailSession));
+}
+
+function clearEmailSession() {
+    emailSession = {
+        active: false,
+        mode: 'menu',
+        recipientEmail: '',
+        recipientName: '',
+        sourceFrom: null,
+        threadId: '',
+        inReplyTo: '',
+        references: ''
+    };
+    sessionStorage.removeItem(EMAIL_SESSION_STORAGE_KEY);
+}
+
+function isEmailSessionActive() {
+    return Boolean(emailSession && emailSession.active === true);
+}
 
 function loadComposeSession() {
     try {
@@ -134,7 +201,7 @@ function updateSpeechHistoryPanel() {
     if (!label || !textarea) return;
 
     if (isComposeSessionActive()) {
-        label.textContent = 'Create:';
+        label.textContent = isEmailSessionActive() ? 'Email:' : 'Create:';
         textarea.value = String(composeSession.text || '');
     } else {
         label.textContent = 'Speech History:';
@@ -152,6 +219,7 @@ function syncComposeSessionFromStorage() {
 }
 
 composeSession = loadComposeSession();
+emailSession = loadEmailSession();
 
 // Restore querytype and currentQuestion from localStorage if available
 if (localStorage.getItem('llm_currentQueryType')) {
@@ -1965,7 +2033,18 @@ function createComposeGridButton(label, clickHandler, index = 0) {
     button.dataset.col = String(col);
     button.style.gridRowStart = row + 1;
     button.style.gridColumnStart = col + 1;
-    button.addEventListener('click', debounce(clickHandler, clickDebounceDelay));
+    button.addEventListener('click', async () => {
+        if (composeMenuActionInProgress) {
+            return;
+        }
+        composeMenuActionInProgress = true;
+        stopAuditoryScanning();
+        try {
+            await clickHandler();
+        } finally {
+            composeMenuActionInProgress = false;
+        }
+    });
     return button;
 }
 
@@ -1987,7 +2066,7 @@ async function renderComposeEntryMenu(container, fromUrl) {
                     sourceFrom: fromUrl || getComposeReturnTarget()
                 };
                 saveComposeSession();
-                window.location.href = 'gridpage.html?page=home&compose=1';
+                window.location.href = '/static/compose_create.html';
             }
         },
         {
@@ -2049,7 +2128,7 @@ async function renderComposeExistingDocumentsMenu(container, fromUrl) {
                     sourceFrom: fromUrl || getComposeReturnTarget()
                 };
                 saveComposeSession();
-                window.location.href = 'gridpage.html?page=home&compose=1';
+                window.location.href = '/static/compose_create.html';
             }, index++));
         });
     }
@@ -2267,7 +2346,7 @@ async function renderComposeFinalizeMenu(container) {
         {
             label: 'Return to Creation',
             handler: async () => {
-                window.location.href = 'gridpage.html?page=home&compose=1';
+                window.location.href = '/static/compose_create.html';
             }
         }
     ];
@@ -2279,17 +2358,510 @@ async function renderComposeFinalizeMenu(container) {
     setTimeout(() => startOrWaitForScanning({ allowPrompt: true, source: 'compose-finalize-menu' }), 50);
 }
 
+function getEmailReturnTarget() {
+    if (emailSession?.sourceFrom) {
+        return emailSession.sourceFrom;
+    }
+    return 'gridpage.html?page=home';
+}
+
+function updateEmailQuestionDisplay(message = '') {
+    const questionDisplay = document.getElementById('question-display');
+    const draftText = String(composeSession?.text || '').trim();
+    const header = message || 'Email';
+    if (questionDisplay) {
+        questionDisplay.value = draftText ? `${header}\n\n${draftText}` : header;
+    }
+    updateStatusBar(`📧 ${header}`);
+    updateSpeechHistoryPanel();
+}
+
+async function startGmailConnectFlow() {
+    const response = await authenticatedFetch('/api/email/connect-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: 'gmail' })
+    });
+    if (!response.ok) {
+        const text = await response.text().catch(() => 'Unable to create Gmail connect link');
+        throw new Error(text);
+    }
+    const data = await response.json();
+    if (!data?.connect_url) {
+        throw new Error('Missing Gmail connect URL');
+    }
+    window.location.href = data.connect_url;
+}
+
+async function renderEmailEntryMenu(container, fromUrl) {
+    stopAuditoryScanning();
+    container.innerHTML = '';
+    updateEmailQuestionDisplay('Email: Choose an option');
+
+    const options = [
+        {
+            label: 'Home',
+            handler: async () => {
+                clearEmailSession();
+                window.location.href = fromUrl || 'gridpage.html?page=home';
+            }
+        },
+        {
+            label: 'Create New Email',
+            handler: async () => {
+                await renderEmailContactsMenu(container, fromUrl);
+            }
+        },
+        {
+            label: 'Read Existing Email',
+            handler: async () => {
+                await renderEmailInboxMenu(container, fromUrl);
+            }
+        }
+    ];
+
+    options.forEach((option, index) => {
+        container.appendChild(createComposeGridButton(option.label, option.handler, index));
+    });
+
+    setTimeout(() => startOrWaitForScanning({ allowPrompt: true, source: 'email-entry-menu' }), 50);
+}
+
+async function renderEmailContactsMenu(container, fromUrl, selectedContacts = [], pageToken = null) {
+    stopAuditoryScanning();
+    container.innerHTML = '';
+    const selectionCount = selectedContacts.length;
+    const displayTitle = selectionCount > 0
+        ? `Email: Add another contact (${selectionCount} selected)`
+        : 'Email: Choose a contact';
+    updateEmailQuestionDisplay(displayTitle);
+
+    const pageSize = Math.max(4, LLMOptions);
+    let contacts = [];
+    let nextPageToken = null;
+    let loadError = null;
+    let usingInboxFallback = false;
+    try {
+        const contactsUrl = new URL('/api/email/contacts', window.location.origin);
+        contactsUrl.searchParams.set('max_results', String(pageSize));
+        if (pageToken) contactsUrl.searchParams.set('page_token', pageToken);
+        const response = await authenticatedFetch(`${contactsUrl.pathname}${contactsUrl.search}`, { method: 'GET' });
+        if (response.ok) {
+            const data = await response.json();
+            contacts = Array.isArray(data.contacts) ? data.contacts : [];
+            nextPageToken = String(data.next_page_token || '').trim() || null;
+        } else {
+            loadError = `Unable to load contacts (${response.status})`;
+        }
+    } catch (error) {
+        loadError = error.message || 'Unable to load contacts';
+    }
+
+    if (loadError || !contacts.length) {
+        try {
+            const inboxUrl = new URL('/api/email/inbox', window.location.origin);
+            inboxUrl.searchParams.set('max_results', String(pageSize));
+            if (pageToken) inboxUrl.searchParams.set('page_token', pageToken);
+            const inboxResponse = await authenticatedFetch(`${inboxUrl.pathname}${inboxUrl.search}`, { method: 'GET' });
+            if (inboxResponse.ok) {
+                const inboxData = await inboxResponse.json();
+                const messages = Array.isArray(inboxData.messages) ? inboxData.messages : [];
+                const dedupe = new Set();
+                const fallbackContacts = [];
+                messages.forEach((message) => {
+                    const senderEmail = String(message?.sender_email || extractEmailAddressFromHeader(message?.from || '') || '').trim();
+                    if (!senderEmail) return;
+                    const dedupeKey = senderEmail.toLowerCase();
+                    if (dedupe.has(dedupeKey)) return;
+                    dedupe.add(dedupeKey);
+                    fallbackContacts.push({
+                        name: String(message?.sender_name || '').trim(),
+                        email: senderEmail,
+                    });
+                });
+                if (fallbackContacts.length) {
+                    contacts = fallbackContacts;
+                    nextPageToken = String(inboxData.next_page_token || '').trim() || null;
+                    usingInboxFallback = true;
+                    loadError = null;
+                }
+            }
+        } catch (fallbackError) {
+            console.warn('Email contacts fallback from inbox failed:', fallbackError);
+        }
+    }
+
+    if (usingInboxFallback) {
+        updateEmailQuestionDisplay(selectionCount > 0
+            ? `Email: Add another contact (${selectionCount} selected)`
+            : 'Email: Choose a contact (recent senders)');
+    }
+
+    let index = 0;
+    if (loadError) {
+        container.appendChild(createComposeGridButton('Try Again', async () => {
+            await renderEmailContactsMenu(container, fromUrl, selectedContacts, null);
+        }, index++));
+        container.appendChild(createComposeGridButton('Connect Gmail', async () => {
+            try {
+                await startGmailConnectFlow();
+            } catch (error) {
+                await announce('Unable to connect Gmail right now.', 'system', false);
+                await renderEmailEntryMenu(container, fromUrl);
+            }
+        }, index++));
+    } else if (!contacts.length) {
+        container.appendChild(createComposeGridButton('No Contacts Found', async () => {
+            await announce('No contacts found.', 'system', false);
+            await renderEmailEntryMenu(container, fromUrl);
+        }, index++));
+    } else {
+        // Filter out already-selected contacts to avoid duplicates
+        const selectedEmails = new Set(selectedContacts.map(c => c.email.toLowerCase()));
+        const availableContacts = contacts.filter(c => {
+            const email = String(c?.email || '').trim().toLowerCase();
+            return email && !selectedEmails.has(email);
+        });
+
+        availableContacts.forEach((contact) => {
+            const recipientEmail = String(contact?.email || '').trim();
+            const recipientName = String(contact?.name || '').trim();
+            const label = recipientName || recipientEmail;
+            if (!recipientEmail) return;
+
+            container.appendChild(createComposeGridButton(label, async () => {
+                const updatedContacts = [...selectedContacts, { email: recipientEmail, name: recipientName }];
+                await renderEmailContactsConfirmMenu(container, fromUrl, updatedContacts);
+            }, index++));
+        });
+
+        if (nextPageToken) {
+            container.appendChild(createComposeGridButton('Show More', async () => {
+                await renderEmailContactsMenu(container, fromUrl, selectedContacts, nextPageToken);
+            }, index++));
+        }
+    }
+
+    container.appendChild(createComposeGridButton('Go Back', async () => {
+        if (selectedContacts.length > 0) {
+            await renderEmailContactsConfirmMenu(container, fromUrl, selectedContacts);
+        } else {
+            await renderEmailEntryMenu(container, fromUrl);
+        }
+    }, index));
+
+    setTimeout(() => startOrWaitForScanning({ allowPrompt: true, source: 'email-contacts-menu' }), 50);
+}
+
+async function renderEmailContactsConfirmMenu(container, fromUrl, selectedContacts) {
+    stopAuditoryScanning();
+    container.innerHTML = '';
+    const names = selectedContacts.map(c => c.name || c.email).join(', ');
+    updateEmailQuestionDisplay(`To: ${names}`);
+
+    container.appendChild(createComposeGridButton('Add More Contacts', async () => {
+        await renderEmailContactsMenu(container, fromUrl, selectedContacts, null);
+    }, 0));
+
+    container.appendChild(createComposeGridButton('Create Email', async () => {
+        const primary = selectedContacts[0];
+        emailSession = {
+            active: true,
+            mode: 'compose',
+            recipientEmail: selectedContacts.map(c => c.email).join(','),
+            recipientName: selectedContacts.map(c => c.name || c.email).join(', '),
+            recipients: selectedContacts,
+            sourceFrom: fromUrl || getEmailReturnTarget(),
+            threadId: '',
+            inReplyTo: '',
+            references: ''
+        };
+        saveEmailSession();
+
+        composeSession = {
+            active: true,
+            documentId: null,
+            title: '',
+            text: '',
+            startedAt: new Date().toISOString(),
+            sourceFrom: fromUrl || getEmailReturnTarget()
+        };
+        saveComposeSession();
+
+        window.location.href = 'gridpage.html?page=home&compose=1&email_compose=1';
+    }, 1));
+
+    container.appendChild(createComposeGridButton('Go Back', async () => {
+        await renderEmailContactsMenu(container, fromUrl, selectedContacts, null);
+    }, 2));
+
+    setTimeout(() => startOrWaitForScanning({ allowPrompt: true, source: 'email-contacts-confirm-menu' }), 50);
+}
+
+async function renderEmailInboxMenu(container, fromUrl, pageToken = null) {
+    stopAuditoryScanning();
+    container.innerHTML = '';
+    updateEmailQuestionDisplay('Email: Read existing messages');
+
+    let messages = [];
+    let nextPageToken = null;
+    let loadError = null;
+    try {
+        const inboxUrl = new URL('/api/email/inbox', window.location.origin);
+        inboxUrl.searchParams.set('max_results', '20');
+        if (pageToken) {
+            inboxUrl.searchParams.set('page_token', pageToken);
+        }
+
+        const response = await authenticatedFetch(`${inboxUrl.pathname}${inboxUrl.search}`, { method: 'GET' });
+        if (response.ok) {
+            const data = await response.json();
+            messages = Array.isArray(data.messages) ? data.messages : [];
+            nextPageToken = String(data.next_page_token || '').trim() || null;
+        } else {
+            loadError = `Unable to load inbox (${response.status})`;
+        }
+    } catch (error) {
+        loadError = error.message || 'Unable to load inbox';
+    }
+
+    let index = 0;
+    if (loadError || !messages.length) {
+        container.appendChild(createComposeGridButton(loadError ? 'Inbox Unavailable' : 'No Inbox Messages', async () => {
+            await announce(loadError || 'No inbox messages available.', 'system', false);
+            await renderEmailEntryMenu(container, fromUrl);
+        }, index++));
+    } else {
+        messages.slice(0, Math.max(8, gridColumns * 3)).forEach((message) => {
+            const messageId = String(message?.id || '').trim();
+            if (!messageId) return;
+            const subject = String(message.subject || '(No subject)').trim();
+            const label = subject;
+
+            container.appendChild(createComposeGridButton(label.slice(0, 64), async () => {
+                stopAuditoryScanning();
+                try {
+                    const detailResponse = await authenticatedFetch(`/api/email/messages/${encodeURIComponent(messageId)}`, { method: 'GET' });
+                    if (!detailResponse.ok) {
+                        await announce('Unable to load that email.', 'system', false);
+                        await renderEmailInboxMenu(container, fromUrl, pageToken);
+                        return;
+                    }
+                    const detail = await detailResponse.json();
+                    const msg = detail?.message || {};
+                    const body = String(msg.body_text || msg.snippet || '').trim();
+                    const readText = body || 'No message body available.';
+                    await announce(readText, 'system', false, false);
+                    await renderEmailReadActionsMenu(container, fromUrl, messageId, msg);
+                    return;
+                } catch (error) {
+                    await announce('Unable to read that email right now.', 'system', false);
+                }
+                await renderEmailInboxMenu(container, fromUrl, pageToken);
+            }, index++));
+        });
+    }
+
+    if (nextPageToken) {
+        container.appendChild(createComposeGridButton('Show More', async () => {
+            await renderEmailInboxMenu(container, fromUrl, nextPageToken);
+        }, index++));
+    }
+
+    container.appendChild(createComposeGridButton('Go Back', async () => {
+        await renderEmailEntryMenu(container, fromUrl);
+    }, index));
+
+    setTimeout(() => startOrWaitForScanning({ allowPrompt: true, source: 'email-inbox-menu' }), 50);
+}
+
+function extractEmailAddressFromHeader(headerValue) {
+    const raw = String(headerValue || '').trim();
+    if (!raw) return '';
+
+    const bracketMatch = raw.match(/<([^>]+)>/);
+    if (bracketMatch && bracketMatch[1]) {
+        return bracketMatch[1].trim();
+    }
+
+    const plainMatch = raw.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+    return plainMatch ? plainMatch[0].trim() : '';
+}
+
+async function startReplyToEmail(fromUrl, messageId, messageData) {
+    const recipientEmail = extractEmailAddressFromHeader(messageData.from || '');
+    if (!recipientEmail) {
+        await announce('Unable to determine sender email for reply.', 'system', false);
+        return;
+    }
+
+    emailSession = {
+        active: true,
+        mode: 'reply',
+        recipientEmail,
+        recipientName: String(messageData.from || '').trim(),
+        sourceFrom: fromUrl || getEmailReturnTarget(),
+        threadId: String(messageData.thread_id || '').trim(),
+        inReplyTo: String(messageData.message_id_header || '').trim(),
+        references: String(messageData.references || '').trim()
+    };
+    saveEmailSession();
+
+    composeSession = {
+        active: true,
+        documentId: null,
+        title: String(messageData.subject || '').trim(),
+        text: '',
+        startedAt: new Date().toISOString(),
+        sourceFrom: fromUrl || getEmailReturnTarget()
+    };
+    saveComposeSession();
+
+    window.location.href = 'gridpage.html?page=home&compose=1&email_compose=1';
+}
+
+async function renderEmailReadActionsMenu(container, fromUrl, messageId, messageData) {
+    stopAuditoryScanning();
+    container.innerHTML = '';
+    updateEmailQuestionDisplay('Email: Choose an action');
+
+    container.appendChild(createComposeGridButton('Reply to Email', async () => {
+        await startReplyToEmail(fromUrl, messageId, messageData);
+    }, 0));
+
+    container.appendChild(createComposeGridButton('Go Back', async () => {
+        await renderEmailInboxMenu(container, fromUrl);
+    }, 1));
+
+    setTimeout(() => startOrWaitForScanning({ allowPrompt: true, source: 'email-read-actions-menu' }), 50);
+}
+
+async function sendCurrentEmailFromSession() {
+    if (!isEmailSessionActive()) {
+        throw new Error('Email session is not active');
+    }
+
+    const bodyText = String(composeSession?.text || '').trim();
+    if (!bodyText) {
+        throw new Error('Email body is empty');
+    }
+
+    // Support both array (multi-recipient) and legacy single-string recipient
+    let toAddresses = [];
+    if (Array.isArray(emailSession.recipients) && emailSession.recipients.length > 0) {
+        toAddresses = emailSession.recipients.map(r => String(r.email || '').trim()).filter(Boolean);
+    } else {
+        const recipientEmail = String(emailSession.recipientEmail || '').trim();
+        if (recipientEmail) {
+            toAddresses = recipientEmail.split(',').map(e => e.trim()).filter(Boolean);
+        }
+    }
+    if (!toAddresses.length) {
+        throw new Error('No recipient selected');
+    }
+
+    let subject = 'Message';
+    try {
+        const titleResponse = await authenticatedFetch('/api/compose/generate-title', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ body: bodyText })
+        });
+        if (titleResponse.ok) {
+            const titleData = await titleResponse.json();
+            if (titleData?.success && titleData?.title) {
+                subject = String(titleData.title).trim() || subject;
+            }
+        }
+    } catch (error) {
+        console.warn('Email subject generation failed, using fallback subject:', error);
+    }
+
+    const sendResponse = await authenticatedFetch('/api/email/send', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            to: toAddresses,
+            cc: [],
+            bcc: [],
+            subject,
+            body: bodyText,
+            thread_id: String(emailSession.threadId || '').trim(),
+            in_reply_to: String(emailSession.inReplyTo || '').trim(),
+            references: String(emailSession.references || '').trim()
+        })
+    });
+
+    if (!sendResponse.ok) {
+        const errText = await sendResponse.text().catch(() => 'send failed');
+        throw new Error(errText);
+    }
+}
+
+async function renderEmailFinalizeMenu(container, fromUrl) {
+    stopAuditoryScanning();
+    container.innerHTML = '';
+    updateEmailQuestionDisplay('Email: Finalize draft');
+
+    const options = [
+        {
+            label: 'Read email',
+            handler: async () => {
+                const bodyText = String(composeSession?.text || '').trim();
+                await speakLocally(bodyText || 'Email is empty.');
+                await renderEmailFinalizeMenu(container, fromUrl);
+            }
+        },
+        {
+            label: 'Edit email',
+            handler: async () => {
+                window.location.href = 'gridpage.html?page=home&compose=1&email_compose=1';
+            }
+        },
+        {
+            label: 'Send email',
+            handler: async () => {
+                try {
+                    await sendCurrentEmailFromSession();
+                    clearComposeSession();
+                    clearEmailSession();
+                    await announce('Email sent successfully.', 'system', false);
+                    window.location.href = `gridpage.html?email_menu=1&from=${encodeURIComponent(fromUrl || getEmailReturnTarget())}`;
+                } catch (error) {
+                    await announce('Unable to send email right now.', 'system', false);
+                    await renderEmailFinalizeMenu(container, fromUrl);
+                }
+            }
+        },
+        {
+            label: 'Discard Email',
+            handler: async () => {
+                clearComposeSession();
+                clearEmailSession();
+                window.location.href = 'gridpage.html?page=home';
+            }
+        }
+    ];
+
+    options.forEach((option, index) => {
+        container.appendChild(createComposeGridButton(option.label, option.handler, index));
+    });
+
+    setTimeout(() => startOrWaitForScanning({ allowPrompt: true, source: 'email-finalize-menu' }), 50);
+}
+
 function addQuitComposeButton(container) {
     if (!isComposeSessionActive()) return;
     if (container.querySelector('#compose-quit-button')) return;
 
     const currentCount = container.querySelectorAll('button').length;
-    const quitButton = createComposeGridButton('Exit Creation', () => {
-        window.location.href = 'gridpage.html?compose_finalize=1';
+    const isEmailDraft = isEmailSessionActive();
+    const quitButton = createComposeGridButton(isEmailDraft ? 'Exit Email' : 'Exit Creation', () => {
+        window.location.href = isEmailDraft ? 'gridpage.html?email_finalize=1' : 'gridpage.html?compose_finalize=1';
     }, currentCount);
     quitButton.id = 'compose-quit-button';
     container.appendChild(quitButton);
-    updateComposeQuestionDisplay('Creation in progress');
+    updateComposeQuestionDisplay(isEmailDraft ? 'Email in progress' : 'Creation in progress');
 }
 
 
@@ -2334,8 +2906,11 @@ document.addEventListener('DOMContentLoaded', async () => {
     const params = new URLSearchParams(window.location.search);
     const isComposeEntryView = params.get('compose_entry') === '1';
     const isComposeFinalizeView = params.get('compose_finalize') === '1';
+    const isEmailEntryView = params.get('email_menu') === '1';
+    const isEmailFinalizeView = params.get('email_finalize') === '1';
+    const isEmailComposeView = params.get('email_compose') === '1';
     const composeResumeFlag = params.get('compose') === '1';
-    const isComposeFlowView = isComposeEntryView || isComposeFinalizeView || composeResumeFlag;
+    const isComposeFlowView = isComposeEntryView || isComposeFinalizeView || isEmailEntryView || isEmailFinalizeView || isEmailComposeView;
 
     // Remove the user-id-selector related UI elements if they exist
     document.getElementById('user-id-selector')?.closest('div')?.remove();
@@ -2405,8 +2980,18 @@ document.addEventListener('DOMContentLoaded', async () => {
                 return;
             }
             await renderComposeFinalizeMenu(gridContainer);
+        } else if (isEmailEntryView) {
+            const fromUrl = params.get('from') || getEmailReturnTarget();
+            await renderEmailEntryMenu(gridContainer, fromUrl);
+        } else if (isEmailFinalizeView) {
+            const fromUrl = params.get('from') || getEmailReturnTarget();
+            if (!isComposeSessionActive() || !isEmailSessionActive()) {
+                window.location.href = `gridpage.html?email_menu=1&from=${encodeURIComponent(fromUrl)}`;
+                return;
+            }
+            await renderEmailFinalizeMenu(gridContainer, fromUrl);
         } else {
-            if (composeResumeFlag && !isComposeSessionActive()) {
+            if (composeResumeFlag && isEmailComposeView && !isComposeSessionActive()) {
                 composeSession = {
                     active: true,
                     documentId: null,
@@ -2416,6 +3001,10 @@ document.addEventListener('DOMContentLoaded', async () => {
                     sourceFrom: params.get('from') || getComposeReturnTarget()
                 };
                 saveComposeSession();
+            }
+
+            if (!isEmailComposeView && isComposeSessionActive() && !isEmailSessionActive()) {
+                clearComposeSession();
             }
 
             await generateGrid(pageToDisplay, gridContainer);
@@ -3326,6 +3915,11 @@ async function handleButtonClick(buttonData) {
                     const params = new URLSearchParams();
                     params.set('from', window.location.href);
                     window.location.href = `numbers.html?${params.toString()}`;
+                } else if (specialPage === 'email' || specialPage === 'emails') {
+                    const params = new URLSearchParams();
+                    params.set('from', window.location.href);
+                    params.set('email_menu', '1');
+                    window.location.href = `gridpage.html?${params.toString()}`;
                 } else if (specialPage === 'compose' || specialPage === 'composition') {
                     const params = new URLSearchParams();
                     params.set('from', window.location.href);
@@ -4196,7 +4790,7 @@ async function processAnnouncementQueue() {
 
     isAnnouncingNow = true;
     const announcement = announcementQueue.shift();
-    const { textToAnnounce, announcementType, recordHistory, showSplash, resolve, reject, historyText } = announcement;
+    const { textToAnnounce, announcementType, recordHistory, showSplash, useSystemVoice, resolve, reject, historyText } = announcement;
 
     console.log(`ANNOUNCE QUEUE: Playing "${textToAnnounce.substring(0, 30)}..." (Type: ${announcementType})`);
 
@@ -4210,7 +4804,11 @@ async function processAnnouncementQueue() {
         const response = await authenticatedFetch(`/play-audio`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' }, // authenticatedFetch adds Auth and X-User-ID
-            body: JSON.stringify({ text: textToAnnounce, routing_target: announcementType }),
+            body: JSON.stringify({
+                text: textToAnnounce,
+                routing_target: announcementType,
+                use_system_voice: useSystemVoice === true
+            }),
         });
 
         if (!response.ok) {
@@ -4263,7 +4861,7 @@ async function processAnnouncementQueue() {
 
 // --- Announce Function (MODIFIED to use the queue) ---
 // This function will now queue up messages for sequential playback.
-async function announce(textToAnnounce, announcementType = "system", recordHistory = true, showSplash = true) {
+async function announce(textToAnnounce, announcementType = "system", recordHistory = true, showSplash = true, useSystemVoice = false) {
     console.log(`ANNOUNCE: QUEUING "${textToAnnounce.substring(0, 30)}..." (Type: ${announcementType})`);
     
     // Special handling for RANDOM choice - detect {RANDOM:option1|option2|option3} pattern
@@ -4309,6 +4907,7 @@ async function announce(textToAnnounce, announcementType = "system", recordHisto
                         announcementType,
                         recordHistory: false, // Don't record the split parts
                         showSplash: showSplash,
+                        useSystemVoice,
                         resolve,
                         reject
                     });
@@ -4330,6 +4929,7 @@ async function announce(textToAnnounce, announcementType = "system", recordHisto
                     announcementType,
                     recordHistory: recordHistory,
                     showSplash: showSplash,
+                    useSystemVoice,
                     resolve,
                     reject,
                     historyText: cleanText // Add custom property for clean history text
@@ -4357,6 +4957,7 @@ async function announce(textToAnnounce, announcementType = "system", recordHisto
                 announcementType,
                 recordHistory: false, // Don't record the split parts
                 showSplash: showSplash,
+                useSystemVoice,
                 resolve,
                 reject
             });
@@ -4373,6 +4974,7 @@ async function announce(textToAnnounce, announcementType = "system", recordHisto
                 announcementType,
                 recordHistory, // Record the full joke in history if requested
                 showSplash: showSplash,
+                useSystemVoice,
                 resolve,
                 reject
             });
@@ -4387,6 +4989,7 @@ async function announce(textToAnnounce, announcementType = "system", recordHisto
             announcementType,
             recordHistory,
             showSplash,
+            useSystemVoice,
             resolve, // Store the resolve function of this promise
             reject   // Store the reject function of this promise
         });
@@ -4396,6 +4999,12 @@ async function announce(textToAnnounce, announcementType = "system", recordHisto
     });
 }
 
+
+async function speakLocally(textToSpeak) {
+    const safeText = String(textToSpeak || '').trim();
+    if (!safeText) return;
+    await announce(safeText, 'system', false, false);
+}
 
 // --- Global AudioContext Resume Helper ---
 // This function tries to resume the AudioContext on first user gesture.
@@ -4537,7 +5146,7 @@ function startRowPhaseScanning() {
                 stopAuditoryScanning();
                 
                 try {
-                    await announce("Scanning paused", "system", false, false);
+                    await announce("Scanning paused", "system", false, false, true);
                 } catch (e) { 
                     console.error("Speech synthesis error:", e); 
                 }
@@ -4565,7 +5174,7 @@ function startRowPhaseScanning() {
             // Announce the row
             try {
                 const rowNumber = currentRow + 1;
-                await announce(`Row ${rowNumber}`, "system", false, false);
+                await announce(`Row ${rowNumber}`, "system", false, false, true);
             } catch (e) { 
                 console.error("Speech synthesis error:", e); 
             }
@@ -4609,7 +5218,7 @@ function startColumnPhaseScanning() {
                 stopAuditoryScanning();
                 
                 try {
-                    await announce("Scanning paused", "system", false, false);
+                    await announce("Scanning paused", "system", false, false, true);
                 } catch (e) { 
                     console.error("Speech synthesis error:", e); 
                 }
@@ -4678,7 +5287,7 @@ function startColumnPhaseForRow(rowIndex) {
                 stopAuditoryScanning();
                 
                 try {
-                    await announce("Scanning paused", "system", false, false);
+                    await announce("Scanning paused", "system", false, false, true);
                 } catch (e) { 
                     console.error("Speech synthesis error:", e); 
                 }
@@ -4714,7 +5323,7 @@ async function speakAndHighlight(button) {
     try {
         const textToSpeak = button.textContent;
         // Use backend TTS instead of browser speech synthesis
-        await announce(textToSpeak, "system", false, false);
+        await announce(textToSpeak, "system", false, false, true);
     } catch (e) { console.error("Speech synthesis error:", e); }
 }
 
@@ -4751,7 +5360,7 @@ async function resumeAuditoryScanning() {
     
     // Announce that scanning is resumed using the proper audio system
     try {
-        await announce("Scanning resumed", "system", false, false);
+        await announce("Scanning resumed", "system", false, false, true);
     } catch (e) { 
         console.error("Speech synthesis error:", e); 
     }

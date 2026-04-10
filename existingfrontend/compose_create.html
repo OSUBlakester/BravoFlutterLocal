@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Create - Bravo AAC</title>
+
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+    <script src="/static/token-refresh.js"></script>
+    <link rel="stylesheet" href="/static/splash-screen.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link rel="stylesheet" href="/static/compose_create.css">
+</head>
+<body>
+    <div id="app-container">
+        <div class="page-banner">
+            <h1 id="page-title">Create</h1>
+        </div>
+
+        <main class="compose-page">
+
+            <!-- Section 1: Build Space -->
+            <section id="action-section" data-section-id="action" class="compose-section scan-section">
+                <h2 class="section-title">Build Space</h2>
+                <div class="current-word-wrap">
+                    <textarea id="current-word" class="current-word-input" rows="3" readonly></textarea>
+                    <div class="word-controls">
+                        <button id="read-creation-btn" class="word-control-btn compose-button read-btn">Read Creation</button>
+                        <button id="exit-creation-btn" class="word-control-btn compose-button exit-btn">Exit Creation</button>
+                        <button id="backspace-btn" class="word-control-btn compose-button backspace-btn">Backspace</button>
+                        <button id="clear-word-btn" class="word-control-btn compose-button clear-btn">Clear</button>
+                        <button id="ai-edit-btn" class="word-control-btn compose-button ai-edit-btn">Clean Up</button>
+                        <button id="new-row-btn" class="word-control-btn compose-button new-row-btn">New Row</button>
+                        <button id="action-go-back-btn" class="word-control-btn compose-button">Go Back</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Section 2: Suggested Words -->
+            <section id="choose-word-section" data-section-id="choose-word" class="compose-section predictions-section scan-section">
+                <h2 class="section-title" id="words-section-title">Suggested Words</h2>
+                <div id="word-predictions" class="word-predictions-grid"></div>
+            </section>
+
+            <!-- Section 3: Tool Selection -->
+            <section id="tool-toggle-section" data-section-id="tool-toggle" class="compose-section scan-section">
+                <h2 class="section-title">Tools</h2>
+                <div class="tool-selector-grid">
+                    <button id="categories-tool-btn" class="tool-select-btn compose-button">Word Categories</button>
+                    <button id="spelling-tool-btn" class="tool-select-btn compose-button">Spelling</button>
+                    <button id="numbers-tool-btn" class="tool-select-btn compose-button">Numbers</button>
+                </div>
+            </section>
+
+            <!-- Section 4: Active Tool Panel -->
+            <section id="tool-panel-section" data-section-id="tool-panel" class="compose-section scan-section" hidden>
+                <h2 class="section-title" id="tool-panel-title">Word Categories</h2>
+                <div id="category-panel" class="tool-panel-content" hidden>
+                    <div id="category-grid" class="category-grid"></div>
+                </div>
+                <div id="letters-panel" class="tool-panel-content" hidden>
+                    <div id="alphabet-grid" class="alphabet-grid"></div>
+                </div>
+            </section>
+
+        </main>
+    </div>
+
+    <script src="/static/splash-screen.js"></script>
+    <script src="/static/compose_create.js"></script>
+</body>
+</html>

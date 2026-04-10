@@ -1,40 +1,61 @@
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:http/http.dart' as http;
 
+import 'auth_session_manager.dart';
+
 /// Centralized authenticated HTTP client that follows Firebase best practices.
 /// Calls getIdToken() right before each request to let Firebase handle refresh automatically.
 /// Falls back to cached token if Firebase refresh fails (e.g., on restrictive networks).
 class AuthenticatedHttpClient {
   static const int _defaultMaxRetries = 3;
   static const int _defaultTimeoutSeconds = 20;
-  
-  // Fallback token cache for when Firebase refresh fails (network issues, etc.)
-  static String? _lastValidToken;
+
+  static String _rememberValidToken(String token) {
+    AuthSessionManager.recordAuthenticatedSession(token);
+    return token;
+  }
 
   /// Get a fresh Firebase ID token, with fallback to cached token if refresh fails.
   /// Firebase automatically handles refresh: if the token is valid, returns it instantly.
   /// If expired or expiring soon (within 5 mins), Firebase auto-refreshes using refresh token.
-  /// If refresh fails (firebase_auth/internal-error), falls back to cached token.
+  /// If refresh fails, attempt a silent re-login using saved credentials.
   static Future<String?> getRefreshedIdToken() async {
+    final user = FirebaseAuth.instance.currentUser;
+
+    if (user != null) {
+      try {
+        final token = await user.getIdToken();
+        if (token != null && token.isNotEmpty) {
+          return _rememberValidToken(token);
+        }
+      } catch (e) {
+        debugPrintFallback('Token refresh failed: $e');
+      }
+
+      try {
+        final forcedToken = await user.getIdToken(true);
+        if (forcedToken != null && forcedToken.isNotEmpty) {
+          return _rememberValidToken(forcedToken);
+        }
+      } catch (e) {
+        debugPrintFallback('Forced token refresh failed: $e');
+      }
+    }
+
     try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user == null) return null;
-      // Call getIdToken() right before using it - Firebase handles refresh automatically
-      final token = await user.getIdToken();
-      if (token != null && token.isNotEmpty) {
-        _lastValidToken = token; // Cache this token as fallback
-        return token;
+      final recoveredToken = await AuthSessionManager.recoverSession(
+        reason: user == null ? 'no_current_user' : 'token_refresh_failed',
+        navigateToLoginOnFailure: false,
+        showStatusMessages: true,
+        showFailureMessages: false,
+      );
+      if (recoveredToken != null && recoveredToken.isNotEmpty) {
+        return _rememberValidToken(recoveredToken);
       }
     } catch (e) {
-      debugPrintFallback('Token refresh failed: $e, using cached token as fallback');
+      debugPrintFallback('Silent session recovery failed: $e');
     }
-    
-    // Fallback: return cached token if refresh failed
-    if (_lastValidToken != null && _lastValidToken!.isNotEmpty) {
-      debugPrintFallback('Using cached token (Firebase refresh failed)');
-      return _lastValidToken;
-    }
-    
+
     return null;
   }
 
@@ -49,13 +70,19 @@ class AuthenticatedHttpClient {
     int timeoutSeconds = _defaultTimeoutSeconds,
   }) async {
     int attemptCount = 0;
+    bool attemptedRecoveryAfterUnauthorized = false;
 
     while (attemptCount <= maxRetries) {
       try {
         // Get fresh token right before request - Firebase handles refresh automatically
         final idToken = await getRefreshedIdToken();
         if (idToken == null) {
-          throw Exception('Authentication required');
+          if (AuthSessionManager.lastRecoveryRequiresLogin) {
+            await AuthSessionManager.redirectToLogin(reason: 'missing_id_token');
+            throw Exception('Authentication required');
+          }
+
+          throw Exception('Authentication temporarily unavailable');
         }
 
         final headers = {
@@ -75,11 +102,31 @@ class AuthenticatedHttpClient {
           Duration(seconds: timeoutSeconds),
         );
 
-        return http.Response(
+        final httpResponse = http.Response(
           await response.stream.bytesToString(),
           response.statusCode,
           headers: response.headers,
         );
+
+        if (httpResponse.statusCode == 401 &&
+            !attemptedRecoveryAfterUnauthorized) {
+          attemptedRecoveryAfterUnauthorized = true;
+          final recoveredToken = await AuthSessionManager.recoverSession(
+            reason: 'http_401',
+            navigateToLoginOnFailure: false,
+            showStatusMessages: true,
+            showFailureMessages: false,
+          );
+          if (recoveredToken != null && recoveredToken.isNotEmpty) {
+            continue;
+          }
+
+          if (AuthSessionManager.lastRecoveryRequiresLogin) {
+            await AuthSessionManager.redirectToLogin(reason: 'http_401');
+          }
+        }
+
+        return httpResponse;
       } catch (e) {
         attemptCount++;
 

@@ -5,7 +5,7 @@ enum Environment {
 }
 
 class EnvironmentConfig {
-  static const Environment _currentEnvironment = Environment.dev; // Change this to switch environments
+  static const Environment _currentEnvironment = Environment.prod; // Change this to switch environments
   
   // Firebase Configuration
   static const String _devProjectId = 'bravo-dev-465400';

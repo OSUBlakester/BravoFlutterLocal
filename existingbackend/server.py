@@ -111,6 +111,7 @@ import copy
 import holidays
 import calendar # For calculating floating observances
 from datetime import date, timedelta, datetime as dt, timezone # Alias datetime to avoid conflict
+from zoneinfo import ZoneInfo
 from fastapi.middleware.cors import CORSMiddleware
 import re
 # from sentence_transformers import SentenceTransformer  # DISABLED - not currently used
@@ -134,7 +135,7 @@ import io
 import wave
 from pydantic import BaseModel, Field, field_validator, validator, conint # Import field_validator
 from pydantic_core.core_schema import ValidationInfo # For more complex V2 validators if needed
-from typing import List, Optional, Dict, Any, Union, Literal, Annotated
+from typing import List, Optional, Dict, Any, Union, Literal, Annotated, Set, Tuple
 import google.api_core.exceptions # For specific error handling with LLM
 from google.cloud import texttospeech as google_tts # Import Google Cloud Text-to-Speech with an alias
 from contextlib import asynccontextmanager # Import for lifespan
@@ -975,6 +976,10 @@ class UserCurrentState(BaseModel):
     location: Optional[str] = ""
     people: Optional[str] = "" # Renamed from People Present for consistency
     activity: Optional[str] = ""
+    topicTitle: Optional[str] = ""
+    focusChapters: Optional[str] = ""
+    focusPlotPoints: Optional[str] = ""
+    topicSummary: Optional[str] = ""
     mood: Optional[str] = None  # Current mood - saved to info/user_narrative
     loaded_at: Optional[str] = None  # NEW: ISO timestamp when favorite was loaded
     favorite_name: Optional[str] = None  # NEW: Name of the favorite that was loaded
@@ -991,6 +996,10 @@ class UserCurrentFavorite(BaseModel):
     location: str
     people: str
     activity: str
+    topicTitle: Optional[str] = ""
+    focusChapters: Optional[str] = ""
+    focusPlotPoints: Optional[str] = ""
+    topicSummary: Optional[str] = ""
     loaded_at: Optional[str] = None  # NEW: ISO timestamp when favorite was loaded
     schedule: Optional[FavoriteSchedule] = None # NEW: Schedule for this favorite
 
@@ -1002,6 +1011,10 @@ class FavoriteRequest(BaseModel):
     location: str
     people: str
     activity: str
+    topicTitle: Optional[str] = ""
+    focusChapters: Optional[str] = ""
+    focusPlotPoints: Optional[str] = ""
+    topicSummary: Optional[str] = ""
     schedule: Optional[FavoriteSchedule] = None # NEW: Schedule for this favorite
 
 class ManageFavoriteRequest(BaseModel):
@@ -1037,6 +1050,10 @@ async def get_user_current_endpoint(current_ids: Annotated[Dict[str, str], Depen
             "location": user_current_content_dict.get("location", ""),
             "people": user_current_content_dict.get("people", ""),
             "activity": user_current_content_dict.get("activity", ""),
+            "topicTitle": user_current_content_dict.get("topicTitle", ""),
+            "focusChapters": user_current_content_dict.get("focusChapters", ""),
+            "focusPlotPoints": user_current_content_dict.get("focusPlotPoints", ""),
+            "topicSummary": user_current_content_dict.get("topicSummary", ""),
             "mood": current_mood,  # Include mood from user_narrative
             "loaded_at": user_current_content_dict.get("loaded_at"),
             "favorite_name": user_current_content_dict.get("favorite_name"),
@@ -1053,15 +1070,30 @@ async def update_user_current_endpoint(payload: UserCurrentState, current_ids: A
     location = payload.location or ""
     people = payload.people or ""
     activity = payload.activity or ""
+    topic_title = payload.topicTitle or ""
+    focus_chapters = payload.focusChapters or ""
+    focus_plot_points = payload.focusPlotPoints or ""
+    topic_summary = payload.topicSummary or ""
+    discussion_narrative = (topic_summary or focus_plot_points or "").strip()
     mood = payload.mood  # Current mood
     loaded_at = payload.loaded_at  # Timestamp when favorite was loaded
     favorite_name = payload.favorite_name  # Name of the favorite that was loaded
     provided_saved_at = payload.saved_at  # Timestamp when data was saved (may be provided for favorite loads)
     
-    logging.info(f"🔍 /user_current called with mood='{mood}', location='{location}', people='{people}', activity='{activity}'")
+    logging.info(
+        f"🔍 /user_current called with mood='{mood}', location='{location}', people='{people}', "
+        f"activity='{activity}', topicTitle='{topic_title}', focusChapters='{focus_chapters}'"
+    )
     
     # The content to embed for current state should be a single string for LLM context
-    current_state_content = f"Location: {location}\nPeople Present: {people}\nActivity: {activity}"
+    current_state_content = (
+        f"Location: {location}\n"
+        f"People Present: {people}\n"
+        f"Activity: {activity}\n"
+        f"Discussion Topic Title: {topic_title}\n"
+        f"Discussion Focus Chapters: {focus_chapters}\n"
+        f"Discussion Narrative: {discussion_narrative}"
+    )
     aac_user_id = current_ids["aac_user_id"]
     account_id = current_ids["account_id"]
     
@@ -1076,6 +1108,10 @@ async def update_user_current_endpoint(payload: UserCurrentState, current_ids: A
         "location": location, 
         "people": people, 
         "activity": activity,
+        "topicTitle": topic_title,
+        "focusChapters": focus_chapters,
+        "focusPlotPoints": focus_plot_points,
+        "topicSummary": discussion_narrative,
         "saved_at": saved_at  # Always update saved_at when manually saving
     }
     
@@ -1183,6 +1219,10 @@ async def save_user_current_favorite(payload: FavoriteRequest, current_ids: Anno
             "location": payload.location,
             "people": payload.people,
             "activity": payload.activity,
+            "topicTitle": payload.topicTitle or "",
+            "focusChapters": payload.focusChapters or "",
+            "focusPlotPoints": payload.focusPlotPoints or "",
+            "topicSummary": payload.topicSummary or "",
             "schedule": payload.schedule.model_dump() if payload.schedule else None
         }
         favorites_list.append(new_favorite)
@@ -1235,6 +1275,10 @@ async def manage_user_current_favorite(payload: ManageFavoriteRequest, current_i
                         "location": payload.favorite.location,
                         "people": payload.favorite.people,
                         "activity": payload.favorite.activity,
+                        "topicTitle": payload.favorite.topicTitle or "",
+                        "focusChapters": payload.favorite.focusChapters or "",
+                        "focusPlotPoints": payload.favorite.focusPlotPoints or "",
+                        "topicSummary": payload.favorite.topicSummary or "",
                         "schedule": payload.favorite.schedule.model_dump() if payload.favorite.schedule else None
                     }
                     break
@@ -1591,7 +1635,18 @@ DEFAULT_USER_INFO = {
         }
     }
 }
-DEFAULT_USER_CURRENT = {"location": "Unknown", "people": "None", "activity": "Idle", "loaded_at": None, "favorite_name": None, "saved_at": None}
+DEFAULT_USER_CURRENT = {
+    "location": "Unknown",
+    "people": "None",
+    "activity": "Idle",
+    "topicTitle": "",
+    "focusChapters": "",
+    "focusPlotPoints": "",
+    "topicSummary": "",
+    "loaded_at": None,
+    "favorite_name": None,
+    "saved_at": None
+}
 DEFAULT_COLUMNS = 10 # Default number of columns in the grid
 DEFAULT_LIGHT_COLOR = 4294659860 # Default light color
 DEFAULT_DARK_COLOR = 4278198852 # Default dark color
@@ -2472,7 +2527,8 @@ class GeminiCacheManager:
 
     def _get_user_key(self, account_id: str, aac_user_id: str) -> str:
         """Generates a unique key for a user to manage their cache."""
-        return f"{account_id}_{aac_user_id}"
+        # Versioned to invalidate stale cached base context after diary context moved to DELTA.
+        return f"v2_{account_id}_{aac_user_id}"
     
     async def _load_cache_from_firestore(self, user_key: str) -> Optional[Dict]:
         """Load cache info from Firestore."""
@@ -2577,7 +2633,6 @@ class GeminiCacheManager:
         - Friends & family (stable)
         - Settings (rarely changes)
         - Birthdays (stable)
-        - Diary entries (stable)
         - Old chat history (>10 messages old)
         
         Excludes (moved to delta):
@@ -2595,7 +2650,6 @@ class GeminiCacheManager:
             "user_info": load_firestore_document(account_id, aac_user_id, "info/user_narrative", DEFAULT_USER_INFO),
             "settings": load_settings_from_file(account_id, aac_user_id),
             "birthdays": load_birthdays_from_file(account_id, aac_user_id),
-            "diary": load_diary_entries(account_id, aac_user_id),
             "chat_history": load_recent_chat_history(account_id, aac_user_id, days=CHAT_HISTORY_ACTIVE_DAYS),
             "chat_narrative": load_chat_derived_narrative(account_id, aac_user_id),
             "friends_family": load_firestore_document(account_id, aac_user_id, "info/friends_family", {"friends_family": []}),
@@ -2630,70 +2684,6 @@ Analyze the provided context to create helpful, personalized suggestions."""
             context_parts.append(f"--- User Settings (Supporting Context) ---\n{json.dumps(context_data['settings'], indent=2)}\n")
         if context_data["birthdays"] and (context_data["birthdays"].get("userBirthdate") or context_data["birthdays"].get("friendsFamily")):
             context_parts.append(f"--- Birthdays (Supporting Context) ---\n{json.dumps(context_data['birthdays'], indent=2)}\n")
-        
-        # Add current date for diary context
-        from datetime import datetime
-        today_date = datetime.now().date()
-        current_date_str = today_date.strftime('%Y-%m-%d')
-        context_parts.append(f"--- TODAY'S DATE (CRITICAL FOR DIARY CONTEXT) ---\n{current_date_str}\n⚠️ IMPORTANT: Use this date to determine if diary entries are recent (past), current (today), or future events. Generate responses accordingly.\n")
-        
-        # Diary entries (stable, long-term data)
-        if context_data["diary"]:
-            def parse_diary_date(entry: Dict) -> Optional[datetime.date]:
-                if not isinstance(entry, dict):
-                    return None
-                raw_date = entry.get("date")
-                if not isinstance(raw_date, str) or not raw_date.strip():
-                    return None
-                raw_date = raw_date.strip()
-
-                for fmt in ("%Y-%m-%d", "%m-%d-%Y", "%m/%d/%Y"):
-                    try:
-                        return datetime.strptime(raw_date, fmt).date()
-                    except ValueError:
-                        continue
-
-                try:
-                    return datetime.fromisoformat(raw_date.replace("Z", "+00:00")).date()
-                except ValueError:
-                    return None
-
-            dated_entries = []
-            undated_entries = []
-            for entry in context_data["diary"]:
-                parsed_date = parse_diary_date(entry)
-                if parsed_date is None:
-                    undated_entries.append(entry)
-                else:
-                    dated_entries.append((entry, parsed_date))
-
-            dated_entries.sort(key=lambda item: item[1], reverse=True)
-
-            completed_entries = [entry for entry, parsed in dated_entries if parsed <= today_date]
-            upcoming_entries = [entry for entry, parsed in dated_entries if parsed > today_date]
-
-            diary_context = f"""--- Diary Entries (Background Context) ---
-📅 TODAY'S DATE: {current_date_str}
-⚠️ CRITICAL INSTRUCTIONS FOR DIARY INTERPRETATION:
-- Entries with dates BEFORE {current_date_str} = PAST events (use past tense: "I did", "I went", "I had")
-- Entries with date {current_date_str} = TODAY'S events (use present tense: "I am", "I'm doing")
-- Entries with dates AFTER {current_date_str} = FUTURE events (use future tense: "I will", "I'm going to", "I have planned")
-
-⚠️ DIARY USAGE RULES:
-- For prompts about "recent activities" or "what I did", use ONLY Completed/Today entries.
-- For prompts about "upcoming plans" or "what I will do", use ONLY Upcoming entries.
-- NEVER describe Upcoming entries as if they already happened.
-
-Completed / Today Diary Entries (date <= {current_date_str}, newest first, max 15):
-{json.dumps(completed_entries[:15], indent=2)}
-
-Upcoming Diary Entries (date > {current_date_str}, soonest first, max 15):
-{json.dumps(list(reversed(upcoming_entries[-15:])), indent=2)}
-
-Undated Diary Entries (use cautiously, max 5):
-{json.dumps(undated_entries[:5], indent=2)}
-"""
-            context_parts.append(diary_context)
         
         # Vocabulary level instruction (replaces sending full pages/vocabulary lists)
         # This saves ~261k tokens by using instruction instead of full word lists
@@ -2762,7 +2752,7 @@ Undated Diary Entries (use cautiously, max 5):
         logging.info(f"✅ BASE context for {account_id}/{aac_user_id} is {len(base_string)} chars (~{len(base_string)//4} tokens) - ready for caching")
         return base_string
     
-    async def _build_delta_context(self, account_id: str, aac_user_id: str, query_hint: str = "") -> str:
+    async def _build_delta_context(self, account_id: str, aac_user_id: str, query_hint: str = "", compose_mode: bool = False, compose_body: str = "") -> str:
         """
         Builds the DELTA context - dynamic data that changes frequently.
         This is passed as standard input text with each request (NOT cached).
@@ -2770,6 +2760,7 @@ Undated Diary Entries (use cautiously, max 5):
         Includes:
         - Current mood (changes frequently)
         - Current location/people/activity (changes per request)
+        - Current date and diary entries (date-sensitive; query-sensitive)
         - Recent chat history (last 10 turns)
         - User pages (frequently edited)
         """
@@ -2784,6 +2775,7 @@ Undated Diary Entries (use cautiously, max 5):
             "settings": load_settings_from_file(account_id, aac_user_id),
             "birthdays": load_birthdays_from_file(account_id, aac_user_id),
             "friends_family": load_friends_family_from_file(account_id, aac_user_id),
+            "diary": load_diary_entries(account_id, aac_user_id),
             "chat_history": load_recent_chat_history(account_id, aac_user_id, days=CHAT_HISTORY_ACTIVE_DAYS),
         }
         results = await asyncio.gather(*tasks.values())
@@ -2844,15 +2836,50 @@ Undated Diary Entries (use cautiously, max 5):
         
         # Current situation - location, people, activity
         if context_data["user_current"]:
-            current_parts = []
-            current_parts.extend([
-                f"Location: {context_data['user_current'].get('location', 'Unknown')}",
-                f"People Present: {context_data['user_current'].get('people', 'None')}",
-                f"Activity: {context_data['user_current'].get('activity', 'Idle')}"
-            ])
-            delta_parts.append(f"\n📍 CURRENT SITUATION:\n{chr(10).join(current_parts)}\n")
+            if not compose_mode:
+                current_parts = []
+                current_parts.extend([
+                    f"Location: {context_data['user_current'].get('location', 'Unknown')}",
+                    f"People Present: {context_data['user_current'].get('people', 'None')}",
+                    f"Activity: {context_data['user_current'].get('activity', 'Idle')}"
+                ])
+                delta_parts.append(f"\n📍 CURRENT SITUATION:\n{chr(10).join(current_parts)}\n")
+
+                topic_title = (context_data["user_current"].get("topicTitle") or "").strip()
+                focus_chapters = (context_data["user_current"].get("focusChapters") or "").strip()
+                focus_plot_points = (context_data["user_current"].get("focusPlotPoints") or "").strip()
+                topic_summary = (context_data["user_current"].get("topicSummary") or "").strip()
+                discussion_narrative = topic_summary or focus_plot_points
+
+                if topic_title or focus_chapters or discussion_narrative:
+                    discussion_lines = [
+                        "📚 BOOK/DISCUSSION CONTEXT (HIGH PRIORITY FOR TOPIC OPTIONS)",
+                        f"Topic Title: {topic_title or 'Not provided'}",
+                        f"Focus Chapters: {focus_chapters or 'Not provided'}",
+                        f"Discussion Narrative: {discussion_narrative or 'Not provided'}",
+                        "⚠️ Use the discussion narrative as authoritative context for discussion options.",
+                        "⚠️ If chapter range is provided, avoid introducing events beyond that range."
+                    ]
+                    delta_parts.append("\n" + "\n".join(discussion_lines) + "\n")
+            else:
+                # Compose mode: suppress location/book context, inject compose guidance instead
+                compose_lines = [
+                    "✏️ COMPOSE MODE — USER IS ACTIVELY WRITING A DOCUMENT",
+                    "⚠️ IGNORE: Location, People Present, Activity, and Book/Discussion context — NOT relevant.",
+                    "⚠️ IGNORE: Any greeting, conversational, or situational context.",
+                    "FOCUS ONLY ON: Generating options that are natural next phrases, sentences, or ideas",
+                    "  for the user's written composition (letter, story, message, etc.).",
+                    "OPTIONS must be written document phrases — not spoken conversation starters.",
+                    "Keep options concise, literary, and appropriate for written text.",
+                ]
+                compose_body_text = (compose_body or "").strip()
+                if compose_body_text:
+                    compose_lines.append(f'\nCURRENT COMPOSITION SO FAR:\n"{compose_body_text}"')
+                    compose_lines.append("Continue this composition naturally. Options should logically follow what has been written.")
+                delta_parts.append("\n" + "\n".join(compose_lines) + "\n")
 
         today_date = dt.now().date()
+        current_date_str = today_date.strftime('%Y-%m-%d')
         celebrations_context = _build_upcoming_celebrations_context(
             birthday_data=context_data.get("birthdays") or {},
             friends_family_data=context_data.get("friends_family") or {},
@@ -2863,6 +2890,135 @@ Undated Diary Entries (use cautiously, max 5):
         )
 
         query_hint_lower = str(query_hint or "").lower()
+
+        delta_parts.append(
+            f"\n--- TODAY'S DATE (CRITICAL FOR DIARY CONTEXT) ---\n{current_date_str}\n"
+            "⚠️ IMPORTANT: Use this date to determine if diary entries are recent (past), current (today), or future events.\n"
+        )
+
+        if context_data["diary"]:
+            def parse_diary_date(entry: Dict) -> Optional[date]:
+                if not isinstance(entry, dict):
+                    return None
+                raw_date = entry.get("date")
+                if not isinstance(raw_date, str) or not raw_date.strip():
+                    return None
+                raw_date = raw_date.strip()
+
+                for fmt in ("%Y-%m-%d", "%m-%d-%Y", "%m/%d/%Y"):
+                    try:
+                        return dt.strptime(raw_date, fmt).date()
+                    except ValueError:
+                        continue
+
+                try:
+                    return dt.fromisoformat(raw_date.replace("Z", "+00:00")).date()
+                except ValueError:
+                    return None
+
+            dated_entries = []
+            undated_entries = []
+            for entry in context_data["diary"]:
+                parsed_date = parse_diary_date(entry)
+                if parsed_date is None:
+                    undated_entries.append(entry)
+                else:
+                    dated_entries.append((entry, parsed_date))
+
+            dated_entries.sort(key=lambda item: item[1], reverse=True)
+
+            completed_entries = [(entry, parsed) for entry, parsed in dated_entries if parsed <= today_date]
+            upcoming_entries = [(entry, parsed) for entry, parsed in dated_entries if parsed > today_date]
+            recent_cutoff = today_date - timedelta(days=14)
+            recent_completed_entries = [
+                entry for entry, parsed in completed_entries if parsed >= recent_cutoff
+            ]
+
+            recent_activity_keywords = [
+                "recent activit",
+                "within 14 days",
+                "last 14 days",
+                "what i did",
+                "have done recently",
+                "past activit",
+            ]
+            use_recent_only = any(keyword in query_hint_lower for keyword in recent_activity_keywords)
+
+            completed_entries_for_context = recent_completed_entries if use_recent_only else [
+                entry for entry, _ in completed_entries[:15]
+            ]
+            completed_heading = (
+                f"Completed Diary Entries Within Last 14 Days Only (date >= {recent_cutoff.strftime('%Y-%m-%d')} and <= {current_date_str}, newest first, max 15):"
+                if use_recent_only
+                else f"Completed / Today Diary Entries (date <= {current_date_str}, newest first, max 15):"
+            )
+            recent_only_rule = (
+                f"- THIS REQUEST is about recent past activity. Use ONLY completed diary entries from the last 14 days ({recent_cutoff.strftime('%Y-%m-%d')} through {current_date_str}).\n"
+                "- DO NOT use older completed diary entries for this request, even if they seem relevant.\n"
+                "- DO NOT use upcoming/future diary entries as a fallback if there are no completed entries in the last 14 days.\n"
+                "- If there are no completed diary entries in the last 14 days, do not generate any activity-based options from diary data.\n"
+                if use_recent_only
+                else ""
+            )
+            upcoming_entries_for_context = [] if use_recent_only else [
+                entry for entry, _ in list(reversed(upcoming_entries[-15:]))
+            ]
+            upcoming_heading = (
+                "Upcoming Diary Entries (hidden for this recent-activity request; do not use):"
+                if use_recent_only
+                else f"Upcoming Diary Entries (date > {current_date_str}, soonest first, max 15):"
+            )
+
+            diary_context = f"""--- Diary Entries (Dynamic Context) ---
+📅 TODAY'S DATE: {current_date_str}
+⚠️ CRITICAL INSTRUCTIONS FOR DIARY INTERPRETATION:
+- Entries with dates BEFORE {current_date_str} = PAST events (use past tense: "I did", "I went", "I had")
+- Entries with date {current_date_str} = TODAY'S events (use present tense: "I am", "I'm doing")
+- Entries with dates AFTER {current_date_str} = FUTURE events (use future tense: "I will", "I'm going to", "I have planned")
+
+⚠️ DIARY USAGE RULES:
+- For prompts about "recent activities" or "what I did", use ONLY Completed/Today entries.
+{recent_only_rule}- For prompts about "upcoming plans" or "what I will do", use ONLY Upcoming entries.
+- NEVER describe Upcoming entries as if they already happened.
+
+{completed_heading}
+{json.dumps(completed_entries_for_context[:15], indent=2)}
+
+{upcoming_heading}
+{json.dumps(upcoming_entries_for_context, indent=2)}
+
+Undated Diary Entries (use cautiously, max 5):
+{json.dumps(undated_entries[:5], indent=2)}
+"""
+            delta_parts.append(diary_context)
+
+        # Live time context (dynamic per request; NOT cached)
+        # This prevents stale/hallucinated times when users ask about current time/date.
+        now_utc = dt.now(timezone.utc)
+        mountain_now = now_utc.astimezone(ZoneInfo("America/Denver"))
+
+        preferred_tz_name = "America/Denver" if (
+            "mountain" in query_hint_lower or
+            "mst" in query_hint_lower or
+            "mdt" in query_hint_lower
+        ) else "UTC"
+
+        try:
+            preferred_now = now_utc.astimezone(ZoneInfo(preferred_tz_name))
+        except Exception:
+            preferred_tz_name = "UTC"
+            preferred_now = now_utc
+
+        delta_parts.append(
+            "\n🕒 LIVE DATE/TIME CONTEXT (AUTHORITATIVE - USE FOR TIME/DATE QUESTIONS):\n"
+            f"- Current UTC: {now_utc.strftime('%Y-%m-%d %I:%M:%S %p UTC')}\n"
+            f"- Current US Mountain (America/Denver): {mountain_now.strftime('%Y-%m-%d %I:%M:%S %p %Z')}\n"
+            f"- Preferred timezone for this request: {preferred_tz_name}\n"
+            f"- Current time in preferred timezone: {preferred_now.strftime('%Y-%m-%d %I:%M:%S %p %Z')}\n"
+            "⚠️ TIME ACCURACY RULE: If the prompt asks for current time/date, use the exact values above."
+            " Do NOT invent or reuse old times from prior context.\n"
+        )
+
         celebration_keywords = [
             "greeting", "hello", "hi", "good morning", "good afternoon", "good evening",
             "plan", "plans", "upcoming", "going on", "birthday", "holiday", "celebrate", "celebration"
@@ -2933,10 +3089,10 @@ Undated Diary Entries (use cautiously, max 5):
             # Build BASE context only - stable data for caching
             base_context = await self._build_base_context(account_id, aac_user_id)
 
-            # Gemini 2.5 Flash minimum cache size - temporarily lowered to 512 for testing
-            # Use a more accurate token estimation: roughly 4 chars per token for English text
+            # Gemini cached content rejects requests below 2048 total tokens in production.
+            # Use a rough 4 chars/token estimate and skip cache creation when we are clearly under.
             estimated_tokens = len(base_context) // 4
-            min_tokens_required = 512
+            min_tokens_required = 2048
             
             logging.warning(f"✅ BASE context for user '{user_key}': {len(base_context)} chars, ~{int(estimated_tokens)} tokens")
             
@@ -4234,7 +4390,7 @@ async def refresh_user_cache(current_ids: Annotated[Dict[str, str], Depends(get_
     return JSONResponse(content={"message": f"Cache invalidated for user {aac_user_id}."})
 
 
-async def build_full_prompt_for_non_cached_llm(account_id: str, aac_user_id: str, user_query: str) -> str:
+async def build_full_prompt_for_non_cached_llm(account_id: str, aac_user_id: str, user_query: str, compose_mode: bool = False, compose_body: str = "") -> str:
     """
     Builds the complete LLM prompt from scratch by fetching all context data.
     This is used as a fallback when a cache is not available.
@@ -4248,7 +4404,7 @@ async def build_full_prompt_for_non_cached_llm(account_id: str, aac_user_id: str
         base_context = await cache_manager._build_base_context(account_id, aac_user_id)
         logging.info(f"✅ Base context built: {len(base_context)} chars")
         
-        delta_context = await cache_manager._build_delta_context(account_id, aac_user_id, user_query)
+        delta_context = await cache_manager._build_delta_context(account_id, aac_user_id, user_query, compose_mode=compose_mode, compose_body=compose_body)
         logging.info(f"✅ Delta context built: {len(delta_context)} chars")
         
         # Combine base + delta (same as cached requests do)
@@ -4341,6 +4497,8 @@ def log_token_usage(response, request_type: str, account_id: str, aac_user_id: s
 
 class LLMRequest(BaseModel):
     prompt: str
+    compose_mode: bool = False          # True when the user is in an active compose session
+    compose_body: str = ""               # Current composition text (sent for context when compose_mode is True)
 
 # --- Vocabulary Level Helper Function ---
 def get_vocabulary_level_instruction(level: str) -> str:
@@ -4504,7 +4662,7 @@ Return ONLY valid JSON - no other text before or after the JSON array."""
     # --- Route to appropriate LLM ---
     if llm_provider == "chatgpt":
         logging.info(f"Using OpenAI for {account_id}/{aac_user_id}. Building full prompt manually.")
-        full_prompt_for_openai = await build_full_prompt_for_non_cached_llm(account_id, aac_user_id, final_user_query)
+        full_prompt_for_openai = await build_full_prompt_for_non_cached_llm(account_id, aac_user_id, final_user_query, compose_mode=request_data.compose_mode, compose_body=request_data.compose_body)
         llm_response_json_str = await _generate_openai_content_with_fallback(full_prompt_for_openai)
     else:
         # --- Gemini Cache-First Approach with Base + Delta Architecture + Lazy Invalidation ---
@@ -4535,7 +4693,7 @@ Return ONLY valid JSON - no other text before or after the JSON array."""
         if cached_content_ref:
             try:
                 # Build delta context (dynamic data not in cache)
-                delta_context = await cache_manager._build_delta_context(account_id, aac_user_id, user_prompt_content)
+                delta_context = await cache_manager._build_delta_context(account_id, aac_user_id, user_prompt_content, compose_mode=request_data.compose_mode, compose_body=request_data.compose_body)
                 
                 # Combine delta + user query
                 combined_prompt = f"{delta_context}\n\n=== USER QUERY ===\n{final_user_query}"
@@ -4576,7 +4734,7 @@ Return ONLY valid JSON - no other text before or after the JSON array."""
                 logging.info(f"✅ Successfully generated content using BASE cache + DELTA context for {account_id}/{aac_user_id}.")
             except Exception as e:
                 logging.error(f"Error using cached content for {account_id}/{aac_user_id}: {e}. Falling back.")
-                full_prompt = await build_full_prompt_for_non_cached_llm(account_id, aac_user_id, final_user_query)
+                full_prompt = await build_full_prompt_for_non_cached_llm(account_id, aac_user_id, final_user_query, compose_mode=request_data.compose_mode, compose_body=request_data.compose_body)
                 llm_response_json_str = await _generate_gemini_content_with_fallback(full_prompt, generation_config, account_id, aac_user_id)
         else:
             logging.warning(f"No valid cache found for {account_id}/{aac_user_id}. Attempting to warm up cache...")
@@ -4590,7 +4748,7 @@ Return ONLY valid JSON - no other text before or after the JSON array."""
                 
                 if cached_content_ref:
                     # Cache was successfully created, use it with delta context
-                    delta_context = await cache_manager._build_delta_context(account_id, aac_user_id, user_prompt_content)
+                    delta_context = await cache_manager._build_delta_context(account_id, aac_user_id, user_prompt_content, compose_mode=request_data.compose_mode, compose_body=request_data.compose_body)
                     combined_prompt = f"{delta_context}\n\n=== USER QUERY ===\n{final_user_query}"
                     
                     logging.info(f"🔍 NEW_CACHE COMBINED PROMPT PREVIEW (first 800 chars):\n{combined_prompt[:800]}")
@@ -4629,12 +4787,12 @@ Return ONLY valid JSON - no other text before or after the JSON array."""
                 else:
                     # Cache creation failed, use full prompt fallback
                     logging.warning(f"Cache creation failed for {account_id}/{aac_user_id}. Using full prompt fallback.")
-                    full_prompt = await build_full_prompt_for_non_cached_llm(account_id, aac_user_id, final_user_query)
+                    full_prompt = await build_full_prompt_for_non_cached_llm(account_id, aac_user_id, final_user_query, compose_mode=request_data.compose_mode, compose_body=request_data.compose_body)
                     llm_response_json_str = await _generate_gemini_content_with_fallback(full_prompt, generation_config, account_id, aac_user_id)
                     
             except Exception as warmup_error:
                 logging.error(f"Cache warmup failed for {account_id}/{aac_user_id}: {warmup_error}. Using full prompt fallback.")
-                full_prompt = await build_full_prompt_for_non_cached_llm(account_id, aac_user_id, final_user_query)
+                full_prompt = await build_full_prompt_for_non_cached_llm(account_id, aac_user_id, final_user_query, compose_mode=request_data.compose_mode, compose_body=request_data.compose_body)
                 llm_response_json_str = await _generate_gemini_content_with_fallback(full_prompt, generation_config, account_id, aac_user_id)
     
     logging.info(f"--- LLM Final JSON Response Text for account {account_id} and user {aac_user_id} (Length: {len(llm_response_json_str)}) ---")
@@ -6515,6 +6673,7 @@ class PlayAudioRequest(BaseModel):
     text: str
     routing_target: Optional[RoutingTarget] = "default"
     voice_name_override: Optional[str] = None
+    use_system_voice: bool = False
     speech_rate_override: Optional[int] = Field(None, gt=49, lt=401)
 
 
@@ -6530,8 +6689,14 @@ async def play_audio(request: PlayAudioRequest, current_ids: Annotated[Dict[str,
         # NEW: Load user-specific settings for voice and rate
         user_settings = await load_settings_from_file(account_id, aac_user_id) # Load settings
 
-        # Use settings, falling back to global defaults if setting is missing
-        voice_to_use = request.voice_name_override or user_settings.get("selected_tts_voice_name", DEFAULT_TTS_VOICE)
+        # Use explicit overrides first. Otherwise, scan/system prompts can opt into the
+        # default system voice while normal announcements continue using the selected TTS voice.
+        if request.voice_name_override:
+            voice_to_use = request.voice_name_override
+        elif request.use_system_voice:
+            voice_to_use = DEFAULT_TTS_VOICE
+        else:
+            voice_to_use = user_settings.get("selected_tts_voice_name", DEFAULT_TTS_VOICE)
         rate_to_use = request.speech_rate_override or user_settings.get("speech_rate", DEFAULT_SPEECH_RATE)
 
         logging.info(f"Synthesizing speech for account {account_id} user {aac_user_id} with text: '{request.text[:50]}...' for routing target: {request.routing_target}")
@@ -10434,9 +10599,9 @@ async def get_freestyle_word_prediction(
         user_context = user_info.get("narrative", "")
         
         if context_text:
-            prompt = f"Given the user context: '{user_context}' and the existing text: '{context_text}', provide {freestyle_options} complete words that start with '{partial_word}'. The words should be contextually appropriate and commonly used. Return only the complete words, one per line."
+            prompt = f"Given the user context: '{user_context}' and the existing text: '{context_text}', provide up to {freestyle_options} complete words that start with '{partial_word}'. If '{partial_word}' is already a complete, common word that an AAC user might intend to say, include that exact word as the first line. Then include other longer completions that start with '{partial_word}'. Return only the words, one per line."
         else:
-            prompt = f"Given the user context: '{user_context}', provide {freestyle_options} complete words that start with '{partial_word}'. The words should be commonly used. Return only the complete words, one per line."
+            prompt = f"Given the user context: '{user_context}', provide up to {freestyle_options} complete words that start with '{partial_word}'. If '{partial_word}' is already a complete, common word that an AAC user might intend to say, include that exact word as the first line. Then include other longer completions that start with '{partial_word}'. Return only the words, one per line."
         
         # Use LLM to generate predictions
         response_text = await _generate_gemini_content_with_fallback(prompt)
@@ -10444,13 +10609,23 @@ async def get_freestyle_word_prediction(
         # Parse predictions - ensure they are complete words starting with the partial word
         raw_predictions = [line.strip() for line in response_text.split('\n') if line.strip()]
         predictions = []
+        seen_predictions = set()
         
         for pred in raw_predictions[:freestyle_options * 2]:  # Get extra to filter
+            normalized_pred = pred.strip()
+            normalized_key = normalized_pred.lower()
+            if not normalized_pred or normalized_key in seen_predictions:
+                continue
             # Ensure the prediction starts with the partial word and is a complete word
-            if pred.lower().startswith(partial_word.lower()) and len(pred) > len(partial_word):
-                predictions.append(pred)
+            if normalized_key == partial_word.lower():
+                predictions.append(normalized_pred)
+                seen_predictions.add(normalized_key)
+            elif normalized_key.startswith(partial_word.lower()) and len(normalized_pred) > len(partial_word):
+                predictions.append(normalized_pred)
+                seen_predictions.add(normalized_key)
             elif not partial_word and pred:  # If no partial word, just add valid predictions
-                predictions.append(pred)
+                predictions.append(normalized_pred)
+                seen_predictions.add(normalized_key)
         
         # Limit to freestyle_options predictions
         predictions = predictions[:freestyle_options]
@@ -10500,15 +10675,25 @@ async def get_freestyle_word_options(
         
         # Create context-aware prompt
         context_parts = []
+        live_context_parts = []
         if user_info.get("narrative"):
             context_parts.append(f"User info: {user_info['narrative']}")
         if user_current.get("location"):
-            context_parts.append(f"Current location: {user_current['location']}")
+            location_value = str(user_current['location']).strip()
+            if location_value and location_value.lower() not in {"unknown", "none", "n/a", "na"}:
+                context_parts.append(f"Current location: {location_value}")
+                live_context_parts.append(f"location={location_value}")
         if user_current.get("people"):
-            context_parts.append(f"People present: {user_current['people']}")
+            people_value = str(user_current['people']).strip()
+            if people_value and people_value.lower() not in {"unknown", "none", "n/a", "na"}:
+                context_parts.append(f"People present: {people_value}")
+                live_context_parts.append(f"people={people_value}")
         if user_current.get("activity"):
-            context_parts.append(f"Current activity: {user_current['activity']}")
-        
+            activity_value = str(user_current['activity']).strip()
+            if activity_value and activity_value.lower() not in {"unknown", "none", "idle", "n/a", "na"}:
+                context_parts.append(f"Current activity: {activity_value}")
+                live_context_parts.append(f"activity={activity_value}")
+
         context_str = " | ".join(context_parts) if context_parts else "General conversation"
         
         # Handle build space context for dynamic suggestions
@@ -10523,18 +10708,29 @@ async def get_freestyle_word_options(
         
         # Build contextual information for the prompt
         contextual_info = context_str
+        navigation_parts = []
         if request.context and request.source_page:
             if request.is_llm_generated:
+                navigation_parts.append(f"LLM page={request.source_page}")
+                navigation_parts.append(f"LLM topic={request.context}")
                 contextual_info += f" | Coming from LLM-generated page '{request.source_page}' with context: {request.context}"
             else:
+                navigation_parts.append(f"page={request.source_page}")
+                navigation_parts.append(f"topic={request.context}")
                 contextual_info += f" | Coming from page '{request.source_page}' with topic: {request.context}"
         elif request.source_page and request.source_page.lower() not in ('home', 'unknownpage', ''):
             # Static page with no LLM context — use page name as topic hint
+            navigation_parts.append(f"page={request.source_page}")
             contextual_info += f" | Coming from page '{request.source_page}'"
             if request.originating_button_text:
+                navigation_parts.append(f"button={request.originating_button_text}")
                 contextual_info += f" (via button: {request.originating_button_text})"
         elif request.originating_button_text:
+            navigation_parts.append(f"button={request.originating_button_text}")
             contextual_info += f" | Coming from button: {request.originating_button_text}"
+
+        live_context_summary = ", ".join(live_context_parts) if live_context_parts else "none"
+        navigation_context_summary = ", ".join(navigation_parts) if navigation_parts else "none"
         
         # Add mood context if available
         if request.current_mood and request.current_mood != 'none':
@@ -10563,6 +10759,8 @@ Requirements:
 - The keyword should help find relevant images that represent the continuation concept
 - Make each option distinct and useful for completing communication
 - Consider natural sentence flow and common AAC patterns
+- Treat the live context as a PRIMARY signal for ranking. When the current location, people present, activity, or source page clearly suggest what the user is doing right now, prefer continuations that fit that real situation.
+- If there is meaningful live context, at least half of the options should feel appropriate for that immediate situation unless the existing build space clearly points elsewhere.
 
 CRITICAL: Only provide the NEW words to add, not the full sentence. For example:
 - If build_space_text is "Who is here to play", provide options like "with friends|friendship", "games|games", "outside|outdoors"
@@ -10573,7 +10771,9 @@ CRITICAL: Only provide the NEW words to add, not the full sentence. For example:
 - If build_space_text is "When", provide options like "is|time", "are we|schedule", "do you|timing", "will you|future"
 - Never repeat words already in the build space text
 
-Context (use only for word relevance): {contextual_info}"""
+Live context: {live_context_summary}
+Navigation context: {navigation_context_summary}
+Context (use for relevance and ranking): {contextual_info}"""
         else:
             # If no build space text, provide words for starting communication
             variation_text = "different and alternative" if request.request_different_options else "varied and diverse"
@@ -10608,6 +10808,8 @@ Requirements:
 - About 60-70% of words should be directly related to the topic
 - About 30-40% should be core AAC words useful for building sentences about the topic (pronouns, common verbs, question words)
 - Words should be useful for STARTING phrases about this topic
+- Treat current location, people present, activity, and the originating page/button as first-class context. If that live context clearly narrows the topic, bias the list toward what is relevant right now.
+- When meaningful live context exists, at least half of the options should feel specific to the user's immediate situation, not just generic topic words.
 - Keep words simple and appropriate for AAC communication
 - For each word, provide a related keyword for image searching
 - Format: "word|keyword" (e.g., "play|games", "outside|outdoors", "fun|happy")
@@ -10616,6 +10818,8 @@ Requirements:
 - Make each word distinct and commonly used
 - DO NOT use numbered lists - just provide word|keyword pairs, one per line
 
+Live context: {live_context_summary}
+Navigation context: {navigation_context_summary}
 User context: {contextual_info}"""
             
             elif has_source_page:
@@ -10634,6 +10838,8 @@ Requirements:
 - Include a MIX of: topic-relevant words and core AAC sentence starters (I, want, like, need, go)
 - About 50% topic-relevant words, 50% core AAC words
 - Words should be useful for STARTING phrases related to this page topic
+- Treat current location, people present, activity, and the originating button as first-class context. Use them to make the topic words feel specific to what is happening right now.
+- When meaningful live context exists, at least half of the options should feel grounded in that immediate situation rather than generic page vocabulary.
 - Keep words simple and appropriate for AAC communication
 - For each word, provide a related keyword for image searching
 - Format: "word|keyword" (e.g., "I|person", "want|desire", "go|arrow", "happy|smile")
@@ -10642,6 +10848,8 @@ Requirements:
 - Make each word distinct and commonly used in AAC
 - DO NOT use numbered lists - just provide word|keyword pairs, one per line
 
+Live context: {live_context_summary}
+Navigation context: {navigation_context_summary}
 User context: {contextual_info}"""
             
             else:
@@ -10655,6 +10863,8 @@ Requirements:
 - Focus on core AAC vocabulary: pronouns (I, you, we), basic verbs (want, need, like, go), common nouns, simple adjectives
 - Include essential communication starters: "I", "want", "need", "like", "go", "see", "help", "more", "please"
 - Provide variety across word types: pronouns, verbs, nouns, adjectives, question words
+- If current location, people present, or current activity are known, use them as the primary signal for which otherwise-generic AAC words are most useful right now.
+- Favor words that the user could immediately use in the current situation over abstract filler.
 - For each word, provide a related keyword for image searching
 - Format: "word|keyword" (e.g., "I|person", "want|desire", "go|arrow", "happy|smile", "food|food")
 - The keyword should help find relevant images that represent the word
@@ -10663,6 +10873,8 @@ Requirements:
 - Make each word distinct and commonly used in AAC
 - DO NOT use numbered lists - just provide word|keyword pairs, one per line
 
+Live context: {live_context_summary}
+Navigation context: {navigation_context_summary}
 Context for word selection: {contextual_info}"""
         
         logging.info(f"Generated prompt for LLM: {prompt}")
@@ -10678,30 +10890,63 @@ Context for word selection: {contextual_info}"""
         response_text = await _generate_gemini_content_with_fallback(prompt, generation_config, account_id, aac_user_id)
         logging.warning(f"DEBUG Freestyle API - LLM response length: {len(response_text)}, content: {response_text[:500]}...")
         
-        # Parse options with keywords and ensure uniqueness  
+        # Parse options with keywords and ensure uniqueness.
         all_lines = [line.strip() for line in response_text.split('\n') if line.strip()]
         
-        # Filter out preamble/instructional lines that aren't actual options
+        # Filter out preamble/instructional lines that aren't actual options.
         def is_preamble_line(line):
             preamble_indicators = [
                 "here are", "here's", "i'll provide", "providing", "below are",
                 "the following", "these are", "let me give", "i can offer",
                 "varied and diverse", "different and unique", "suggestions:",
                 "options:", "words:", "phrases:", "requirements:",
-                "format:", "examples:", "note:", "remember:"
+                "format:", "examples:", "note:", "remember:",
+                "let's brainstorm", "brainstorm continuations", "continuations for",
+                "live context:", "navigation context:", "user context:", "context:"
             ]
             line_lower = line.lower()
             # Check if line is too long (likely explanatory text)
             if len(line) > 50:
+                return True
+            if line.endswith(':'):
                 return True
             # Check for preamble indicators
             for indicator in preamble_indicators:
                 if indicator in line_lower:
                     return True
             return False
+
+        def normalize_candidate_line(line):
+            cleaned = re.sub(r'^\s*(?:[-*•]+|\d+[.)])\s*', '', line).strip()
+            return cleaned.strip('"\'` ').strip()
+
+        def is_valid_option_text(text):
+            if not text:
+                return False
+
+            text_lower = text.lower()
+            invalid_indicators = [
+                "let's brainstorm", "brainstorm", "continuations for", "provide exactly",
+                "generate exactly", "requirements", "format", "example", "live context",
+                "navigation context", "user context", "the user is", "aac communication"
+            ]
+
+            if any(indicator in text_lower for indicator in invalid_indicators):
+                return False
+            if any(char in text for char in ['"', '“', '”']):
+                return False
+            if text.endswith((':', '.', '?', '!')):
+                return False
+
+            word_count = len([part for part in text.split() if part])
+            if word_count == 0 or word_count > 3:
+                return False
+
+            return True
         
         # Filter out preamble lines
-        word_lines = [line for line in all_lines if not is_preamble_line(line)]
+        word_lines = [normalize_candidate_line(line) for line in all_lines if not is_preamble_line(line)]
+        word_lines = [line for line in word_lines if line]
         
         # Remove duplicates while preserving order and parse word|keyword format
         unique_options = []
@@ -10710,8 +10955,8 @@ Context for word selection: {contextual_info}"""
             if '|' in line:
                 # Parse word|keyword format
                 parts = line.split('|', 1)
-                first_part = parts[0].strip()
-                second_part = parts[1].strip() if len(parts) > 1 else first_part
+                first_part = normalize_candidate_line(parts[0])
+                second_part = normalize_candidate_line(parts[1]) if len(parts) > 1 else first_part
                 
                 # For build space continuation, first part is the continuation text to display
                 # For initial generation, first part is also the word to display
@@ -10719,7 +10964,7 @@ Context for word selection: {contextual_info}"""
                 keyword = second_part  # Always use the second part as the keyword for images
                 unique_key = word.lower().strip()  # Use the word text for uniqueness
                 
-                if unique_key not in seen and word:
+                if unique_key not in seen and is_valid_option_text(word):
                     unique_options.append({
                         "text": word,
                         "keywords": [keyword] if keyword != word else []
@@ -10727,9 +10972,9 @@ Context for word selection: {contextual_info}"""
                     seen.add(unique_key)
             else:
                 # Fallback for lines without keyword format
-                word = line.strip()
+                word = normalize_candidate_line(line)
                 unique_key = word.lower()
-                if unique_key not in seen and word:
+                if unique_key not in seen and is_valid_option_text(word):
                     unique_options.append({
                         "text": word,
                         "keywords": []
@@ -10837,6 +11082,13 @@ GMAIL_INBOX_EXCLUDED_CATEGORIES = {
     "CATEGORY_UPDATES",
     "CATEGORY_FORUMS",
 }
+GMAIL_INBOX_CATEGORY_LABELS = {
+    "CATEGORY_PERSONAL",
+    "CATEGORY_PROMOTIONS",
+    "CATEGORY_SOCIAL",
+    "CATEGORY_UPDATES",
+    "CATEGORY_FORUMS",
+}
 
 DEFAULT_EMAIL_PROVIDER_STATE = {
     "provider": EMAIL_PROVIDER_NAME,
@@ -10863,6 +11115,9 @@ class EmailSendRequest(BaseModel):
     bcc: List[str] = Field(default_factory=list)
     subject: str = ""
     body: str = ""
+    thread_id: Optional[str] = ""
+    in_reply_to: Optional[str] = ""
+    references: Optional[str] = ""
 
     @field_validator("to", "cc", "bcc")
     @classmethod
@@ -10877,6 +11132,77 @@ class EmailSendRequest(BaseModel):
                 raise ValueError(f"Invalid email address: {candidate}")
             validated.append(parsed_email)
         return validated
+
+
+class ComposeDocumentCreateRequest(BaseModel):
+    document_type: Literal["story", "email"] = Field(default="story", description="Compose document type")
+    title: Optional[str] = Field(default="", description="Saved document title")
+    body: Optional[str] = Field(default="", description="Main composition text")
+    to: List[str] = Field(default_factory=list, description="Email To recipients")
+    cc: List[str] = Field(default_factory=list, description="Email Cc recipients")
+    bcc: List[str] = Field(default_factory=list, description="Email Bcc recipients")
+    subject: Optional[str] = Field(default="", description="Email subject")
+    reply_to_message_id: Optional[str] = Field(default="", description="Original Gmail message id for reply")
+    reply_to_thread_id: Optional[str] = Field(default="", description="Original Gmail thread id for reply")
+    in_reply_to: Optional[str] = Field(default="", description="RFC 5322 Message-ID for In-Reply-To header")
+    references: Optional[str] = Field(default="", description="RFC 5322 References header value")
+
+    @field_validator("to", "cc", "bcc")
+    @classmethod
+    def _validate_email_recipients(cls, values: List[str]) -> List[str]:
+        validated: List[str] = []
+        for raw_value in values or []:
+            candidate = str(raw_value or "").strip()
+            if not candidate:
+                continue
+            _, parsed_email = parseaddr(candidate)
+            if not parsed_email or not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", parsed_email):
+                raise ValueError(f"Invalid email address: {candidate}")
+            validated.append(parsed_email)
+        return validated
+
+
+class ComposeDocumentUpdateRequest(BaseModel):
+    document_type: Optional[Literal["story", "email"]] = Field(default=None, description="Compose document type")
+    title: Optional[str] = Field(default=None, description="Saved document title")
+    body: Optional[str] = Field(default=None, description="Main composition text")
+    to: Optional[List[str]] = Field(default=None, description="Email To recipients")
+    cc: Optional[List[str]] = Field(default=None, description="Email Cc recipients")
+    bcc: Optional[List[str]] = Field(default=None, description="Email Bcc recipients")
+    subject: Optional[str] = Field(default=None, description="Email subject")
+    reply_to_message_id: Optional[str] = Field(default=None, description="Original Gmail message id for reply")
+    reply_to_thread_id: Optional[str] = Field(default=None, description="Original Gmail thread id for reply")
+    in_reply_to: Optional[str] = Field(default=None, description="RFC 5322 Message-ID for In-Reply-To header")
+    references: Optional[str] = Field(default=None, description="RFC 5322 References header value")
+
+    @field_validator("to", "cc", "bcc")
+    @classmethod
+    def _validate_optional_email_recipients(cls, values: Optional[List[str]]) -> Optional[List[str]]:
+        if values is None:
+            return None
+        validated: List[str] = []
+        for raw_value in values:
+            candidate = str(raw_value or "").strip()
+            if not candidate:
+                continue
+            _, parsed_email = parseaddr(candidate)
+            if not parsed_email or not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", parsed_email):
+                raise ValueError(f"Invalid email address: {candidate}")
+            validated.append(parsed_email)
+        return validated
+
+
+class ComposeIllustrationRequest(BaseModel):
+    style: Optional[str] = Field(default="storybook illustration", description="Visual style for generated illustration")
+    regenerate: Optional[bool] = Field(default=False, description="Whether to force regeneration if an illustration already exists")
+
+
+class ComposeContentRequest(BaseModel):
+    body: str = Field(..., description="Current composition body text")
+
+
+class ComposeFromEmailRequest(BaseModel):
+    include_body_quote: bool = Field(default=False, description="Whether to include original email body text in draft")
 
 
 def _is_truthy_env(value: Optional[str]) -> bool:
@@ -11204,6 +11530,53 @@ def _extract_plaintext_from_gmail_payload(payload: Optional[Dict[str, Any]]) -> 
     return ""
 
 
+def _extract_latest_email_body(body_text: Optional[str]) -> str:
+    if not body_text:
+        return ""
+
+    lines = str(body_text).splitlines()
+    latest_lines: List[str] = []
+    reply_chain_markers = [
+        re.compile(r"^\s*>"),
+        re.compile(r"^\s*On\s.+wrote:\s*$", re.IGNORECASE),
+        re.compile(r"^\s*-{2,}\s*Original Message\s*-{2,}\s*$", re.IGNORECASE),
+        re.compile(r"^\s*From:\s", re.IGNORECASE),
+        re.compile(r"^\s*Sent:\s", re.IGNORECASE),
+        re.compile(r"^\s*To:\s", re.IGNORECASE),
+        re.compile(r"^\s*Subject:\s", re.IGNORECASE),
+    ]
+
+    for index, line in enumerate(lines):
+        next_line = lines[index + 1] if index + 1 < len(lines) else ""
+        stripped = line.strip()
+        normalized = stripped.lower()
+        next_normalized = next_line.strip().lower()
+
+        if any(pattern.search(line) for pattern in reply_chain_markers):
+            break
+
+        if normalized.startswith("on ") and (
+            " wrote:" in normalized
+            or next_normalized == "wrote:"
+            or next_normalized.startswith("wrote:")
+            or next_normalized.startswith("wrote ")
+        ):
+            break
+
+        if normalized.startswith("-----forwarded message-----"):
+            break
+
+        if normalized.startswith("from:") and any(
+            marker in "\n".join([normalized, next_normalized])
+            for marker in ["@", "sent:", "subject:", "to:"]
+        ):
+            break
+        latest_lines.append(line)
+
+    cleaned = "\n".join(latest_lines).strip()
+    return cleaned or str(body_text).strip()
+
+
 def _gmail_header_map(payload: Optional[Dict[str, Any]]) -> Dict[str, str]:
     headers = (payload or {}).get("headers", [])
     header_map: Dict[str, str] = {}
@@ -11212,6 +11585,19 @@ def _gmail_header_map(payload: Optional[Dict[str, Any]]) -> Dict[str, str]:
         if header_name:
             header_map[header_name] = header.get("value", "")
     return header_map
+
+
+def _normalize_reply_subject(subject: str) -> str:
+    safe_subject = re.sub(r"\s+", " ", str(subject or "").strip())
+    if not safe_subject:
+        return "Re:"
+    if safe_subject.lower().startswith("re:"):
+        return safe_subject
+    return f"Re: {safe_subject}"
+
+
+def _clean_header_token(value: Optional[str]) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip())
 
 
 async def _ensure_valid_gmail_access_token(account_id: str, aac_user_id: str) -> Dict[str, Any]:
@@ -11461,6 +11847,7 @@ async def get_email_inbox(
     account_id = current_ids["account_id"]
     aac_user_id = current_ids["aac_user_id"]
     clamped_max = max(1, min(max_results, 50))
+    state = await _load_email_provider_state(account_id, aac_user_id)
 
     message_list = await _gmail_get_json(
         account_id,
@@ -11475,6 +11862,7 @@ async def get_email_inbox(
     )
 
     messages = []
+    seen_thread_ids: Set[str] = set()
     message_ids = [item.get("id") for item in message_list.get("messages", []) if item.get("id")]
     semaphore = asyncio.Semaphore(8)
 
@@ -11495,8 +11883,16 @@ async def get_email_inbox(
         if not metadata:
             continue
 
+        thread_id = str(metadata.get("threadId") or "").strip()
+        if thread_id and thread_id in seen_thread_ids:
+            continue
+
         message_labels = set(metadata.get("labelIds") or [])
         if message_labels.intersection(GMAIL_INBOX_EXCLUDED_CATEGORIES):
+            continue
+
+        category_labels = message_labels.intersection(GMAIL_INBOX_CATEGORY_LABELS)
+        if category_labels and "CATEGORY_PERSONAL" not in category_labels:
             continue
 
         header_map = _gmail_header_map(metadata.get("payload"))
@@ -11504,10 +11900,13 @@ async def get_email_inbox(
         from_value = header_map.get("from", "")
         sender_name, sender_email = parseaddr(from_value)
 
+        if thread_id:
+            seen_thread_ids.add(thread_id)
+
         messages.append(
             {
                 "id": metadata.get("id"),
-                "thread_id": metadata.get("threadId"),
+                "thread_id": thread_id,
                 "subject": header_map.get("subject", "(No subject)"),
                 "from": from_value,
                 "sender_name": sender_name or None,
@@ -11521,6 +11920,13 @@ async def get_email_inbox(
         content={
             "messages": messages,
             "next_page_token": message_list.get("nextPageToken"),
+            "provider_status": {
+                "connected": bool(state.get("connected")),
+                "email_address": state.get("email_address"),
+                "connected_at": state.get("connected_at"),
+                "has_refresh_token": bool(_state_refresh_token(state)),
+                "scope": state.get("scope") or [],
+            },
         }
     )
 
@@ -11542,7 +11948,7 @@ async def get_email_message_detail(
 
     payload = message.get("payload") or {}
     header_map = _gmail_header_map(payload)
-    body_text = _extract_plaintext_from_gmail_payload(payload)
+    body_text = _extract_latest_email_body(_extract_plaintext_from_gmail_payload(payload))
 
     return JSONResponse(
         content={
@@ -11553,11 +11959,87 @@ async def get_email_message_detail(
                 "from": header_map.get("from", ""),
                 "to": header_map.get("to", ""),
                 "date": header_map.get("date"),
+                "message_id_header": header_map.get("message-id", ""),
+                "references": header_map.get("references", ""),
                 "snippet": message.get("snippet", ""),
                 "body_text": body_text,
             }
         }
     )
+
+
+@app.post("/api/compose/from-email/{message_id}")
+async def create_compose_document_from_email(
+    message_id: str,
+    request: ComposeFromEmailRequest = Body(default=ComposeFromEmailRequest()),
+    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)] = None,
+):
+    account_id = current_ids["account_id"]
+    aac_user_id = current_ids["aac_user_id"]
+
+    try:
+        message = await _gmail_get_json(
+            account_id,
+            aac_user_id,
+            f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}",
+            params={"format": "full"},
+        )
+
+        payload = message.get("payload") or {}
+        header_map = _gmail_header_map(payload)
+        body_text = _extract_latest_email_body(_extract_plaintext_from_gmail_payload(payload)).strip()
+
+        from_header = header_map.get("from", "")
+        sender_name, sender_email = parseaddr(from_header)
+        recipient_email = str(sender_email or "").strip()
+        subject = _normalize_reply_subject(header_map.get("subject", ""))
+        in_reply_to = _clean_header_token(header_map.get("message-id", ""))
+        references = _clean_header_token(header_map.get("references", ""))
+        if in_reply_to and (not references or in_reply_to not in references):
+            references = f"{references} {in_reply_to}".strip() if references else in_reply_to
+
+        now_iso = dt.now(timezone.utc).isoformat()
+        doc_id = str(uuid.uuid4())
+
+        draft_body = ""
+        if bool(request.include_body_quote) and body_text:
+            quoted = "\n".join([f"> {line}" for line in body_text.splitlines()])
+            draft_body = f"\n\nOn {header_map.get('date', 'an earlier date')}, {sender_name or recipient_email} wrote:\n{quoted}".strip()
+
+        compose_doc = {
+            "id": doc_id,
+            "document_type": "email",
+            "title": f"Reply: {(header_map.get('subject') or '(No subject)').strip()}",
+            "body": draft_body,
+            "subject": subject,
+            "to": [recipient_email] if recipient_email else [],
+            "cc": [],
+            "bcc": [],
+            "reply_to_message_id": str(message.get("id") or "").strip(),
+            "reply_to_thread_id": str(message.get("threadId") or "").strip(),
+            "in_reply_to": in_reply_to,
+            "references": references,
+            "illustration_url": "",
+            "illustration_status": "not_created",
+            "illustration_prompt": "",
+            "illustration_style": "",
+            "illustration_updated_at": None,
+            "created_at": now_iso,
+            "updated_at": now_iso,
+        }
+
+        doc_ref = _compose_documents_collection_ref(account_id, aac_user_id).document(doc_id)
+        await asyncio.to_thread(doc_ref.set, sanitize_for_firestore(compose_doc))
+
+        return JSONResponse(content={
+            "success": True,
+            "document": _normalize_compose_doc_for_response(doc_id, compose_doc),
+        })
+    except HTTPException as http_error:
+        return JSONResponse(content={"success": False, "error": str(http_error.detail)}, status_code=http_error.status_code)
+    except Exception as e:
+        logging.error(f"Error creating compose draft from email {message_id}: {e}", exc_info=True)
+        return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
 
 
 @app.post("/api/email/messages/{message_id}/delete")
@@ -11587,6 +12069,7 @@ async def get_email_contacts(
     account_id = current_ids["account_id"]
     aac_user_id = current_ids["aac_user_id"]
     clamped_max = max(1, min(max_results, 200))
+    state = await _load_email_provider_state(account_id, aac_user_id)
 
     connections_json = await _gmail_get_json(
         account_id,
@@ -11623,6 +12106,13 @@ async def get_email_contacts(
         content={
             "contacts": contacts,
             "next_page_token": connections_json.get("nextPageToken"),
+            "provider_status": {
+                "connected": bool(state.get("connected")),
+                "email_address": state.get("email_address"),
+                "connected_at": state.get("connected_at"),
+                "has_refresh_token": bool(_state_refresh_token(state)),
+                "scope": state.get("scope") or [],
+            },
         }
     )
 
@@ -11652,14 +12142,24 @@ async def send_email_message(
     if request.bcc:
         message["Bcc"] = ", ".join(request.bcc)
     message["Subject"] = request.subject or ""
+    clean_in_reply_to = _clean_header_token(request.in_reply_to)
+    clean_references = _clean_header_token(request.references)
+    if clean_in_reply_to:
+        message["In-Reply-To"] = clean_in_reply_to
+    if clean_references:
+        message["References"] = clean_references
     message.set_content(request.body or "")
 
     encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+    send_payload: Dict[str, Any] = {"raw": encoded_message}
+    clean_thread_id = _clean_header_token(request.thread_id)
+    if clean_thread_id:
+        send_payload["threadId"] = clean_thread_id
     send_result = await _gmail_post_json(
         account_id,
         aac_user_id,
         "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
-        payload={"raw": encoded_message},
+        payload=send_payload,
     )
 
     return JSONResponse(
@@ -11711,6 +12211,394 @@ async def disconnect_email_provider(
 
 
 # ===== BRAVO EMAIL PHASE 2 END (WEB APP REVIEW BLOCK) =====
+
+
+@app.get("/api/compose/documents")
+async def list_compose_documents(
+    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
+):
+    account_id = current_ids["account_id"]
+    aac_user_id = current_ids["aac_user_id"]
+
+    try:
+        docs = await load_firestore_collection(account_id, aac_user_id, "compose_documents")
+        docs_sorted = sorted(
+            docs,
+            key=lambda item: item.get("updated_at") or item.get("created_at") or "",
+            reverse=True
+        )
+
+        response_docs: List[Dict[str, Any]] = []
+        for compose_doc in docs_sorted:
+            doc_id = str(compose_doc.get("id") or "").strip()
+            if not doc_id:
+                continue
+            normalized = _normalize_compose_doc_for_response(doc_id, compose_doc)
+            body_text = normalized.get("body", "")
+            normalized["preview"] = body_text[:180]
+            response_docs.append(normalized)
+
+        return JSONResponse(content={"success": True, "documents": response_docs})
+    except Exception as e:
+        logging.error(f"Error listing compose documents: {e}", exc_info=True)
+        return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
+
+
+@app.post("/api/compose/documents")
+async def create_compose_document(
+    request: ComposeDocumentCreateRequest,
+    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
+):
+    account_id = current_ids["account_id"]
+    aac_user_id = current_ids["aac_user_id"]
+
+    try:
+        now_iso = dt.now(timezone.utc).isoformat()
+        doc_id = str(uuid.uuid4())
+        safe_type = request.document_type if request.document_type in {"story", "email"} else "story"
+        safe_title = re.sub(r"\s+", " ", str(request.title or "").strip())
+        safe_subject = re.sub(r"\s+", " ", str(request.subject or "").strip())
+
+        compose_doc = {
+            "id": doc_id,
+            "document_type": safe_type,
+            "title": safe_title or ("Untitled Email" if safe_type == "email" else "Untitled Composition"),
+            "body": str(request.body or ""),
+            "subject": safe_subject,
+            "to": request.to or [],
+            "cc": request.cc or [],
+            "bcc": request.bcc or [],
+            "reply_to_message_id": _clean_header_token(request.reply_to_message_id),
+            "reply_to_thread_id": _clean_header_token(request.reply_to_thread_id),
+            "in_reply_to": _clean_header_token(request.in_reply_to),
+            "references": _clean_header_token(request.references),
+            "illustration_url": "",
+            "illustration_status": "not_created",
+            "illustration_prompt": "",
+            "illustration_style": "",
+            "illustration_updated_at": None,
+            "created_at": now_iso,
+            "updated_at": now_iso,
+        }
+
+        doc_ref = _compose_documents_collection_ref(account_id, aac_user_id).document(doc_id)
+        await asyncio.to_thread(doc_ref.set, sanitize_for_firestore(compose_doc))
+        return JSONResponse(content={"success": True, "document": _normalize_compose_doc_for_response(doc_id, compose_doc)})
+    except Exception as e:
+        logging.error(f"Error creating compose document: {e}", exc_info=True)
+        return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
+
+
+@app.get("/api/compose/documents/{document_id}")
+async def get_compose_document(
+    document_id: str,
+    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
+):
+    account_id = current_ids["account_id"]
+    aac_user_id = current_ids["aac_user_id"]
+
+    try:
+        doc_ref = _compose_documents_collection_ref(account_id, aac_user_id).document(document_id)
+        doc = await asyncio.to_thread(doc_ref.get)
+        if not doc.exists:
+            return JSONResponse(content={"success": False, "error": "Document not found"}, status_code=404)
+        compose_doc = doc.to_dict() or {}
+        return JSONResponse(content={"success": True, "document": _normalize_compose_doc_for_response(doc.id, compose_doc)})
+    except Exception as e:
+        logging.error(f"Error loading compose document {document_id}: {e}", exc_info=True)
+        return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
+
+
+@app.put("/api/compose/documents/{document_id}")
+async def update_compose_document(
+    document_id: str,
+    request: ComposeDocumentUpdateRequest,
+    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
+):
+    account_id = current_ids["account_id"]
+    aac_user_id = current_ids["aac_user_id"]
+
+    try:
+        doc_ref = _compose_documents_collection_ref(account_id, aac_user_id).document(document_id)
+        existing_doc = await asyncio.to_thread(doc_ref.get)
+        if not existing_doc.exists:
+            return JSONResponse(content={"success": False, "error": "Document not found"}, status_code=404)
+
+        update_data: Dict[str, Any] = {"updated_at": dt.now(timezone.utc).isoformat()}
+
+        if request.document_type is not None:
+            update_data["document_type"] = request.document_type
+        if request.title is not None:
+            normalized_title = re.sub(r"\s+", " ", str(request.title).strip())
+            update_data["title"] = normalized_title
+        if request.body is not None:
+            update_data["body"] = str(request.body)
+        if request.subject is not None:
+            update_data["subject"] = re.sub(r"\s+", " ", str(request.subject).strip())
+        if request.to is not None:
+            update_data["to"] = request.to
+        if request.cc is not None:
+            update_data["cc"] = request.cc
+        if request.bcc is not None:
+            update_data["bcc"] = request.bcc
+        if request.reply_to_message_id is not None:
+            update_data["reply_to_message_id"] = _clean_header_token(request.reply_to_message_id)
+        if request.reply_to_thread_id is not None:
+            update_data["reply_to_thread_id"] = _clean_header_token(request.reply_to_thread_id)
+        if request.in_reply_to is not None:
+            update_data["in_reply_to"] = _clean_header_token(request.in_reply_to)
+        if request.references is not None:
+            update_data["references"] = _clean_header_token(request.references)
+
+        if len(update_data.keys()) == 1:
+            return JSONResponse(content={"success": False, "error": "No fields provided"}, status_code=400)
+
+        await asyncio.to_thread(doc_ref.set, sanitize_for_firestore(update_data), merge=True)
+        updated_doc = await asyncio.to_thread(doc_ref.get)
+        updated_payload = updated_doc.to_dict() or {}
+        return JSONResponse(content={"success": True, "document": _normalize_compose_doc_for_response(updated_doc.id, updated_payload)})
+    except Exception as e:
+        logging.error(f"Error updating compose document {document_id}: {e}", exc_info=True)
+        return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
+
+
+@app.delete("/api/compose/documents/{document_id}")
+async def delete_compose_document(
+    document_id: str,
+    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
+):
+    account_id = current_ids["account_id"]
+    aac_user_id = current_ids["aac_user_id"]
+
+    try:
+        doc_ref = _compose_documents_collection_ref(account_id, aac_user_id).document(document_id)
+        existing_doc = await asyncio.to_thread(doc_ref.get)
+        if not existing_doc.exists:
+            return JSONResponse(content={"success": False, "error": "Document not found"}, status_code=404)
+        await asyncio.to_thread(doc_ref.delete)
+        return JSONResponse(content={"success": True, "status": "deleted", "id": document_id})
+    except Exception as e:
+        logging.error(f"Error deleting compose document {document_id}: {e}", exc_info=True)
+        return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
+
+
+@app.post("/api/compose/documents/{document_id}/illustrate")
+async def generate_compose_document_illustration(
+    document_id: str,
+    request: ComposeIllustrationRequest,
+    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
+):
+    account_id = current_ids["account_id"]
+    aac_user_id = current_ids["aac_user_id"]
+
+    try:
+        doc_ref = _compose_documents_collection_ref(account_id, aac_user_id).document(document_id)
+        doc = await asyncio.to_thread(doc_ref.get)
+        if not doc.exists:
+            return JSONResponse(content={"success": False, "error": "Document not found"}, status_code=404)
+
+        compose_doc = doc.to_dict() or {}
+        existing_url = str(compose_doc.get("illustration_url", "")).strip()
+        if existing_url and not bool(request.regenerate):
+            return JSONResponse(content={
+                "success": True,
+                "document": _normalize_compose_doc_for_response(doc.id, compose_doc),
+                "reused_existing": True
+            })
+
+        title = re.sub(r"\s+", " ", str(compose_doc.get("title", "Untitled Composition")).strip()) or "Untitled Composition"
+        body = str(compose_doc.get("body", "")).strip()
+        if not body:
+            return JSONResponse(content={"success": False, "error": "Composition body is empty"}, status_code=400)
+
+        safe_style = re.sub(r"\s+", " ", str(request.style or "storybook illustration").strip()) or "storybook illustration"
+        excerpt = " ".join(body.split())[:550]
+        illustration_prompt = (
+            f"{safe_style}, create a single clean illustration for a composition titled '{title}'. "
+            f"Represent the meaning with clear, expressive visual storytelling. "
+            f"No text, words, letters, or logos in the image. "
+            f"Composition summary: {excerpt}"
+        )
+
+        image_bytes = await generate_story_illustration_image(illustration_prompt)
+        safe_doc_id = re.sub(r"[^\w\-]", "_", document_id)
+        filename = f"compose_illustration_{safe_doc_id}_{uuid.uuid4().hex[:8]}.png"
+        image_url = await upload_image_to_storage(image_bytes, filename)
+
+        now_iso = dt.now(timezone.utc).isoformat()
+        update_payload = {
+            "illustration_url": image_url,
+            "illustration_status": "ready",
+            "illustration_prompt": illustration_prompt,
+            "illustration_style": safe_style,
+            "illustration_updated_at": now_iso,
+            "updated_at": now_iso,
+        }
+        await asyncio.to_thread(doc_ref.set, sanitize_for_firestore(update_payload), merge=True)
+
+        updated_doc = await asyncio.to_thread(doc_ref.get)
+        updated_payload = updated_doc.to_dict() or {}
+        return JSONResponse(content={"success": True, "document": _normalize_compose_doc_for_response(updated_doc.id, updated_payload)})
+    except HTTPException as http_error:
+        return JSONResponse(content={"success": False, "error": str(http_error.detail)}, status_code=http_error.status_code)
+    except Exception as e:
+        logging.error(f"Error generating compose illustration for {document_id}: {e}", exc_info=True)
+        return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
+
+
+@app.post("/api/compose/documents/{document_id}/send-email")
+async def send_compose_document_email(
+    document_id: str,
+    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
+):
+    account_id = current_ids["account_id"]
+    aac_user_id = current_ids["aac_user_id"]
+
+    try:
+        doc_ref = _compose_documents_collection_ref(account_id, aac_user_id).document(document_id)
+        doc = await asyncio.to_thread(doc_ref.get)
+        if not doc.exists:
+            return JSONResponse(content={"success": False, "error": "Document not found"}, status_code=404)
+
+        compose_doc = doc.to_dict() or {}
+        to_list = [str(item).strip() for item in (compose_doc.get("to") or []) if str(item).strip()]
+        cc_list = [str(item).strip() for item in (compose_doc.get("cc") or []) if str(item).strip()]
+        bcc_list = [str(item).strip() for item in (compose_doc.get("bcc") or []) if str(item).strip()]
+        subject = re.sub(r"\s+", " ", str(compose_doc.get("subject", "")).strip())
+        body = str(compose_doc.get("body", ""))
+        reply_to_thread_id = _clean_header_token(compose_doc.get("reply_to_thread_id", ""))
+        in_reply_to = _clean_header_token(compose_doc.get("in_reply_to", ""))
+        references = _clean_header_token(compose_doc.get("references", ""))
+
+        recipients = to_list + cc_list + bcc_list
+        if not recipients:
+            return JSONResponse(content={"success": False, "error": "At least one recipient is required"}, status_code=400)
+
+        provider_state = await _load_email_provider_state(account_id, aac_user_id)
+        from_address = provider_state.get("email_address")
+        if not from_address:
+            return JSONResponse(content={"success": False, "error": "Connected Gmail address is missing"}, status_code=400)
+
+        message = EmailMessage()
+        message["From"] = from_address
+        message["To"] = ", ".join(to_list) if to_list else "undisclosed-recipients:;"
+        if cc_list:
+            message["Cc"] = ", ".join(cc_list)
+        if bcc_list:
+            message["Bcc"] = ", ".join(bcc_list)
+        message["Subject"] = subject
+        if in_reply_to:
+            message["In-Reply-To"] = in_reply_to
+        if references:
+            message["References"] = references
+        message.set_content(body)
+
+        encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+        send_payload: Dict[str, Any] = {"raw": encoded_message}
+        if reply_to_thread_id:
+            send_payload["threadId"] = reply_to_thread_id
+        send_result = await _gmail_post_json(
+            account_id,
+            aac_user_id,
+            "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+            payload=send_payload,
+        )
+
+        now_iso = dt.now(timezone.utc).isoformat()
+        await asyncio.to_thread(doc_ref.set, sanitize_for_firestore({"updated_at": now_iso}), merge=True)
+
+        return JSONResponse(content={
+            "success": True,
+            "status": "sent",
+            "id": send_result.get("id"),
+            "thread_id": send_result.get("threadId"),
+            "label_ids": send_result.get("labelIds", []),
+        })
+    except HTTPException as http_error:
+        return JSONResponse(content={"success": False, "error": str(http_error.detail)}, status_code=http_error.status_code)
+    except Exception as e:
+        logging.error(f"Error sending compose email for {document_id}: {e}", exc_info=True)
+        return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
+
+
+@app.post("/api/compose/generate-title")
+async def generate_compose_title(
+    request: ComposeContentRequest,
+    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
+):
+    account_id = current_ids["account_id"]
+    aac_user_id = current_ids["aac_user_id"]
+
+    try:
+        body_text = re.sub(r"\s+", " ", str(request.body or "").strip())
+        if not body_text:
+            return JSONResponse(content={"success": False, "error": "Composition body is empty"}, status_code=400)
+
+        excerpt = body_text[:800]
+        llm_query = f"""Generate a concise title (2 to 6 words) for this AAC composition.
+
+Composition:
+{excerpt}
+
+Rules:
+- Return only the title text.
+- No punctuation at the end.
+- Keep wording clear and natural.
+"""
+
+        generated = await _generate_gemini_content_with_fallback(llm_query, None, account_id, aac_user_id)
+        generated = _strip_markdown_code_fences(str(generated or "")).strip()
+        generated = re.sub(r"\s+", " ", generated).strip('"\'` ')
+
+        if not generated:
+            generated = "Untitled Letter"
+
+        words = generated.split()
+        if len(words) > 6:
+            generated = " ".join(words[:6])
+
+        return JSONResponse(content={"success": True, "title": generated})
+    except Exception as e:
+        logging.error(f"Error generating compose title: {e}", exc_info=True)
+        return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
+
+
+@app.post("/api/compose/ai-edit")
+async def ai_edit_compose_content(
+    request: ComposeContentRequest,
+    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
+):
+    account_id = current_ids["account_id"]
+    aac_user_id = current_ids["aac_user_id"]
+
+    try:
+        body_text = str(request.body or "").strip()
+        if not body_text:
+            return JSONResponse(content={"success": False, "error": "Composition body is empty"}, status_code=400)
+
+        llm_query = f"""You are editing an AAC-composed letter.
+
+Original composition:
+{body_text}
+
+Tasks:
+- Clean up grammar and punctuation.
+- Resolve incomplete thoughts where possible while preserving meaning.
+- Keep the tone and message intact.
+- Return only the revised composition text.
+"""
+
+        edited = await _generate_gemini_content_with_fallback(llm_query, None, account_id, aac_user_id)
+        edited = _strip_markdown_code_fences(str(edited or "")).strip()
+        edited = re.sub(r"\s+\n", "\n", edited).strip()
+
+        if not edited:
+            edited = body_text
+
+        return JSONResponse(content={"success": True, "edited_body": edited})
+    except Exception as e:
+        logging.error(f"Error AI editing composition: {e}", exc_info=True)
+        return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
 
 
 # --- Mood Selection Endpoint ---
@@ -13047,6 +13935,51 @@ def _story_builder_collection_ref(account_id: str, aac_user_id: str):
     )
 
 
+def _compose_documents_collection_ref(account_id: str, aac_user_id: str):
+    return firestore_db.collection(
+        f"{FIRESTORE_ACCOUNTS_COLLECTION}/{account_id}/{FIRESTORE_ACCOUNT_USERS_SUBCOLLECTION}/{aac_user_id}/compose_documents"
+    )
+
+
+def _normalize_compose_doc_for_response(doc_id: str, compose_doc: Dict[str, Any]) -> Dict[str, Any]:
+    doc_data = compose_doc if isinstance(compose_doc, dict) else {}
+    safe_type = str(doc_data.get("document_type", "story")).strip().lower()
+    if safe_type not in {"story", "email"}:
+        safe_type = "story"
+
+    title = re.sub(r"\s+", " ", str(doc_data.get("title", "")).strip())
+    body = str(doc_data.get("body", ""))
+    subject = re.sub(r"\s+", " ", str(doc_data.get("subject", "")).strip())
+
+    to_list = [str(item).strip() for item in (doc_data.get("to") or []) if str(item).strip()]
+    cc_list = [str(item).strip() for item in (doc_data.get("cc") or []) if str(item).strip()]
+    bcc_list = [str(item).strip() for item in (doc_data.get("bcc") or []) if str(item).strip()]
+    reply_to_message_id = _clean_header_token(doc_data.get("reply_to_message_id", ""))
+    reply_to_thread_id = _clean_header_token(doc_data.get("reply_to_thread_id", ""))
+    in_reply_to = _clean_header_token(doc_data.get("in_reply_to", ""))
+    references = _clean_header_token(doc_data.get("references", ""))
+
+    return {
+        "id": doc_id,
+        "document_type": safe_type,
+        "title": title,
+        "body": body,
+        "subject": subject,
+        "to": to_list,
+        "cc": cc_list,
+        "bcc": bcc_list,
+        "reply_to_message_id": reply_to_message_id,
+        "reply_to_thread_id": reply_to_thread_id,
+        "in_reply_to": in_reply_to,
+        "references": references,
+        "created_at": doc_data.get("created_at"),
+        "updated_at": doc_data.get("updated_at"),
+        "illustration_url": str(doc_data.get("illustration_url", "")).strip(),
+        "illustration_status": str(doc_data.get("illustration_status", "not_created")).strip() or "not_created",
+        "illustration_style": str(doc_data.get("illustration_style", "")).strip(),
+    }
+
+
 def _build_story_transcript_context(transcript: Optional[List[Dict[str, str]]]) -> str:
     if not transcript:
         return "No prior story Q&A yet."
@@ -13894,6 +14827,10 @@ class FreestyleCategoryWordsRequest(BaseModel):
     exclude_words: Optional[List[str]] = Field(default_factory=list, description="Words to exclude from generation")
     current_mood: Optional[str] = Field(None, description="Current user mood to influence word generation")
     custom_prompt: Optional[str] = Field(None, description="Custom prompt instructions that take priority over general category handling")
+    context: Optional[str] = Field(None, description="Context from LLM query or button label")
+    source_page: Optional[str] = Field(None, description="Page name the user navigated from")
+    is_llm_generated: bool = Field(default=False, description="Whether the source page was LLM-generated")
+    originating_button_text: Optional[str] = Field(None, description="Text of the button that originated the freestyle navigation")
 
 @app.post("/api/freestyle/category-words")
 async def generate_category_words(
@@ -13983,6 +14920,27 @@ While maintaining a {vocabulary_level} level approach, prioritize SPECIFIC NOUNS
             user_context_parts.append(f"Current activity: {user_current['activity']}")
             
         user_context = " | ".join(user_context_parts) if user_context_parts else "General conversation"
+        live_context_summary = ", ".join(
+            part for part in [
+                f"location={user_current.get('location')}" if user_current.get('location') else "",
+                f"people={user_current.get('people')}" if user_current.get('people') else "",
+                f"activity={user_current.get('activity')}" if user_current.get('activity') else "",
+            ]
+            if part and not part.endswith(('=None', '=Unknown', '=Idle'))
+        ) or "none"
+
+        navigation_context = ""
+        if request.context and request.source_page:
+            if request.is_llm_generated:
+                navigation_context = f"Coming from LLM-generated page '{request.source_page}' with context: {request.context}"
+            else:
+                navigation_context = f"Coming from page '{request.source_page}' with topic: {request.context}"
+        elif request.source_page and request.source_page.lower() not in ('home', 'unknownpage', ''):
+            navigation_context = f"Coming from page '{request.source_page}'"
+            if request.originating_button_text:
+                navigation_context += f" (via button: {request.originating_button_text})"
+        elif request.originating_button_text:
+            navigation_context = f"Coming from button: {request.originating_button_text}"
         
         # Detect if this is an adjective-only category (descriptive attributes)
         category_lower = request.category.lower()
@@ -14036,12 +14994,18 @@ INSTRUCTIONS:
 {request.custom_prompt}
 {adjective_constraint}
 
+AVAILABLE CONTEXT:
+- User context: {user_context}
+{f"- Navigation context: {navigation_context}" if navigation_context else ""}
+
 CONSTRAINTS:
 - You MUST follow all "Do not" or "Exclude" instructions in the prompt above.
 - Provide exactly {freestyle_options} words or short phrases (1-3 words each).
 - STRICTLY ADHERE to the user's instructions.
 - PRIORITIZE common, everyday conversational words. Avoid complex, obscure, or overly unique words (e.g., use "loud" instead of "cacophonous").
 - Do NOT include mood or emotion words (like "happy", "sad", "melancholy") unless the instructions specifically ask for feelings. Focus on describing the object, event, or experience itself.
+- Treat current location, people present, activity, and the page/button the user came from as first-class ranking signals when they semantically fit the requested category.
+- If the live context clearly matches the category, bias the list toward words that are useful right now instead of generic category fillers.
 {context_clause}
 {exclude_clause}
 
@@ -14074,6 +15038,8 @@ Requirements:
 - ALL words must semantically belong to the category type '{request.category}'
 - PRIORITIZE common, everyday conversational words. Avoid complex, obscure, or overly unique words.
 - Do NOT include mood or emotion words unless the category is explicitly about feelings.
+- Use current location, people present, activity, and page/button context as first-class ranking signals when they fit the category.
+- If the live context clearly matches the category, bias the list toward words that are useful in the immediate situation instead of generic category members.
 - Use personal context to choose the most relevant and useful words from the category
 - Words should be commonly used and appropriate for AAC communication
 - For each word, provide a related keyword for image searching
@@ -14082,6 +15048,9 @@ Requirements:
 - If the word itself is the best keyword, use the same word (e.g., "car|car")
 - DO NOT use numbered lists (1., 2., etc.) - just provide the words one per line
 - DO NOT include explanatory text or headers - only the word|keyword pairs
+
+Live context: {live_context_summary}
+Navigation context: {navigation_context if navigation_context else 'none'}
 
 Category: {request.category}"""
 
@@ -15453,8 +16422,14 @@ def normalize_search_term(term: str) -> str:
         else:
             # jokes → joke
             return term[:-1]
-    elif term_lower.endswith('s') and len(term_lower) > 2 and not term_lower.endswith('ss'):
-        # questions → question, foods → food, but not "bass"
+    elif term_lower.endswith('s') and len(term_lower) > 2:
+        # Preserve common singular words that naturally end in 's'
+        # (e.g., calculus, genius, status, lens, bass)
+        singular_s_endings = ('us', 'is', 'ss', 'ns')
+        if term_lower.endswith(singular_s_endings):
+            return term
+
+        # questions → question, foods → food
         return term[:-1]
     
     return term
@@ -18260,6 +19235,140 @@ async def save_tap_nav_config(account_id: str, aac_user_id: str, config_data: Di
         logging.error(f"Error saving tap navigation config: {e}")
         return False
 
+
+def normalize_compose_tap_config(config_data: Optional[Dict]) -> Tuple[Optional[Dict], bool]:
+    if not isinstance(config_data, dict):
+        return config_data, False
+
+    buttons = config_data.get('buttons')
+    if not isinstance(buttons, list):
+        return config_data, False
+
+    normalized = False
+    expected_ask_button = {
+        'text_color': '#000000',
+        'special_function': None,
+        'custom_audio_file': None,
+        'words_prompt': None,
+        'id': 'ask_btn',
+        'prompt_exclusions': None,
+        'speech_text': None,
+        'prompt_category': 'ask',
+        'llm_prompt': 'Generate AAC-friendly starters, words, and short phrases for asking questions or making requests. When starting a sentence, strongly prefer natural openings like Can, Could, May, Will, Would, Please, What, Where, Why, How, Do, and Is.',
+        'static_options': None,
+        'label': 'Ask',
+        'image_url': None,
+        'prompt_examples': None,
+        'hidden': False,
+        'children': [
+            {
+                'text_color': '#000000',
+                'special_function': None,
+                'custom_audio_file': None,
+                'words_prompt': None,
+                'id': 'ask_question_btn',
+                'prompt_exclusions': None,
+                'speech_text': None,
+                'prompt_category': 'questions',
+                'llm_prompt': 'Generate question words and short AAC-friendly question phrases for asking about people, things, places, needs, choices, feelings, and preferences',
+                'static_options': None,
+                'label': 'Question',
+                'image_url': None,
+                'prompt_examples': None,
+                'hidden': False,
+                'children': [],
+                'prompt_topic': None,
+                'background_color': '#ffffff'
+            },
+            {
+                'text_color': '#000000',
+                'special_function': None,
+                'custom_audio_file': None,
+                'words_prompt': None,
+                'id': 'ask_request_btn',
+                'prompt_exclusions': None,
+                'speech_text': None,
+                'prompt_category': 'requests',
+                'llm_prompt': 'Generate AAC-friendly request starters, request words, and short request phrases for asking for help, objects, actions, comfort, food, drinks, and assistance. When starting a sentence, strongly prefer natural request openings like Can, Could, May, Will, Would, Please, I need, and I want.',
+                'static_options': None,
+                'label': 'Request',
+                'image_url': None,
+                'prompt_examples': None,
+                'hidden': False,
+                'children': [],
+                'prompt_topic': None,
+                'background_color': '#ffffff'
+            }
+        ],
+        'prompt_topic': None,
+        'background_color': '#FFFFFF'
+    }
+    expected_respond_button = {
+        'text_color': '#000000',
+        'special_function': None,
+        'custom_audio_file': None,
+        'words_prompt': None,
+        'id': 'respond_btn',
+        'prompt_exclusions': None,
+        'speech_text': None,
+        'prompt_category': 'respond',
+        'llm_prompt': 'Generate AAC-friendly response starters, words, and short phrases for responding to a question or request. When starting a sentence, strongly prefer natural response openings like Yes, No, Okay, Sure, Maybe, I can, I cannot, Please, Thank you, and Not right now.',
+        'static_options': None,
+        'label': 'Respond',
+        'image_url': None,
+        'prompt_examples': None,
+        'hidden': False,
+        'children': [],
+        'prompt_topic': None,
+        'background_color': '#FFFFFF'
+    }
+
+    ask_index = None
+
+    for index, button in enumerate(buttons):
+        if not isinstance(button, dict):
+            continue
+
+        button_id = str(button.get('id') or '').strip().lower()
+        button_label = str(button.get('label') or '').strip().lower()
+        if button_id not in {'requests_btn', 'ask_btn'} and button_label not in {'requests', 'questions', 'ask'}:
+            continue
+
+        if button != expected_ask_button:
+            button.clear()
+            button.update(copy.deepcopy(expected_ask_button))
+            normalized = True
+        ask_index = index
+        break
+
+    if ask_index is not None:
+        respond_index = None
+        for index, button in enumerate(buttons):
+            if not isinstance(button, dict):
+                continue
+            button_id = str(button.get('id') or '').strip().lower()
+            button_label = str(button.get('label') or '').strip().lower()
+            if button_id == 'respond_btn' or button_label == 'respond':
+                respond_index = index
+                break
+
+        if respond_index is None:
+            buttons.insert(ask_index + 1, copy.deepcopy(expected_respond_button))
+            normalized = True
+        else:
+            if buttons[respond_index] != expected_respond_button:
+                buttons[respond_index].clear()
+                buttons[respond_index].update(copy.deepcopy(expected_respond_button))
+                normalized = True
+            if respond_index != ask_index + 1:
+                respond_button = buttons.pop(respond_index)
+                if respond_index < ask_index:
+                    ask_index -= 1
+                buttons.insert(ask_index + 1, respond_button)
+                normalized = True
+
+    return config_data, normalized
+
 def create_default_tap_config(account_id: str, aac_user_id: str) -> Dict:
     """Create a comprehensive default tap navigation configuration based on production template"""
     from datetime import datetime
@@ -18488,10 +19597,10 @@ def create_default_tap_config(account_id: str, aac_user_id: str) -> Dict:
             "id": "requests_btn",
             "prompt_exclusions": None,
             "speech_text": None,
-            "prompt_category": "requests",
-            "llm_prompt": "Generate phrases for making requests and asking for things",
+            "prompt_category": "questions",
+            "llm_prompt": "Generate question words and short AAC-friendly question phrases for asking about people, things, places, needs, choices, feelings, and preferences",
             "static_options": None,
-            "label": "Requests",
+            "label": "Questions",
             "image_url": None,
             "prompt_examples": None,
             "hidden": False,
@@ -19576,6 +20685,8 @@ def create_default_tap_config(account_id: str, aac_user_id: str) -> Dict:
     # Add timestamps
     config['created_at'] = datetime.now().isoformat()
     config['updated_at'] = datetime.now().isoformat()
+
+    config, _ = normalize_compose_tap_config(config)
     
     return config
 
@@ -19597,6 +20708,10 @@ async def get_tap_interface_config(
             # Create and save default configuration
             config_data = create_default_tap_config(account_id, aac_user_id)
             await save_tap_nav_config(account_id, aac_user_id, config_data)
+        else:
+            config_data, was_normalized = normalize_compose_tap_config(config_data)
+            if was_normalized:
+                await save_tap_nav_config(account_id, aac_user_id, config_data)
         
         # DEBUG: Log words_prompt presence
         if config_data and 'buttons' in config_data:

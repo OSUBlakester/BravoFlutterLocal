@@ -8,6 +8,19 @@ import 'package:permission_handler/permission_handler.dart';
 
 class WakeWordService {
   final List<String> wakeWords;
+
+  /// The group wake word shared across all devices in a room.
+  /// Defaults to 'hey friends'. Set this at app init via [setGroupWakeWord].
+  /// When backend support is added, load the value from UserSettings and call [setGroupWakeWord].
+  static String _groupWakeWord = 'hey friends';
+
+  /// Update the group wake word from settings. Call this after loading UserSettings.
+  static void setGroupWakeWord(String phrase) {
+    final normalized = phrase.trim().toLowerCase();
+    _groupWakeWord = normalized.isEmpty ? 'hey friends' : normalized;
+    debugPrint('[WakeWordService] Group wake word set to: "$_groupWakeWord"');
+  }
+
   static bool wakeWordShouldBeActive = true;
   static WakeWordService? _currentInstance; // Static reference to current instance
   
@@ -80,6 +93,40 @@ class WakeWordService {
   
   WakeWordService({required this.wakeWords}) {
     _currentInstance = this; // Set the static reference to this instance
+  }
+
+  String _normalizeWakeText(String input) {
+    return input
+        .toLowerCase()
+        .replaceAll(RegExp(r"[^a-z0-9\s']"), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+  }
+
+  bool _containsWakeWord(String transcript) {
+    final normalizedTranscript = _normalizeWakeText(transcript);
+    if (normalizedTranscript.isEmpty) return false;
+
+    final configuredWakeWords = wakeWords
+        .map((word) => _normalizeWakeText(word))
+        .where((word) => word.isNotEmpty)
+        .toSet();
+
+    // Build group wake word variants (e.g. 'hey friends' and 'hey friend')
+    final groupWord = _normalizeWakeText(_groupWakeWord);
+    final groupVariants = <String>{
+      if (groupWord.isNotEmpty) groupWord,
+      // Singular variant: strip trailing 's' if it ends with 'friends'
+      if (groupWord.endsWith('friends')) groupWord.substring(0, groupWord.length - 1),
+    };
+
+    final allWakeWords = <String>{
+      ...configuredWakeWords,
+      ...groupVariants,
+    };
+
+    return allWakeWords.any((wakeWord) =>
+        normalizedTranscript.contains(wakeWord));
   }
 
   /// Static method to restart the current instance's wake word service
@@ -634,7 +681,7 @@ void resumeWakeWordAutoRestart() {
       onStatusBarUpdate!(transcript);
     }
     
-    if (!_wakeWordDetected && wakeWords.any((w) => transcript.contains(w))) {
+    if (!_wakeWordDetected && _containsWakeWord(transcript)) {
       debugPrint('Setting _wakeWordDetected to true for sessionId=$sessionId');
       _wakeWordDetected = true;
       _processingWakeWord = true; // Protect this state during processing

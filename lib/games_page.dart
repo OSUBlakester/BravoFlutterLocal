@@ -9,6 +9,7 @@ import 'package:http/http.dart' as http;
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:provider/provider.dart';
 import 'package:flutter_tts/flutter_tts.dart';
+import 'package:just_audio/just_audio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'config/environment_config.dart';
 import 'services/user_settings_provider.dart';
@@ -121,6 +122,8 @@ class _GamesPageState extends State<GamesPage> {
   int _guessNoInputDeadlineMs = 0;
   Timer? _playerGuessCommitTimer;
   String _pendingPlayerGuessTranscript = '';
+  Timer? _playerQuestionCommitTimer;
+  String _pendingPlayerQuestionTranscript = '';
   Timer? _guessClueSilenceTimer;
   String _lastPartialGuessClueTranscript = '';
   bool _guessClueDetectedFirstSpeech = false;
@@ -138,6 +141,7 @@ class _GamesPageState extends State<GamesPage> {
       false; // Flag for when waiting for switch to start scanning
   bool _isAnnouncingScanningPrompt =
       false; // Track if announcing during scanning prompts (for Tab interrupt)
+    DateTime? _lastWaitForSwitchNotificationAt;
 
   // Speech bubble overlay
   bool _showSpeechBubble = false;
@@ -165,6 +169,40 @@ class _GamesPageState extends State<GamesPage> {
       'apiEndpoint': 'guess-what',
     },
   };
+
+  // Default category lists for each guess game type (used as fallback when /api/guess-*/categories is unavailable)
+  static const Map<String, List<String>> _defaultGuessCategories = {
+    'who': [
+      'Movie Character',
+      'TV Character',
+      'Fictional Character',
+      'Sports Figure',
+      'Musician',
+      'Superhero',
+      'Historical Figure'
+    ],
+    'where': [
+      'Cities',
+      'States',
+      'Countries',
+      'Vacation Spots',
+      'Stores',
+      'Restaurants',
+      'Landmarks',
+      'National Parks'
+    ],
+    'what': [
+      'Food',
+      'Animals',
+      'Electronics',
+      'Toys',
+      'Sports Equipment',
+      'Movies',
+      'TV Shows',
+      'Things you wear'
+    ],
+  };
+
   String? _guessGameType; // 'who', 'where', 'what'
   String? _guessMode; // 'mode-a' or 'mode-b'
   String? _guessCategory;
@@ -336,6 +374,7 @@ class _GamesPageState extends State<GamesPage> {
     _listeningRestartTimer?.cancel();
     _guessNoInputTimer?.cancel();
     _playerGuessCommitTimer?.cancel();
+    _playerQuestionCommitTimer?.cancel();
     _guessClueSilenceTimer?.cancel();
     _storyQuestionCommitTimer?.cancel();
     super.dispose();
@@ -431,6 +470,37 @@ class _GamesPageState extends State<GamesPage> {
     _playerGuessCommitTimer?.cancel();
     _playerGuessCommitTimer = null;
     _pendingPlayerGuessTranscript = '';
+  }
+
+  void _schedulePlayerQuestionCommit(String transcript) {
+    final cleanedTranscript = transcript.trim();
+    if (cleanedTranscript.isEmpty) return;
+
+    _pendingPlayerQuestionTranscript = cleanedTranscript;
+    _playerQuestionCommitTimer?.cancel();
+    _playerQuestionCommitTimer = Timer(const Duration(milliseconds: 1200), () {
+      if (!mounted || _isExiting) return;
+      if (!_isListening || _listeningFor != 'player_question') return;
+      if (_isQuestionTransitionInProgress) return;
+
+      final committedTranscript = _pendingPlayerQuestionTranscript.trim();
+      if (committedTranscript.isEmpty) return;
+
+      debugPrint(
+        'Games page: [PLAYER_QUESTION_COMMIT] Committing partial transcript: "$committedTranscript"',
+      );
+      _isQuestionTransitionInProgress = true;
+      _isProcessingSpeechResult = true;
+      _lastProcessedTranscript = committedTranscript;
+      _speech.stop();
+      _handleSpeechResult(committedTranscript, 'player_question');
+    });
+  }
+
+  void _clearPlayerQuestionCommitTimer() {
+    _playerQuestionCommitTimer?.cancel();
+    _playerQuestionCommitTimer = null;
+    _pendingPlayerQuestionTranscript = '';
   }
 
   void _resetGuessClueSilenceTimer() {
@@ -683,6 +753,9 @@ class _GamesPageState extends State<GamesPage> {
     } else if (listeningFor == 'player_question' ||
         listeningFor == 'story_partner_question') {
       _isQuestionTransitionInProgress = false;
+      if (listeningFor == 'player_question') {
+        _clearPlayerQuestionCommitTimer();
+      }
     } else if (listeningFor == 'player_guess') {
       _isGuessTransitionInProgress = false;
       if (_guessModeBListeningForClue) {
@@ -702,8 +775,9 @@ class _GamesPageState extends State<GamesPage> {
     // Set pause duration based on what we're listening for
     final pauseDuration = (listeningFor == 'story_partner_question')
         ? Duration(seconds: 3)
-        : (listeningFor == 'player_question' ||
-              listeningFor == 'yes_no' ||
+      : (listeningFor == 'player_question')
+      ? Duration(seconds: 4)
+      : (listeningFor == 'yes_no' ||
               listeningFor == 'yes_no_guess' ||
               listeningFor == 'hm_letter_count' ||
               listeningFor == 'hm_yes_no')
@@ -728,8 +802,11 @@ class _GamesPageState extends State<GamesPage> {
 
           if (DateTime.now().millisecondsSinceEpoch <
               _ignoreSpeechInputUntilMs) {
+            final remainingMs =
+                _ignoreSpeechInputUntilMs -
+                DateTime.now().millisecondsSinceEpoch;
             debugPrint(
-              'Games page: [RESULT_IGNORED] Ignoring transcript during TTS guard window',
+              'Games page: [RESULT_IGNORED] Ignoring transcript during TTS guard window (mode=$listeningFor, remaining=${remainingMs > 0 ? remainingMs : 0}ms)',
             );
             return;
           }
@@ -821,15 +898,19 @@ class _GamesPageState extends State<GamesPage> {
             _speech.stop();
             _handleSpeechResult(transcript, listeningFor);
           } else if (listeningFor == 'player_question') {
-            if (!_isQuestionTransitionInProgress &&
-                result.finalResult &&
-                transcript.isNotEmpty) {
-              debugPrint('Games page: [MATCH_FOUND] DETECTED player question');
-              _isQuestionTransitionInProgress = true;
-              _isProcessingSpeechResult = true;
-              _lastProcessedTranscript = transcript;
-              _speech.stop();
-              _handleSpeechResult(transcript, listeningFor);
+            if (!_isQuestionTransitionInProgress && transcript.isNotEmpty) {
+              if (result.finalResult) {
+                debugPrint(
+                  'Games page: [MATCH_FOUND] DETECTED player question (final)',
+                );
+                _isQuestionTransitionInProgress = true;
+                _isProcessingSpeechResult = true;
+                _lastProcessedTranscript = transcript;
+                _speech.stop();
+                _handleSpeechResult(transcript, listeningFor);
+              } else {
+                _schedulePlayerQuestionCommit(transcript);
+              }
             }
           } else if (listeningFor == 'player_guess') {
             if (!_isGuessTransitionInProgress && transcript.isNotEmpty) {
@@ -969,7 +1050,59 @@ class _GamesPageState extends State<GamesPage> {
       await Future.delayed(preListenDelay);
     }
     if (!mounted || _isExiting) return;
-    _suppressSpeechInputFor(ignoreWindow);
+
+    var effectiveIgnoreWindow = ignoreWindow;
+    if (listeningFor == 'wake_word' || listeningFor == 'story_wake_word') {
+      final cappedMs = ignoreWindow.inMilliseconds > 900
+          ? 900
+          : ignoreWindow.inMilliseconds;
+      effectiveIgnoreWindow = Duration(milliseconds: cappedMs);
+      debugPrint(
+        'Games page: [LISTEN_GUARD] Using reduced wake-word guard window: ${effectiveIgnoreWindow.inMilliseconds}ms',
+      );
+    } else if (listeningFor == 'player_guess') {
+      final cappedMs = ignoreWindow.inMilliseconds > 750
+          ? 750
+          : ignoreWindow.inMilliseconds;
+      effectiveIgnoreWindow = Duration(milliseconds: cappedMs);
+      debugPrint(
+        'Games page: [LISTEN_GUARD] Using reduced player-guess guard window: ${effectiveIgnoreWindow.inMilliseconds}ms',
+      );
+    } else if (listeningFor == 'yes_no_guess') {
+      final cappedMs = ignoreWindow.inMilliseconds > 800
+          ? 800
+          : ignoreWindow.inMilliseconds;
+      effectiveIgnoreWindow = Duration(milliseconds: cappedMs);
+      debugPrint(
+        'Games page: [LISTEN_GUARD] Using reduced yes/no-guess guard window: ${effectiveIgnoreWindow.inMilliseconds}ms',
+      );
+    } else if (listeningFor == 'ready' && _isGuessGame) {
+      final cappedMs = ignoreWindow.inMilliseconds > 900
+          ? 900
+          : ignoreWindow.inMilliseconds;
+      effectiveIgnoreWindow = Duration(milliseconds: cappedMs);
+      debugPrint(
+        'Games page: [LISTEN_GUARD] Using reduced guess-ready guard window: ${effectiveIgnoreWindow.inMilliseconds}ms',
+      );
+    } else if (listeningFor == 'intent') {
+      final cappedMs = ignoreWindow.inMilliseconds > 800
+          ? 800
+          : ignoreWindow.inMilliseconds;
+      effectiveIgnoreWindow = Duration(milliseconds: cappedMs);
+      debugPrint(
+        'Games page: [LISTEN_GUARD] Using reduced intent guard window: ${effectiveIgnoreWindow.inMilliseconds}ms',
+      );
+    } else if (listeningFor == 'player_question') {
+      final cappedMs = ignoreWindow.inMilliseconds > 850
+          ? 850
+          : ignoreWindow.inMilliseconds;
+      effectiveIgnoreWindow = Duration(milliseconds: cappedMs);
+      debugPrint(
+        'Games page: [LISTEN_GUARD] Using reduced player-question guard window: ${effectiveIgnoreWindow.inMilliseconds}ms',
+      );
+    }
+
+    _suppressSpeechInputFor(effectiveIgnoreWindow);
     await _startListening(listeningFor);
   }
 
@@ -979,6 +1112,8 @@ class _GamesPageState extends State<GamesPage> {
       _clearGuessNoInputTimeoutWindow();
       _clearPlayerGuessCommitTimer();
       _clearGuessClueSilenceTimer();
+    } else if (_listeningFor == 'player_question') {
+      _clearPlayerQuestionCommitTimer();
     } else if (_listeningFor == 'story_partner_question') {
       _clearStoryQuestionCommitTimer();
     }
@@ -1358,7 +1493,7 @@ class _GamesPageState extends State<GamesPage> {
           _debugFocusState('post_frame_focus');
         }
       });
-      // Don't play prompt - only mood selection and first grid page should play it
+      unawaited(_playWaitForSwitchNotification());
       return;
     }
 
@@ -1472,6 +1607,32 @@ class _GamesPageState extends State<GamesPage> {
       _currentScanIndex = 0;
     });
     _isWaitPromptActive = false;
+  }
+
+  Future<void> _playWaitForSwitchNotification() async {
+    final now = DateTime.now();
+    if (_lastWaitForSwitchNotificationAt != null &&
+        now.difference(_lastWaitForSwitchNotificationAt!).inMilliseconds <
+            1200) {
+      debugPrint(
+        'Games waitForSwitchNotification: Skipping duplicate notification playback',
+      );
+      return;
+    }
+    _lastWaitForSwitchNotificationAt = now;
+
+    final player = AudioPlayer();
+    try {
+      await player.setAsset('assets/notification_v2.mp3');
+      await player.play();
+      await player.playerStateStream.firstWhere(
+        (state) => state.processingState == ProcessingState.completed,
+      );
+    } catch (e) {
+      debugPrint('Games waitForSwitchNotification: Playback failed: $e');
+    } finally {
+      await player.dispose();
+    }
   }
 
   void _handleSelection() {
@@ -1838,7 +1999,7 @@ class _GamesPageState extends State<GamesPage> {
     await _speak('I\'m listening. Do you have a question or guess?');
     await _startListeningWithGuard(
       'intent',
-      preListenDelay: const Duration(milliseconds: 1200),
+      preListenDelay: const Duration(milliseconds: 450),
       ignoreWindow: const Duration(milliseconds: 3000),
     );
     _isWakeWordTransitionInProgress = false;
@@ -1857,7 +2018,7 @@ class _GamesPageState extends State<GamesPage> {
       await _speak('Ready for your question');
       await _startListeningWithGuard(
         'player_question',
-        preListenDelay: const Duration(milliseconds: 1200),
+        preListenDelay: const Duration(milliseconds: 450),
         ignoreWindow: const Duration(milliseconds: 3000),
       );
       _isIntentTransitionInProgress = false;
@@ -1865,7 +2026,7 @@ class _GamesPageState extends State<GamesPage> {
       await _speak('Ready for your guess');
       await _startListeningWithGuard(
         'player_guess',
-        preListenDelay: const Duration(milliseconds: 1200),
+        preListenDelay: const Duration(milliseconds: 450),
         ignoreWindow: const Duration(milliseconds: 3000),
       );
       _isIntentTransitionInProgress = false;
@@ -4665,46 +4826,80 @@ class _GamesPageState extends State<GamesPage> {
     });
 
     try {
+      final url = _getGuessApiUrl('categories');
+      debugPrint('[GuessGame] Loading categories from: $url');
+      debugPrint('[GuessGame] Using token: ${widget.idToken.substring(0, 20)}...');
+      debugPrint('[GuessGame] User ID: ${widget.aacUserId}');
+
       final response = await http.post(
-        Uri.parse(_getGuessApiUrl('categories')),
+        Uri.parse(url),
         headers: {
           'Content-Type': 'application/json',
           'Authorization': 'Bearer ${widget.idToken}',
           'X-User-ID': widget.aacUserId,
         },
         body: jsonEncode({}),
-      );
+      ).timeout(Duration(seconds: 30), onTimeout: () {
+        throw Exception('Request timed out after 30 seconds');
+      });
+
+      debugPrint('[GuessGame] Response status: ${response.statusCode}');
+      debugPrint('[GuessGame] Response headers: ${response.headers}');
+      debugPrint('[GuessGame] Response body: ${response.body.length} bytes');
+      
+      List<String> categories = [];
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        final categories = List<String>.from(data['all_categories'] ?? []);
-
-        _deferSelectionScanning = true;
-        setState(() {
-          _currentOptions = categories;
-          _currentOptionType = 'guess_category';
-          _currentView = 'guess_category_selection';
-          _statusText = 'Select a category';
-          _isLoading = false;
-        });
-
-        if (_enableScanning && mounted) {
-          Future.delayed(Duration(milliseconds: 500), () {
-            if (mounted) {
-              _deferSelectionScanning = false;
-              _restartScanningForSelectionStep(announceWaitPrompt: false);
-            }
-          });
-        } else {
-          _deferSelectionScanning = false;
+        try {
+          final data = jsonDecode(response.body);
+          debugPrint('[GuessGame] Parsed JSON: ${data.keys.toList()}');
+          
+          categories = List<String>.from(data['all_categories'] ?? []);
+          debugPrint('[GuessGame] Found ${categories.length} categories from backend: $categories');
+        } catch (parseError) {
+          debugPrint('[GuessGame] JSON parse error: $parseError');
+          debugPrint('[GuessGame] Raw body: ${response.body}');
+          // Fall through to use defaults below
         }
+      } else if (response.statusCode == 404) {
+        debugPrint('[GuessGame] HTTP 404 - categories endpoint unavailable, using local defaults');
       } else {
-        debugPrint('Error loading guess categories: ${response.statusCode}');
-        debugPrint('Error response body: ${response.body}');
-        throw Exception('Failed to load categories: ${response.statusCode}');
+        debugPrint('[GuessGame] HTTP error ${response.statusCode}');
+        debugPrint('[GuessGame] Error body: ${response.body}');
+      }
+
+      // If no categories were loaded from backend, use local defaults
+      if (categories.isEmpty) {
+        final gameType = _guessGameType ?? 'who';
+        categories = _defaultGuessCategories[gameType] ?? [];
+        debugPrint('[GuessGame] Using local fallback categories: $categories');
+      }
+
+      if (categories.isEmpty) {
+        throw Exception('No categories available (backend unavailable and no local defaults)');
+      }
+
+      _deferSelectionScanning = true;
+      setState(() {
+        _currentOptions = categories;
+        _currentOptionType = 'guess_category';
+        _currentView = 'guess_category_selection';
+        _statusText = 'Select a category';
+        _isLoading = false;
+      });
+
+      if (_enableScanning && mounted) {
+        Future.delayed(Duration(milliseconds: 500), () {
+          if (mounted) {
+            _deferSelectionScanning = false;
+            _restartScanningForSelectionStep(announceWaitPrompt: false);
+          }
+        });
+      } else {
+        _deferSelectionScanning = false;
       }
     } catch (e) {
-      debugPrint('Error loading guess categories: $e');
+      debugPrint('[GuessGame] Exception loading categories: $e');
       setState(() {
         _isLoading = false;
         _statusText = 'Error loading categories. Please try again.';
@@ -4779,36 +4974,87 @@ class _GamesPageState extends State<GamesPage> {
           'X-User-ID': widget.aacUserId,
         },
         body: jsonEncode({'category': _guessCategory, 'previous_people': []}),
-      );
+      ).timeout(Duration(seconds: 30));
+
+      List<String> peopleOptions = [];
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        _guessPeopleOptions = List<String>.from(data['people'] ?? []);
-
-        _deferSelectionScanning = true;
-        setState(() {
-          _currentOptions = _guessPeopleOptions;
-          _currentOptionType = 'guess_person';
-          _currentView = 'guess_person_selection';
-          _statusText = 'Choose your ${_guessConfig['itemType']}:';
-          _isLoading = false;
-        });
-
-        if (_enableScanning) {
-          Future.delayed(Duration(milliseconds: 500), () {
-            if (mounted) {
-              _deferSelectionScanning = false;
-              _restartScanningForSelectionStep();
-            }
-          });
-        } else {
-          _deferSelectionScanning = false;
+        try {
+          final data = jsonDecode(response.body);
+          peopleOptions = List<String>.from(data['people'] ?? []);
+          debugPrint('[GuessGame] Generated ${peopleOptions.length} ${_guessConfig['itemTypePlural']} from backend');
+        } catch (e) {
+          debugPrint('[GuessGame] Error parsing backend response: $e');
         }
+      } else if (response.statusCode == 404) {
+        debugPrint('[GuessGame] generate-people endpoint unavailable (404), using fallback');
       } else {
-        debugPrint('Error response: ${response.statusCode} - ${response.body}');
+        debugPrint('[GuessGame] Error response: ${response.statusCode} - ${response.body}');
+      }
+
+      // If no people generated from backend, use fallback via generate-options
+      if (peopleOptions.isEmpty) {
+        debugPrint('[GuessGame] Using LLM fallback to generate ${_guessConfig['itemTypePlural']}');
+        try {
+          final fallbackPrompt =
+              'Generate exactly 5 different ${_guessCategory!.toLowerCase()} ${_guessConfig['itemTypePlural']}. '
+              'Return them as a simple comma-separated list with no numbering, no explanation. Example: Item 1, Item 2, Item 3, Item 4, Item 5';
+
+          final fallbackResponse = await http.post(
+            Uri.parse('${EnvironmentConfig.apiBaseUrl}/api/generate-options'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer ${widget.idToken}',
+              'X-User-ID': widget.aacUserId,
+            },
+            body: jsonEncode({'prompt': fallbackPrompt, 'count': 5}),
+          ).timeout(Duration(seconds: 30));
+
+          if (fallbackResponse.statusCode == 200) {
+            try {
+              final data = jsonDecode(fallbackResponse.body);
+              final options = data['options'] as List<dynamic>?;
+              if (options != null && options.isNotEmpty) {
+                peopleOptions = options.map((o) => o.toString().trim()).toList();
+                debugPrint('[GuessGame] Generated ${peopleOptions.length} ${_guessConfig['itemTypePlural']} via fallback LLM');
+              }
+            } catch (e) {
+              debugPrint('[GuessGame] Error parsing fallback response: $e');
+            }
+          } else {
+            debugPrint('[GuessGame] Fallback LLM request failed: ${fallbackResponse.statusCode}');
+          }
+        } catch (e) {
+          debugPrint('[GuessGame] Error using fallback: $e');
+        }
+      }
+
+      if (peopleOptions.isEmpty) {
         throw Exception(
-          'Failed to generate ${_guessConfig['itemTypePlural']}: ${response.statusCode}',
+          'Failed to generate ${_guessConfig['itemTypePlural']}: no options available',
         );
+      }
+
+      _guessPeopleOptions = peopleOptions;
+
+      _deferSelectionScanning = true;
+      setState(() {
+        _currentOptions = _guessPeopleOptions;
+        _currentOptionType = 'guess_person';
+        _currentView = 'guess_person_selection';
+        _statusText = 'Choose your ${_guessConfig['itemType']}:';
+        _isLoading = false;
+      });
+
+      if (_enableScanning) {
+        Future.delayed(Duration(milliseconds: 500), () {
+          if (mounted) {
+            _deferSelectionScanning = false;
+            _restartScanningForSelectionStep();
+          }
+        });
+      } else {
+        _deferSelectionScanning = false;
       }
     } catch (e) {
       debugPrint('Error generating ${_guessConfig['itemTypePlural']}: $e');
@@ -4852,33 +5098,85 @@ class _GamesPageState extends State<GamesPage> {
           'category': _guessCategory,
           'previous_people': _guessPeopleOptions,
         }),
-      );
+      ).timeout(Duration(seconds: 30));
+
+      List<String> newPeopleOptions = [];
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        _guessPeopleOptions = List<String>.from(data['people'] ?? []);
-
-        _deferSelectionScanning = true;
-        setState(() {
-          _currentOptions = _guessPeopleOptions;
-          _currentOptionType = 'guess_person';
-          _currentView = 'guess_person_selection';
-          _statusText = 'Choose your ${_guessConfig['itemType']}:';
-          _isLoading = false;
-        });
-
-        if (_enableScanning) {
-          Future.delayed(Duration(milliseconds: 500), () {
-            if (mounted) {
-              _deferSelectionScanning = false;
-              _restartScanningForSelectionStep();
-            }
-          });
-        } else {
-          _deferSelectionScanning = false;
+        try {
+          final data = jsonDecode(response.body);
+          newPeopleOptions = List<String>.from(data['people'] ?? []);
+          debugPrint('[GuessGame] Refreshed ${newPeopleOptions.length} ${_guessConfig['itemTypePlural']} from backend');
+        } catch (e) {
+          debugPrint('[GuessGame] Error parsing backend response: $e');
         }
+      } else if (response.statusCode == 404) {
+        debugPrint('[GuessGame] generate-people endpoint unavailable (404), using fallback');
       } else {
-        throw Exception('Failed: ${response.statusCode}');
+        debugPrint('[GuessGame] Error response: ${response.statusCode} - ${response.body}');
+      }
+
+      // If no people generated from backend, use fallback via generate-options
+      if (newPeopleOptions.isEmpty) {
+        debugPrint('[GuessGame] Using LLM fallback to refresh ${_guessConfig['itemTypePlural']}');
+        try {
+          final fallbackPrompt =
+              'Generate 2 different ${_guessCategory!.toLowerCase()} ${_guessConfig['itemTypePlural']} NOT in this list: ${_guessPeopleOptions.join(', ')}. '
+              'Return them as a simple comma-separated list with no numbering, no explanation.';
+
+          final fallbackResponse = await http.post(
+            Uri.parse('${EnvironmentConfig.apiBaseUrl}/api/generate-options'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $idToken',
+              'X-User-ID': widget.aacUserId,
+            },
+            body: jsonEncode({'prompt': fallbackPrompt, 'count': 2}),
+          ).timeout(Duration(seconds: 30));
+
+          if (fallbackResponse.statusCode == 200) {
+            try {
+              final data = jsonDecode(fallbackResponse.body);
+              final options = data['options'] as List<dynamic>?;
+              if (options != null && options.isNotEmpty) {
+                newPeopleOptions = options.map((o) => o.toString().trim()).toList();
+                debugPrint('[GuessGame] Generated ${newPeopleOptions.length} ${_guessConfig['itemTypePlural']} via fallback LLM');
+              }
+            } catch (e) {
+              debugPrint('[GuessGame] Error parsing fallback response: $e');
+            }
+          } else {
+            debugPrint('[GuessGame] Fallback LLM request failed: ${fallbackResponse.statusCode}');
+          }
+        } catch (e) {
+          debugPrint('[GuessGame] Error using fallback: $e');
+        }
+      }
+
+      if (newPeopleOptions.isNotEmpty) {
+        _guessPeopleOptions.addAll(newPeopleOptions);
+      } else {
+        throw Exception('Failed to refresh ${_guessConfig['itemTypePlural']}: no options available');
+      }
+
+      _deferSelectionScanning = true;
+      setState(() {
+        _currentOptions = _guessPeopleOptions;
+        _currentOptionType = 'guess_person';
+        _currentView = 'guess_person_selection';
+        _statusText = 'Choose your ${_guessConfig['itemType']}:';
+        _isLoading = false;
+      });
+
+      if (_enableScanning) {
+        Future.delayed(Duration(milliseconds: 500), () {
+          if (mounted) {
+            _deferSelectionScanning = false;
+            _restartScanningForSelectionStep();
+          }
+        });
+      } else {
+        _deferSelectionScanning = false;
       }
     } catch (e) {
       debugPrint('Error refreshing people options: $e');
@@ -4903,11 +5201,25 @@ class _GamesPageState extends State<GamesPage> {
     _speak("I've made my selection. Give me a moment to pick my clues.");
 
     try {
+      // Refresh token before API call
+      final user = FirebaseAuth.instance.currentUser;
+      String idToken = widget.idToken;
+      if (user != null) {
+        try {
+          final refreshedToken = await user.getIdToken(true);
+          if (refreshedToken != null && refreshedToken.isNotEmpty) {
+            idToken = refreshedToken;
+          }
+        } catch (e) {
+          debugPrint('Token refresh failed: $e');
+        }
+      }
+
       final response = await http.post(
         Uri.parse(_getGuessApiUrl('generate-clues')),
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Bearer ${widget.idToken}',
+          'Authorization': 'Bearer $idToken',
           'X-User-ID': widget.aacUserId,
         },
         body: jsonEncode({
@@ -4915,19 +5227,70 @@ class _GamesPageState extends State<GamesPage> {
           'selected_person': person,
           'previous_clues': [],
         }),
-      );
+      ).timeout(Duration(seconds: 30));
+
+      List<dynamic> cluesData = [];
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        _guessCluesAvailable = List<dynamic>.from(data['clues'] ?? []);
+        try {
+          final data = jsonDecode(response.body);
+          cluesData = List<dynamic>.from(data['clues'] ?? []);
+          debugPrint('[GuessGame] Generated ${cluesData.length} clues from backend');
+        } catch (e) {
+          debugPrint('[GuessGame] Error parsing backend clues response: $e');
+        }
+      } else if (response.statusCode == 404) {
+        debugPrint('[GuessGame] generate-clues endpoint unavailable (404), using fallback');
+      } else {
+        debugPrint('[GuessGame] Error response: ${response.statusCode} - ${response.body}');
+      }
+
+      // If no clues generated from backend, use fallback via generate-options
+      if (cluesData.isEmpty) {
+        debugPrint('[GuessGame] Using LLM fallback to generate clues');
+        try {
+          final fallbackPrompt =
+              'Generate 3 specific clues to help someone guess the ${_guessCategory!.toLowerCase()} "$person". '
+              'Each clue should be a single sentence. Return them as a simple numbered list: "1. ...\\n2. ...\\n3. ..."';
+
+          final fallbackResponse = await http.post(
+            Uri.parse('${EnvironmentConfig.apiBaseUrl}/api/generate-options'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $idToken',
+              'X-User-ID': widget.aacUserId,
+            },
+            body: jsonEncode({'prompt': fallbackPrompt, 'count': 3}),
+          ).timeout(Duration(seconds: 30));
+
+          if (fallbackResponse.statusCode == 200) {
+            try {
+              final data = jsonDecode(fallbackResponse.body);
+              final options = data['options'] as List<dynamic>?;
+              if (options != null && options.isNotEmpty) {
+                cluesData = options.map((o) => {'text': o.toString().trim()}).toList();
+                debugPrint('[GuessGame] Generated ${cluesData.length} clues via fallback LLM');
+              }
+            } catch (e) {
+              debugPrint('[GuessGame] Error parsing fallback clues response: $e');
+            }
+          } else {
+            debugPrint('[GuessGame] Fallback LLM clues request failed: ${fallbackResponse.statusCode}');
+          }
+        } catch (e) {
+          debugPrint('[GuessGame] Error using fallback for clues: $e');
+        }
+      }
+
+      if (cluesData.isNotEmpty) {
+        _guessCluesAvailable = cluesData;
         _guessCluesGiven = [];
         _guessGuessesRemaining = 3;
         _guessGuessesAttempted = [];
 
         _showGuessClueScreen();
       } else {
-        debugPrint('Error response: ${response.statusCode} - ${response.body}');
-        throw Exception('Failed to generate clues: ${response.statusCode}');
+        throw Exception('Failed to generate clues: no options available');
       }
     } catch (e) {
       debugPrint('Error generating clues: $e');
@@ -5038,11 +5401,25 @@ class _GamesPageState extends State<GamesPage> {
         ),
       ];
 
+      // Refresh token before API call
+      final user = FirebaseAuth.instance.currentUser;
+      String idToken = widget.idToken;
+      if (user != null) {
+        try {
+          final refreshedToken = await user.getIdToken(true);
+          if (refreshedToken != null && refreshedToken.isNotEmpty) {
+            idToken = refreshedToken;
+          }
+        } catch (e) {
+          debugPrint('Token refresh failed: $e');
+        }
+      }
+
       final response = await http.post(
         Uri.parse(_getGuessApiUrl('generate-clues')),
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Bearer ${widget.idToken}',
+          'Authorization': 'Bearer $idToken',
           'X-User-ID': widget.aacUserId,
         },
         body: jsonEncode({
@@ -5050,14 +5427,70 @@ class _GamesPageState extends State<GamesPage> {
           'selected_person': _guessSelectedPerson,
           'previous_clues': allShownClues,
         }),
-      );
+      ).timeout(Duration(seconds: 30));
+
+      List<dynamic> cluesData = [];
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        _guessCluesAvailable = List<dynamic>.from(data['clues'] ?? []);
+        try {
+          final data = jsonDecode(response.body);
+          cluesData = List<dynamic>.from(data['clues'] ?? []);
+          debugPrint('[GuessGame] Generated ${cluesData.length} refreshed clues from backend');
+        } catch (e) {
+          debugPrint('[GuessGame] Error parsing backend refreshed clues response: $e');
+        }
+      } else if (response.statusCode == 404) {
+        debugPrint('[GuessGame] generate-clues endpoint unavailable (404), using fallback');
+      } else {
+        debugPrint('[GuessGame] Error response: ${response.statusCode} - ${response.body}');
+      }
+
+      // If no clues generated from backend, use fallback via generate-options
+      if (cluesData.isEmpty) {
+        debugPrint('[GuessGame] Using LLM fallback to refresh clues');
+        try {
+          final shownCluesStr = allShownClues.isNotEmpty
+              ? 'Already shown: ${allShownClues.join(", ")}. '
+              : '';
+          final fallbackPrompt =
+              'Generate 1 new clue to help guess the ${_guessCategory!.toLowerCase()} "$_guessSelectedPerson". '
+              '${shownCluesStr}'
+              'Make it a different type of clue than what was already shown.';
+
+          final fallbackResponse = await http.post(
+            Uri.parse('${EnvironmentConfig.apiBaseUrl}/api/generate-options'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $idToken',
+              'X-User-ID': widget.aacUserId,
+            },
+            body: jsonEncode({'prompt': fallbackPrompt, 'count': 1}),
+          ).timeout(Duration(seconds: 30));
+
+          if (fallbackResponse.statusCode == 200) {
+            try {
+              final data = jsonDecode(fallbackResponse.body);
+              final options = data['options'] as List<dynamic>?;
+              if (options != null && options.isNotEmpty) {
+                cluesData = options.map((o) => {'text': o.toString().trim()}).toList();
+                debugPrint('[GuessGame] Generated ${cluesData.length} refreshed clue(s) via fallback LLM');
+              }
+            } catch (e) {
+              debugPrint('[GuessGame] Error parsing fallback refreshed clues response: $e');
+            }
+          } else {
+            debugPrint('[GuessGame] Fallback LLM refreshed clues request failed: ${fallbackResponse.statusCode}');
+          }
+        } catch (e) {
+          debugPrint('[GuessGame] Error using fallback for refreshed clues: $e');
+        }
+      }
+
+      if (cluesData.isNotEmpty) {
+        _guessCluesAvailable = cluesData;
         _showGuessClueScreen();
       } else {
-        throw Exception('Failed: ${response.statusCode}');
+        throw Exception('Failed to refresh clues: no options available');
       }
     } catch (e) {
       debugPrint('Error refreshing clues: $e');
@@ -5305,7 +5738,11 @@ class _GamesPageState extends State<GamesPage> {
     await _speak('Listening for your clue now.');
     _clearGuessClueSilenceTimer();
     _guessModeBListeningForClue = true;
-    await _startListening('player_guess');
+    await _startListeningWithGuard(
+      'player_guess',
+      preListenDelay: const Duration(milliseconds: 900),
+      ignoreWindow: const Duration(milliseconds: 1500),
+    );
   }
 
   // Mode B: Clue captured from speech
@@ -5328,11 +5765,25 @@ class _GamesPageState extends State<GamesPage> {
 
   Future<void> _generateGuessModeBGuesses() async {
     try {
+      // Refresh token before API call
+      final user = FirebaseAuth.instance.currentUser;
+      String idToken = widget.idToken;
+      if (user != null) {
+        try {
+          final refreshedToken = await user.getIdToken(true);
+          if (refreshedToken != null && refreshedToken.isNotEmpty) {
+            idToken = refreshedToken;
+          }
+        } catch (e) {
+          debugPrint('Token refresh failed: $e');
+        }
+      }
+
       final response = await http.post(
         Uri.parse(_getGuessApiUrl('generate-guesses')),
         headers: {
           'Content-Type': 'application/json',
-          'Authorization': 'Bearer ${widget.idToken}',
+          'Authorization': 'Bearer $idToken',
           'X-User-ID': widget.aacUserId,
         },
         body: jsonEncode({
@@ -5340,17 +5791,73 @@ class _GamesPageState extends State<GamesPage> {
           'clues': _guessCluesGiven,
           'previous_guesses': _guessGuessesAttempted,
         }),
-      );
+      ).timeout(Duration(seconds: 30));
+
+      List<String> guessesData = [];
 
       if (response.statusCode == 200) {
-        final data = jsonDecode(response.body);
-        _guessGuessOptionsAll = List<String>.from(data['guesses'] ?? []);
+        try {
+          final data = jsonDecode(response.body);
+          guessesData = List<String>.from(data['guesses'] ?? []);
+          debugPrint('[GuessGame] Generated ${guessesData.length} guesses from backend');
+        } catch (e) {
+          debugPrint('[GuessGame] Error parsing backend guesses response: $e');
+        }
+      } else if (response.statusCode == 404) {
+        debugPrint('[GuessGame] generate-guesses endpoint unavailable (404), using fallback');
+      } else {
+        debugPrint('[GuessGame] Error response: ${response.statusCode} - ${response.body}');
+      }
+
+      // If no guesses generated from backend, use fallback via generate-options
+      if (guessesData.isEmpty) {
+        debugPrint('[GuessGame] Using LLM fallback to generate guesses');
+        try {
+          final cluesStr = _guessCluesGiven.join('; ');
+          final previousGuessesStr = _guessGuessesAttempted.isNotEmpty
+              ? ' (Not these: ${_guessGuessesAttempted.join(", ")})'
+              : '';
+          final fallbackPrompt =
+              'Based on these clues: $cluesStr, '
+              'generate 5 possible ${_guessCategory!.toLowerCase()} ${_guessConfig['itemTypePlural']}$previousGuessesStr. '
+              'Return as simple comma-separated list with no numbering or explanation.';
+
+          final fallbackResponse = await http.post(
+            Uri.parse('${EnvironmentConfig.apiBaseUrl}/api/generate-options'),
+            headers: {
+              'Content-Type': 'application/json',
+              'Authorization': 'Bearer $idToken',
+              'X-User-ID': widget.aacUserId,
+            },
+            body: jsonEncode({'prompt': fallbackPrompt, 'count': 5}),
+          ).timeout(Duration(seconds: 30));
+
+          if (fallbackResponse.statusCode == 200) {
+            try {
+              final data = jsonDecode(fallbackResponse.body);
+              final options = data['options'] as List<dynamic>?;
+              if (options != null && options.isNotEmpty) {
+                guessesData = options.map((o) => o.toString().trim()).toList();
+                debugPrint('[GuessGame] Generated ${guessesData.length} guesses via fallback LLM');
+              }
+            } catch (e) {
+              debugPrint('[GuessGame] Error parsing fallback guesses response: $e');
+            }
+          } else {
+            debugPrint('[GuessGame] Fallback LLM guesses request failed: ${fallbackResponse.statusCode}');
+          }
+        } catch (e) {
+          debugPrint('[GuessGame] Error using fallback for guesses: $e');
+        }
+      }
+
+      if (guessesData.isNotEmpty) {
+        _guessGuessOptionsAll = guessesData;
         _guessGuessOptionsShown = [];
 
         _displayGuessModeBOptions();
       } else {
-        debugPrint('Error response: ${response.statusCode} - ${response.body}');
-        throw Exception('Failed to generate guesses: ${response.statusCode}');
+        throw Exception('Failed to generate guesses: no options available');
       }
     } catch (e) {
       debugPrint('Error generating guesses: $e');
@@ -5467,7 +5974,11 @@ class _GamesPageState extends State<GamesPage> {
         });
 
         _isGuessConfirmationInProgress = false;
-        await _startListening('wake_word');
+        await _startListeningWithGuard(
+          'wake_word',
+          preListenDelay: const Duration(milliseconds: 900),
+          ignoreWindow: const Duration(milliseconds: 1500),
+        );
       }
     }
   }
@@ -6848,14 +7359,21 @@ class _GamesPageState extends State<GamesPage> {
       return Center(
         child: Padding(
           padding: EdgeInsets.all(32),
-          child: Text(
-            _statusText,
-            style: TextStyle(
-              color: Colors.black87,
-              fontSize: 24,
-              fontWeight: FontWeight.w500,
-            ),
-            textAlign: TextAlign.center,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                _statusText,
+                style: TextStyle(
+                  color: Colors.black87,
+                  fontSize: 24,
+                  fontWeight: FontWeight.w500,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              const SizedBox(height: 18),
+              _buildListeningRescueButtons(),
+            ],
           ),
         ),
       );
@@ -6897,6 +7415,63 @@ class _GamesPageState extends State<GamesPage> {
     }
 
     return Container();
+  }
+
+  Widget _buildListeningRescueButtons() {
+    List<Widget> buttons = [];
+
+    // 20 Questions rescue options while listening for intent or spoken response
+    if (_selectedGame == '20_questions' && _role == 'answer') {
+      if (_listeningFor == 'intent') {
+        buttons = [
+          ElevatedButton(
+            onPressed: () => _handlePlayerIntent('question'),
+            child: const Text('Question'),
+          ),
+          ElevatedButton(
+            onPressed: () => _handlePlayerIntent('guess'),
+            child: const Text('Guess'),
+          ),
+        ];
+      }
+    }
+
+    // Guess game rescue options while in listening screens
+    if (_selectedGame != null && _selectedGame!.startsWith('guess_')) {
+      if (_listeningFor == 'wake_word') {
+        final label = _guessMode == 'mode-b' ? 'Give Clue' : 'Start Guess';
+        buttons = [
+          ElevatedButton(
+            onPressed: _handleGuessWakeWordDetected,
+            child: Text(label),
+          ),
+        ];
+      } else if (_listeningFor == 'yes_no_guess') {
+        buttons = [
+          ElevatedButton(
+            onPressed: () => _handleGuessModeBConfirmation(true),
+            child: const Text('Yes'),
+          ),
+          ElevatedButton(
+            onPressed: () => _handleGuessModeBConfirmation(false),
+            child: const Text('No'),
+          ),
+        ];
+      } else if (_listeningFor == 'ready' && _guessMode == 'mode-b') {
+        buttons = [
+          ElevatedButton(
+            onPressed: _handleGuessReadyHeard,
+            child: const Text('Ready'),
+          ),
+        ];
+      }
+    }
+
+    if (buttons.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Wrap(spacing: 12, runSpacing: 12, alignment: WrapAlignment.center, children: buttons);
   }
 
   Widget _buildGameMenu(Color darkColor, Color lightColor) {

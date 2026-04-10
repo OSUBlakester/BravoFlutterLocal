@@ -2,7 +2,7 @@ name: bravo_aac
 description: "Bravo AAC - Augmentative and Alternative Communication"
 publish_to: 'none'
 
-version: 1.0.2+35
+version: 1.0.2+36
 
 environment:
   sdk: ^3.8.1
@@ -47,6 +47,8 @@ flutter_launcher_icons:
 flutter:
   uses-material-design: true
   assets:
+    - assets/notification.mp3
+    - assets/notification_v2.mp3
     - assets/test.mp3
     - assets/silence.mp3
     - assets/volumetesttone.mp3

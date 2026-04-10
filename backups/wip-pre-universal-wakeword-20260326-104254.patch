@@ -1,0 +1,2522 @@
+diff --git a/existingbackend/server.py b/existingbackend/server.py
+index d2c2cca..fb3aad5 100644
+--- a/existingbackend/server.py
++++ b/existingbackend/server.py
+@@ -111,6 +111,7 @@ import copy
+ import holidays
+ import calendar # For calculating floating observances
+ from datetime import date, timedelta, datetime as dt, timezone # Alias datetime to avoid conflict
++from zoneinfo import ZoneInfo
+ from fastapi.middleware.cors import CORSMiddleware
+ import re
+ # from sentence_transformers import SentenceTransformer  # DISABLED - not currently used
+@@ -975,6 +976,10 @@ class UserCurrentState(BaseModel):
+     location: Optional[str] = ""
+     people: Optional[str] = "" # Renamed from People Present for consistency
+     activity: Optional[str] = ""
++    topicTitle: Optional[str] = ""
++    focusChapters: Optional[str] = ""
++    focusPlotPoints: Optional[str] = ""
++    topicSummary: Optional[str] = ""
+     mood: Optional[str] = None  # Current mood - saved to info/user_narrative
+     loaded_at: Optional[str] = None  # NEW: ISO timestamp when favorite was loaded
+     favorite_name: Optional[str] = None  # NEW: Name of the favorite that was loaded
+@@ -991,6 +996,10 @@ class UserCurrentFavorite(BaseModel):
+     location: str
+     people: str
+     activity: str
++    topicTitle: Optional[str] = ""
++    focusChapters: Optional[str] = ""
++    focusPlotPoints: Optional[str] = ""
++    topicSummary: Optional[str] = ""
+     loaded_at: Optional[str] = None  # NEW: ISO timestamp when favorite was loaded
+     schedule: Optional[FavoriteSchedule] = None # NEW: Schedule for this favorite
+ 
+@@ -1002,6 +1011,10 @@ class FavoriteRequest(BaseModel):
+     location: str
+     people: str
+     activity: str
++    topicTitle: Optional[str] = ""
++    focusChapters: Optional[str] = ""
++    focusPlotPoints: Optional[str] = ""
++    topicSummary: Optional[str] = ""
+     schedule: Optional[FavoriteSchedule] = None # NEW: Schedule for this favorite
+ 
+ class ManageFavoriteRequest(BaseModel):
+@@ -1037,6 +1050,10 @@ async def get_user_current_endpoint(current_ids: Annotated[Dict[str, str], Depen
+             "location": user_current_content_dict.get("location", ""),
+             "people": user_current_content_dict.get("people", ""),
+             "activity": user_current_content_dict.get("activity", ""),
++            "topicTitle": user_current_content_dict.get("topicTitle", ""),
++            "focusChapters": user_current_content_dict.get("focusChapters", ""),
++            "focusPlotPoints": user_current_content_dict.get("focusPlotPoints", ""),
++            "topicSummary": user_current_content_dict.get("topicSummary", ""),
+             "mood": current_mood,  # Include mood from user_narrative
+             "loaded_at": user_current_content_dict.get("loaded_at"),
+             "favorite_name": user_current_content_dict.get("favorite_name"),
+@@ -1053,15 +1070,30 @@ async def update_user_current_endpoint(payload: UserCurrentState, current_ids: A
+     location = payload.location or ""
+     people = payload.people or ""
+     activity = payload.activity or ""
++    topic_title = payload.topicTitle or ""
++    focus_chapters = payload.focusChapters or ""
++    focus_plot_points = payload.focusPlotPoints or ""
++    topic_summary = payload.topicSummary or ""
++    discussion_narrative = (topic_summary or focus_plot_points or "").strip()
+     mood = payload.mood  # Current mood
+     loaded_at = payload.loaded_at  # Timestamp when favorite was loaded
+     favorite_name = payload.favorite_name  # Name of the favorite that was loaded
+     provided_saved_at = payload.saved_at  # Timestamp when data was saved (may be provided for favorite loads)
+     
+-    logging.info(f"🔍 /user_current called with mood='{mood}', location='{location}', people='{people}', activity='{activity}'")
++    logging.info(
++        f"🔍 /user_current called with mood='{mood}', location='{location}', people='{people}', "
++        f"activity='{activity}', topicTitle='{topic_title}', focusChapters='{focus_chapters}'"
++    )
+     
+     # The content to embed for current state should be a single string for LLM context
+-    current_state_content = f"Location: {location}\nPeople Present: {people}\nActivity: {activity}"
++    current_state_content = (
++        f"Location: {location}\n"
++        f"People Present: {people}\n"
++        f"Activity: {activity}\n"
++        f"Discussion Topic Title: {topic_title}\n"
++        f"Discussion Focus Chapters: {focus_chapters}\n"
++        f"Discussion Narrative: {discussion_narrative}"
++    )
+     aac_user_id = current_ids["aac_user_id"]
+     account_id = current_ids["account_id"]
+     
+@@ -1076,6 +1108,10 @@ async def update_user_current_endpoint(payload: UserCurrentState, current_ids: A
+         "location": location, 
+         "people": people, 
+         "activity": activity,
++        "topicTitle": topic_title,
++        "focusChapters": focus_chapters,
++        "focusPlotPoints": focus_plot_points,
++        "topicSummary": discussion_narrative,
+         "saved_at": saved_at  # Always update saved_at when manually saving
+     }
+     
+@@ -1183,6 +1219,10 @@ async def save_user_current_favorite(payload: FavoriteRequest, current_ids: Anno
+             "location": payload.location,
+             "people": payload.people,
+             "activity": payload.activity,
++            "topicTitle": payload.topicTitle or "",
++            "focusChapters": payload.focusChapters or "",
++            "focusPlotPoints": payload.focusPlotPoints or "",
++            "topicSummary": payload.topicSummary or "",
+             "schedule": payload.schedule.model_dump() if payload.schedule else None
+         }
+         favorites_list.append(new_favorite)
+@@ -1235,6 +1275,10 @@ async def manage_user_current_favorite(payload: ManageFavoriteRequest, current_i
+                         "location": payload.favorite.location,
+                         "people": payload.favorite.people,
+                         "activity": payload.favorite.activity,
++                        "topicTitle": payload.favorite.topicTitle or "",
++                        "focusChapters": payload.favorite.focusChapters or "",
++                        "focusPlotPoints": payload.favorite.focusPlotPoints or "",
++                        "topicSummary": payload.favorite.topicSummary or "",
+                         "schedule": payload.favorite.schedule.model_dump() if payload.favorite.schedule else None
+                     }
+                     break
+@@ -1591,7 +1635,18 @@ DEFAULT_USER_INFO = {
+         }
+     }
+ }
+-DEFAULT_USER_CURRENT = {"location": "Unknown", "people": "None", "activity": "Idle", "loaded_at": None, "favorite_name": None, "saved_at": None}
++DEFAULT_USER_CURRENT = {
++    "location": "Unknown",
++    "people": "None",
++    "activity": "Idle",
++    "topicTitle": "",
++    "focusChapters": "",
++    "focusPlotPoints": "",
++    "topicSummary": "",
++    "loaded_at": None,
++    "favorite_name": None,
++    "saved_at": None
++}
+ DEFAULT_COLUMNS = 10 # Default number of columns in the grid
+ DEFAULT_LIGHT_COLOR = 4294659860 # Default light color
+ DEFAULT_DARK_COLOR = 4278198852 # Default dark color
+@@ -2762,7 +2817,7 @@ Undated Diary Entries (use cautiously, max 5):
+         logging.info(f"✅ BASE context for {account_id}/{aac_user_id} is {len(base_string)} chars (~{len(base_string)//4} tokens) - ready for caching")
+         return base_string
+     
+-    async def _build_delta_context(self, account_id: str, aac_user_id: str, query_hint: str = "") -> str:
++    async def _build_delta_context(self, account_id: str, aac_user_id: str, query_hint: str = "", compose_mode: bool = False, compose_body: str = "") -> str:
+         """
+         Builds the DELTA context - dynamic data that changes frequently.
+         This is passed as standard input text with each request (NOT cached).
+@@ -2844,13 +2899,47 @@ Undated Diary Entries (use cautiously, max 5):
+         
+         # Current situation - location, people, activity
+         if context_data["user_current"]:
+-            current_parts = []
+-            current_parts.extend([
+-                f"Location: {context_data['user_current'].get('location', 'Unknown')}",
+-                f"People Present: {context_data['user_current'].get('people', 'None')}",
+-                f"Activity: {context_data['user_current'].get('activity', 'Idle')}"
+-            ])
+-            delta_parts.append(f"\n📍 CURRENT SITUATION:\n{chr(10).join(current_parts)}\n")
++            if not compose_mode:
++                current_parts = []
++                current_parts.extend([
++                    f"Location: {context_data['user_current'].get('location', 'Unknown')}",
++                    f"People Present: {context_data['user_current'].get('people', 'None')}",
++                    f"Activity: {context_data['user_current'].get('activity', 'Idle')}"
++                ])
++                delta_parts.append(f"\n📍 CURRENT SITUATION:\n{chr(10).join(current_parts)}\n")
++
++                topic_title = (context_data["user_current"].get("topicTitle") or "").strip()
++                focus_chapters = (context_data["user_current"].get("focusChapters") or "").strip()
++                focus_plot_points = (context_data["user_current"].get("focusPlotPoints") or "").strip()
++                topic_summary = (context_data["user_current"].get("topicSummary") or "").strip()
++                discussion_narrative = topic_summary or focus_plot_points
++
++                if topic_title or focus_chapters or discussion_narrative:
++                    discussion_lines = [
++                        "📚 BOOK/DISCUSSION CONTEXT (HIGH PRIORITY FOR TOPIC OPTIONS)",
++                        f"Topic Title: {topic_title or 'Not provided'}",
++                        f"Focus Chapters: {focus_chapters or 'Not provided'}",
++                        f"Discussion Narrative: {discussion_narrative or 'Not provided'}",
++                        "⚠️ Use the discussion narrative as authoritative context for discussion options.",
++                        "⚠️ If chapter range is provided, avoid introducing events beyond that range."
++                    ]
++                    delta_parts.append("\n" + "\n".join(discussion_lines) + "\n")
++            else:
++                # Compose mode: suppress location/book context, inject compose guidance instead
++                compose_lines = [
++                    "✏️ COMPOSE MODE — USER IS ACTIVELY WRITING A DOCUMENT",
++                    "⚠️ IGNORE: Location, People Present, Activity, and Book/Discussion context — NOT relevant.",
++                    "⚠️ IGNORE: Any greeting, conversational, or situational context.",
++                    "FOCUS ONLY ON: Generating options that are natural next phrases, sentences, or ideas",
++                    "  for the user's written composition (letter, story, message, etc.).",
++                    "OPTIONS must be written document phrases — not spoken conversation starters.",
++                    "Keep options concise, literary, and appropriate for written text.",
++                ]
++                compose_body_text = (compose_body or "").strip()
++                if compose_body_text:
++                    compose_lines.append(f'\nCURRENT COMPOSITION SO FAR:\n"{compose_body_text}"')
++                    compose_lines.append("Continue this composition naturally. Options should logically follow what has been written.")
++                delta_parts.append("\n" + "\n".join(compose_lines) + "\n")
+ 
+         today_date = dt.now().date()
+         celebrations_context = _build_upcoming_celebrations_context(
+@@ -2863,6 +2952,33 @@ Undated Diary Entries (use cautiously, max 5):
+         )
+ 
+         query_hint_lower = str(query_hint or "").lower()
++        # Live time context (dynamic per request; NOT cached)
++        # This prevents stale/hallucinated times when users ask about current time/date.
++        now_utc = dt.now(timezone.utc)
++        mountain_now = now_utc.astimezone(ZoneInfo("America/Denver"))
++
++        preferred_tz_name = "America/Denver" if (
++            "mountain" in query_hint_lower or
++            "mst" in query_hint_lower or
++            "mdt" in query_hint_lower
++        ) else "UTC"
++
++        try:
++            preferred_now = now_utc.astimezone(ZoneInfo(preferred_tz_name))
++        except Exception:
++            preferred_tz_name = "UTC"
++            preferred_now = now_utc
++
++        delta_parts.append(
++            "\n🕒 LIVE DATE/TIME CONTEXT (AUTHORITATIVE - USE FOR TIME/DATE QUESTIONS):\n"
++            f"- Current UTC: {now_utc.strftime('%Y-%m-%d %I:%M:%S %p UTC')}\n"
++            f"- Current US Mountain (America/Denver): {mountain_now.strftime('%Y-%m-%d %I:%M:%S %p %Z')}\n"
++            f"- Preferred timezone for this request: {preferred_tz_name}\n"
++            f"- Current time in preferred timezone: {preferred_now.strftime('%Y-%m-%d %I:%M:%S %p %Z')}\n"
++            "⚠️ TIME ACCURACY RULE: If the prompt asks for current time/date, use the exact values above."
++            " Do NOT invent or reuse old times from prior context.\n"
++        )
++
+         celebration_keywords = [
+             "greeting", "hello", "hi", "good morning", "good afternoon", "good evening",
+             "plan", "plans", "upcoming", "going on", "birthday", "holiday", "celebrate", "celebration"
+@@ -4234,7 +4350,7 @@ async def refresh_user_cache(current_ids: Annotated[Dict[str, str], Depends(get_
+     return JSONResponse(content={"message": f"Cache invalidated for user {aac_user_id}."})
+ 
+ 
+-async def build_full_prompt_for_non_cached_llm(account_id: str, aac_user_id: str, user_query: str) -> str:
++async def build_full_prompt_for_non_cached_llm(account_id: str, aac_user_id: str, user_query: str, compose_mode: bool = False, compose_body: str = "") -> str:
+     """
+     Builds the complete LLM prompt from scratch by fetching all context data.
+     This is used as a fallback when a cache is not available.
+@@ -4248,7 +4364,7 @@ async def build_full_prompt_for_non_cached_llm(account_id: str, aac_user_id: str
+         base_context = await cache_manager._build_base_context(account_id, aac_user_id)
+         logging.info(f"✅ Base context built: {len(base_context)} chars")
+         
+-        delta_context = await cache_manager._build_delta_context(account_id, aac_user_id, user_query)
++        delta_context = await cache_manager._build_delta_context(account_id, aac_user_id, user_query, compose_mode=compose_mode, compose_body=compose_body)
+         logging.info(f"✅ Delta context built: {len(delta_context)} chars")
+         
+         # Combine base + delta (same as cached requests do)
+@@ -4341,6 +4457,8 @@ def log_token_usage(response, request_type: str, account_id: str, aac_user_id: s
+ 
+ class LLMRequest(BaseModel):
+     prompt: str
++    compose_mode: bool = False          # True when the user is in an active compose session
++    compose_body: str = ""               # Current composition text (sent for context when compose_mode is True)
+ 
+ # --- Vocabulary Level Helper Function ---
+ def get_vocabulary_level_instruction(level: str) -> str:
+@@ -4504,7 +4622,7 @@ Return ONLY valid JSON - no other text before or after the JSON array."""
+     # --- Route to appropriate LLM ---
+     if llm_provider == "chatgpt":
+         logging.info(f"Using OpenAI for {account_id}/{aac_user_id}. Building full prompt manually.")
+-        full_prompt_for_openai = await build_full_prompt_for_non_cached_llm(account_id, aac_user_id, final_user_query)
++        full_prompt_for_openai = await build_full_prompt_for_non_cached_llm(account_id, aac_user_id, final_user_query, compose_mode=request_data.compose_mode, compose_body=request_data.compose_body)
+         llm_response_json_str = await _generate_openai_content_with_fallback(full_prompt_for_openai)
+     else:
+         # --- Gemini Cache-First Approach with Base + Delta Architecture + Lazy Invalidation ---
+@@ -4535,7 +4653,7 @@ Return ONLY valid JSON - no other text before or after the JSON array."""
+         if cached_content_ref:
+             try:
+                 # Build delta context (dynamic data not in cache)
+-                delta_context = await cache_manager._build_delta_context(account_id, aac_user_id, user_prompt_content)
++                delta_context = await cache_manager._build_delta_context(account_id, aac_user_id, user_prompt_content, compose_mode=request_data.compose_mode, compose_body=request_data.compose_body)
+                 
+                 # Combine delta + user query
+                 combined_prompt = f"{delta_context}\n\n=== USER QUERY ===\n{final_user_query}"
+@@ -4576,7 +4694,7 @@ Return ONLY valid JSON - no other text before or after the JSON array."""
+                 logging.info(f"✅ Successfully generated content using BASE cache + DELTA context for {account_id}/{aac_user_id}.")
+             except Exception as e:
+                 logging.error(f"Error using cached content for {account_id}/{aac_user_id}: {e}. Falling back.")
+-                full_prompt = await build_full_prompt_for_non_cached_llm(account_id, aac_user_id, final_user_query)
++                full_prompt = await build_full_prompt_for_non_cached_llm(account_id, aac_user_id, final_user_query, compose_mode=request_data.compose_mode, compose_body=request_data.compose_body)
+                 llm_response_json_str = await _generate_gemini_content_with_fallback(full_prompt, generation_config, account_id, aac_user_id)
+         else:
+             logging.warning(f"No valid cache found for {account_id}/{aac_user_id}. Attempting to warm up cache...")
+@@ -4590,7 +4708,7 @@ Return ONLY valid JSON - no other text before or after the JSON array."""
+                 
+                 if cached_content_ref:
+                     # Cache was successfully created, use it with delta context
+-                    delta_context = await cache_manager._build_delta_context(account_id, aac_user_id, user_prompt_content)
++                    delta_context = await cache_manager._build_delta_context(account_id, aac_user_id, user_prompt_content, compose_mode=request_data.compose_mode, compose_body=request_data.compose_body)
+                     combined_prompt = f"{delta_context}\n\n=== USER QUERY ===\n{final_user_query}"
+                     
+                     logging.info(f"🔍 NEW_CACHE COMBINED PROMPT PREVIEW (first 800 chars):\n{combined_prompt[:800]}")
+@@ -4629,12 +4747,12 @@ Return ONLY valid JSON - no other text before or after the JSON array."""
+                 else:
+                     # Cache creation failed, use full prompt fallback
+                     logging.warning(f"Cache creation failed for {account_id}/{aac_user_id}. Using full prompt fallback.")
+-                    full_prompt = await build_full_prompt_for_non_cached_llm(account_id, aac_user_id, final_user_query)
++                    full_prompt = await build_full_prompt_for_non_cached_llm(account_id, aac_user_id, final_user_query, compose_mode=request_data.compose_mode, compose_body=request_data.compose_body)
+                     llm_response_json_str = await _generate_gemini_content_with_fallback(full_prompt, generation_config, account_id, aac_user_id)
+                     
+             except Exception as warmup_error:
+                 logging.error(f"Cache warmup failed for {account_id}/{aac_user_id}: {warmup_error}. Using full prompt fallback.")
+-                full_prompt = await build_full_prompt_for_non_cached_llm(account_id, aac_user_id, final_user_query)
++                full_prompt = await build_full_prompt_for_non_cached_llm(account_id, aac_user_id, final_user_query, compose_mode=request_data.compose_mode, compose_body=request_data.compose_body)
+                 llm_response_json_str = await _generate_gemini_content_with_fallback(full_prompt, generation_config, account_id, aac_user_id)
+     
+     logging.info(f"--- LLM Final JSON Response Text for account {account_id} and user {aac_user_id} (Length: {len(llm_response_json_str)}) ---")
+@@ -10837,6 +10955,13 @@ GMAIL_INBOX_EXCLUDED_CATEGORIES = {
+     "CATEGORY_UPDATES",
+     "CATEGORY_FORUMS",
+ }
++GMAIL_INBOX_CATEGORY_LABELS = {
++    "CATEGORY_PERSONAL",
++    "CATEGORY_PROMOTIONS",
++    "CATEGORY_SOCIAL",
++    "CATEGORY_UPDATES",
++    "CATEGORY_FORUMS",
++}
+ 
+ DEFAULT_EMAIL_PROVIDER_STATE = {
+     "provider": EMAIL_PROVIDER_NAME,
+@@ -10863,6 +10988,9 @@ class EmailSendRequest(BaseModel):
+     bcc: List[str] = Field(default_factory=list)
+     subject: str = ""
+     body: str = ""
++    thread_id: Optional[str] = ""
++    in_reply_to: Optional[str] = ""
++    references: Optional[str] = ""
+ 
+     @field_validator("to", "cc", "bcc")
+     @classmethod
+@@ -10879,6 +11007,77 @@ class EmailSendRequest(BaseModel):
+         return validated
+ 
+ 
++class ComposeDocumentCreateRequest(BaseModel):
++    document_type: Literal["story", "email"] = Field(default="story", description="Compose document type")
++    title: Optional[str] = Field(default="", description="Saved document title")
++    body: Optional[str] = Field(default="", description="Main composition text")
++    to: List[str] = Field(default_factory=list, description="Email To recipients")
++    cc: List[str] = Field(default_factory=list, description="Email Cc recipients")
++    bcc: List[str] = Field(default_factory=list, description="Email Bcc recipients")
++    subject: Optional[str] = Field(default="", description="Email subject")
++    reply_to_message_id: Optional[str] = Field(default="", description="Original Gmail message id for reply")
++    reply_to_thread_id: Optional[str] = Field(default="", description="Original Gmail thread id for reply")
++    in_reply_to: Optional[str] = Field(default="", description="RFC 5322 Message-ID for In-Reply-To header")
++    references: Optional[str] = Field(default="", description="RFC 5322 References header value")
++
++    @field_validator("to", "cc", "bcc")
++    @classmethod
++    def _validate_email_recipients(cls, values: List[str]) -> List[str]:
++        validated: List[str] = []
++        for raw_value in values or []:
++            candidate = str(raw_value or "").strip()
++            if not candidate:
++                continue
++            _, parsed_email = parseaddr(candidate)
++            if not parsed_email or not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", parsed_email):
++                raise ValueError(f"Invalid email address: {candidate}")
++            validated.append(parsed_email)
++        return validated
++
++
++class ComposeDocumentUpdateRequest(BaseModel):
++    document_type: Optional[Literal["story", "email"]] = Field(default=None, description="Compose document type")
++    title: Optional[str] = Field(default=None, description="Saved document title")
++    body: Optional[str] = Field(default=None, description="Main composition text")
++    to: Optional[List[str]] = Field(default=None, description="Email To recipients")
++    cc: Optional[List[str]] = Field(default=None, description="Email Cc recipients")
++    bcc: Optional[List[str]] = Field(default=None, description="Email Bcc recipients")
++    subject: Optional[str] = Field(default=None, description="Email subject")
++    reply_to_message_id: Optional[str] = Field(default=None, description="Original Gmail message id for reply")
++    reply_to_thread_id: Optional[str] = Field(default=None, description="Original Gmail thread id for reply")
++    in_reply_to: Optional[str] = Field(default=None, description="RFC 5322 Message-ID for In-Reply-To header")
++    references: Optional[str] = Field(default=None, description="RFC 5322 References header value")
++
++    @field_validator("to", "cc", "bcc")
++    @classmethod
++    def _validate_optional_email_recipients(cls, values: Optional[List[str]]) -> Optional[List[str]]:
++        if values is None:
++            return None
++        validated: List[str] = []
++        for raw_value in values:
++            candidate = str(raw_value or "").strip()
++            if not candidate:
++                continue
++            _, parsed_email = parseaddr(candidate)
++            if not parsed_email or not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", parsed_email):
++                raise ValueError(f"Invalid email address: {candidate}")
++            validated.append(parsed_email)
++        return validated
++
++
++class ComposeIllustrationRequest(BaseModel):
++    style: Optional[str] = Field(default="storybook illustration", description="Visual style for generated illustration")
++    regenerate: Optional[bool] = Field(default=False, description="Whether to force regeneration if an illustration already exists")
++
++
++class ComposeContentRequest(BaseModel):
++    body: str = Field(..., description="Current composition body text")
++
++
++class ComposeFromEmailRequest(BaseModel):
++    include_body_quote: bool = Field(default=False, description="Whether to include original email body text in draft")
++
++
+ def _is_truthy_env(value: Optional[str]) -> bool:
+     return str(value or "").strip().lower() in {"1", "true", "yes", "on"}
+ 
+@@ -11214,6 +11413,19 @@ def _gmail_header_map(payload: Optional[Dict[str, Any]]) -> Dict[str, str]:
+     return header_map
+ 
+ 
++def _normalize_reply_subject(subject: str) -> str:
++    safe_subject = re.sub(r"\s+", " ", str(subject or "").strip())
++    if not safe_subject:
++        return "Re:"
++    if safe_subject.lower().startswith("re:"):
++        return safe_subject
++    return f"Re: {safe_subject}"
++
++
++def _clean_header_token(value: Optional[str]) -> str:
++    return re.sub(r"\s+", " ", str(value or "").strip())
++
++
+ async def _ensure_valid_gmail_access_token(account_id: str, aac_user_id: str) -> Dict[str, Any]:
+     state = await _load_email_provider_state(account_id, aac_user_id)
+     current_access_token = _state_access_token(state)
+@@ -11499,6 +11711,10 @@ async def get_email_inbox(
+         if message_labels.intersection(GMAIL_INBOX_EXCLUDED_CATEGORIES):
+             continue
+ 
++        category_labels = message_labels.intersection(GMAIL_INBOX_CATEGORY_LABELS)
++        if category_labels and "CATEGORY_PERSONAL" not in category_labels:
++            continue
++
+         header_map = _gmail_header_map(metadata.get("payload"))
+ 
+         from_value = header_map.get("from", "")
+@@ -11553,6 +11769,8 @@ async def get_email_message_detail(
+                 "from": header_map.get("from", ""),
+                 "to": header_map.get("to", ""),
+                 "date": header_map.get("date"),
++                "message_id_header": header_map.get("message-id", ""),
++                "references": header_map.get("references", ""),
+                 "snippet": message.get("snippet", ""),
+                 "body_text": body_text,
+             }
+@@ -11560,6 +11778,80 @@ async def get_email_message_detail(
+     )
+ 
+ 
++@app.post("/api/compose/from-email/{message_id}")
++async def create_compose_document_from_email(
++    message_id: str,
++    request: ComposeFromEmailRequest = Body(default=ComposeFromEmailRequest()),
++    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)] = None,
++):
++    account_id = current_ids["account_id"]
++    aac_user_id = current_ids["aac_user_id"]
++
++    try:
++        message = await _gmail_get_json(
++            account_id,
++            aac_user_id,
++            f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}",
++            params={"format": "full"},
++        )
++
++        payload = message.get("payload") or {}
++        header_map = _gmail_header_map(payload)
++        body_text = _extract_plaintext_from_gmail_payload(payload).strip()
++
++        from_header = header_map.get("from", "")
++        sender_name, sender_email = parseaddr(from_header)
++        recipient_email = str(sender_email or "").strip()
++        subject = _normalize_reply_subject(header_map.get("subject", ""))
++        in_reply_to = _clean_header_token(header_map.get("message-id", ""))
++        references = _clean_header_token(header_map.get("references", ""))
++        if in_reply_to and (not references or in_reply_to not in references):
++            references = f"{references} {in_reply_to}".strip() if references else in_reply_to
++
++        now_iso = dt.now(timezone.utc).isoformat()
++        doc_id = str(uuid.uuid4())
++
++        draft_body = ""
++        if bool(request.include_body_quote) and body_text:
++            quoted = "\n".join([f"> {line}" for line in body_text.splitlines()])
++            draft_body = f"\n\nOn {header_map.get('date', 'an earlier date')}, {sender_name or recipient_email} wrote:\n{quoted}".strip()
++
++        compose_doc = {
++            "id": doc_id,
++            "document_type": "email",
++            "title": f"Reply: {(header_map.get('subject') or '(No subject)').strip()}",
++            "body": draft_body,
++            "subject": subject,
++            "to": [recipient_email] if recipient_email else [],
++            "cc": [],
++            "bcc": [],
++            "reply_to_message_id": str(message.get("id") or "").strip(),
++            "reply_to_thread_id": str(message.get("threadId") or "").strip(),
++            "in_reply_to": in_reply_to,
++            "references": references,
++            "illustration_url": "",
++            "illustration_status": "not_created",
++            "illustration_prompt": "",
++            "illustration_style": "",
++            "illustration_updated_at": None,
++            "created_at": now_iso,
++            "updated_at": now_iso,
++        }
++
++        doc_ref = _compose_documents_collection_ref(account_id, aac_user_id).document(doc_id)
++        await asyncio.to_thread(doc_ref.set, sanitize_for_firestore(compose_doc))
++
++        return JSONResponse(content={
++            "success": True,
++            "document": _normalize_compose_doc_for_response(doc_id, compose_doc),
++        })
++    except HTTPException as http_error:
++        return JSONResponse(content={"success": False, "error": str(http_error.detail)}, status_code=http_error.status_code)
++    except Exception as e:
++        logging.error(f"Error creating compose draft from email {message_id}: {e}", exc_info=True)
++        return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
++
++
+ @app.post("/api/email/messages/{message_id}/delete")
+ async def delete_email_message(
+     message_id: str,
+@@ -11652,14 +11944,24 @@ async def send_email_message(
+     if request.bcc:
+         message["Bcc"] = ", ".join(request.bcc)
+     message["Subject"] = request.subject or ""
++    clean_in_reply_to = _clean_header_token(request.in_reply_to)
++    clean_references = _clean_header_token(request.references)
++    if clean_in_reply_to:
++        message["In-Reply-To"] = clean_in_reply_to
++    if clean_references:
++        message["References"] = clean_references
+     message.set_content(request.body or "")
+ 
+     encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
++    send_payload: Dict[str, Any] = {"raw": encoded_message}
++    clean_thread_id = _clean_header_token(request.thread_id)
++    if clean_thread_id:
++        send_payload["threadId"] = clean_thread_id
+     send_result = await _gmail_post_json(
+         account_id,
+         aac_user_id,
+         "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+-        payload={"raw": encoded_message},
++        payload=send_payload,
+     )
+ 
+     return JSONResponse(
+@@ -11713,6 +12015,395 @@ async def disconnect_email_provider(
+ # ===== BRAVO EMAIL PHASE 2 END (WEB APP REVIEW BLOCK) =====
+ 
+ 
++@app.get("/api/compose/documents")
++async def list_compose_documents(
++    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
++):
++    account_id = current_ids["account_id"]
++    aac_user_id = current_ids["aac_user_id"]
++
++    try:
++        docs = await load_firestore_collection(account_id, aac_user_id, "compose_documents")
++        docs_sorted = sorted(
++            docs,
++            key=lambda item: item.get("updated_at") or item.get("created_at") or "",
++            reverse=True
++        )
++
++        response_docs: List[Dict[str, Any]] = []
++        for compose_doc in docs_sorted:
++            doc_id = str(compose_doc.get("id") or "").strip()
++            if not doc_id:
++                continue
++            normalized = _normalize_compose_doc_for_response(doc_id, compose_doc)
++            body_text = normalized.get("body", "")
++            normalized["preview"] = body_text[:180]
++            response_docs.append(normalized)
++
++        return JSONResponse(content={"success": True, "documents": response_docs})
++    except Exception as e:
++        logging.error(f"Error listing compose documents: {e}", exc_info=True)
++        return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
++
++
++@app.post("/api/compose/documents")
++async def create_compose_document(
++    request: ComposeDocumentCreateRequest,
++    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
++):
++    account_id = current_ids["account_id"]
++    aac_user_id = current_ids["aac_user_id"]
++
++    try:
++        now_iso = dt.now(timezone.utc).isoformat()
++        doc_id = str(uuid.uuid4())
++        safe_type = request.document_type if request.document_type in {"story", "email"} else "story"
++        safe_title = re.sub(r"\s+", " ", str(request.title or "").strip())
++        safe_subject = re.sub(r"\s+", " ", str(request.subject or "").strip())
++
++        compose_doc = {
++            "id": doc_id,
++            "document_type": safe_type,
++            "title": safe_title or ("Untitled Email" if safe_type == "email" else "Untitled Composition"),
++            "body": str(request.body or ""),
++            "subject": safe_subject,
++            "to": request.to or [],
++            "cc": request.cc or [],
++            "bcc": request.bcc or [],
++            "reply_to_message_id": _clean_header_token(request.reply_to_message_id),
++            "reply_to_thread_id": _clean_header_token(request.reply_to_thread_id),
++            "in_reply_to": _clean_header_token(request.in_reply_to),
++            "references": _clean_header_token(request.references),
++            "illustration_url": "",
++            "illustration_status": "not_created",
++            "illustration_prompt": "",
++            "illustration_style": "",
++            "illustration_updated_at": None,
++            "created_at": now_iso,
++            "updated_at": now_iso,
++        }
++
++        doc_ref = _compose_documents_collection_ref(account_id, aac_user_id).document(doc_id)
++        await asyncio.to_thread(doc_ref.set, sanitize_for_firestore(compose_doc))
++        return JSONResponse(content={"success": True, "document": _normalize_compose_doc_for_response(doc_id, compose_doc)})
++    except Exception as e:
++        logging.error(f"Error creating compose document: {e}", exc_info=True)
++        return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
++
++
++@app.get("/api/compose/documents/{document_id}")
++async def get_compose_document(
++    document_id: str,
++    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
++):
++    account_id = current_ids["account_id"]
++    aac_user_id = current_ids["aac_user_id"]
++
++    try:
++        doc_ref = _compose_documents_collection_ref(account_id, aac_user_id).document(document_id)
++        doc = await asyncio.to_thread(doc_ref.get)
++        if not doc.exists:
++            return JSONResponse(content={"success": False, "error": "Document not found"}, status_code=404)
++        compose_doc = doc.to_dict() or {}
++        return JSONResponse(content={"success": True, "document": _normalize_compose_doc_for_response(doc.id, compose_doc)})
++    except Exception as e:
++        logging.error(f"Error loading compose document {document_id}: {e}", exc_info=True)
++        return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
++
++
++@app.put("/api/compose/documents/{document_id}")
++async def update_compose_document(
++    document_id: str,
++    request: ComposeDocumentUpdateRequest,
++    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
++):
++    account_id = current_ids["account_id"]
++    aac_user_id = current_ids["aac_user_id"]
++
++    try:
++        doc_ref = _compose_documents_collection_ref(account_id, aac_user_id).document(document_id)
++        existing_doc = await asyncio.to_thread(doc_ref.get)
++        if not existing_doc.exists:
++            return JSONResponse(content={"success": False, "error": "Document not found"}, status_code=404)
++
++        update_data: Dict[str, Any] = {"updated_at": dt.now(timezone.utc).isoformat()}
++
++        if request.document_type is not None:
++            update_data["document_type"] = request.document_type
++        if request.title is not None:
++            normalized_title = re.sub(r"\s+", " ", str(request.title).strip())
++            update_data["title"] = normalized_title
++        if request.body is not None:
++            update_data["body"] = str(request.body)
++        if request.subject is not None:
++            update_data["subject"] = re.sub(r"\s+", " ", str(request.subject).strip())
++        if request.to is not None:
++            update_data["to"] = request.to
++        if request.cc is not None:
++            update_data["cc"] = request.cc
++        if request.bcc is not None:
++            update_data["bcc"] = request.bcc
++        if request.reply_to_message_id is not None:
++            update_data["reply_to_message_id"] = _clean_header_token(request.reply_to_message_id)
++        if request.reply_to_thread_id is not None:
++            update_data["reply_to_thread_id"] = _clean_header_token(request.reply_to_thread_id)
++        if request.in_reply_to is not None:
++            update_data["in_reply_to"] = _clean_header_token(request.in_reply_to)
++        if request.references is not None:
++            update_data["references"] = _clean_header_token(request.references)
++
++        if len(update_data.keys()) == 1:
++            return JSONResponse(content={"success": False, "error": "No fields provided"}, status_code=400)
++
++        await asyncio.to_thread(doc_ref.set, sanitize_for_firestore(update_data), merge=True)
++        updated_doc = await asyncio.to_thread(doc_ref.get)
++        updated_payload = updated_doc.to_dict() or {}
++        return JSONResponse(content={"success": True, "document": _normalize_compose_doc_for_response(updated_doc.id, updated_payload)})
++    except Exception as e:
++        logging.error(f"Error updating compose document {document_id}: {e}", exc_info=True)
++        return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
++
++
++@app.delete("/api/compose/documents/{document_id}")
++async def delete_compose_document(
++    document_id: str,
++    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
++):
++    account_id = current_ids["account_id"]
++    aac_user_id = current_ids["aac_user_id"]
++
++    try:
++        doc_ref = _compose_documents_collection_ref(account_id, aac_user_id).document(document_id)
++        existing_doc = await asyncio.to_thread(doc_ref.get)
++        if not existing_doc.exists:
++            return JSONResponse(content={"success": False, "error": "Document not found"}, status_code=404)
++        await asyncio.to_thread(doc_ref.delete)
++        return JSONResponse(content={"success": True, "status": "deleted", "id": document_id})
++    except Exception as e:
++        logging.error(f"Error deleting compose document {document_id}: {e}", exc_info=True)
++        return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
++
++
++@app.post("/api/compose/documents/{document_id}/illustrate")
++async def generate_compose_document_illustration(
++    document_id: str,
++    request: ComposeIllustrationRequest,
++    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
++):
++    account_id = current_ids["account_id"]
++    aac_user_id = current_ids["aac_user_id"]
++
++    try:
++        doc_ref = _compose_documents_collection_ref(account_id, aac_user_id).document(document_id)
++        doc = await asyncio.to_thread(doc_ref.get)
++        if not doc.exists:
++            return JSONResponse(content={"success": False, "error": "Document not found"}, status_code=404)
++
++        compose_doc = doc.to_dict() or {}
++        existing_url = str(compose_doc.get("illustration_url", "")).strip()
++        if existing_url and not bool(request.regenerate):
++            return JSONResponse(content={
++                "success": True,
++                "document": _normalize_compose_doc_for_response(doc.id, compose_doc),
++                "reused_existing": True
++            })
++
++        title = re.sub(r"\s+", " ", str(compose_doc.get("title", "Untitled Composition")).strip()) or "Untitled Composition"
++        body = str(compose_doc.get("body", "")).strip()
++        if not body:
++            return JSONResponse(content={"success": False, "error": "Composition body is empty"}, status_code=400)
++
++        safe_style = re.sub(r"\s+", " ", str(request.style or "storybook illustration").strip()) or "storybook illustration"
++        excerpt = " ".join(body.split())[:550]
++        illustration_prompt = (
++            f"{safe_style}, create a single clean illustration for a composition titled '{title}'. "
++            f"Represent the meaning with clear, expressive visual storytelling. "
++            f"No text, words, letters, or logos in the image. "
++            f"Composition summary: {excerpt}"
++        )
++
++        image_bytes = await generate_story_illustration_image(illustration_prompt)
++        safe_doc_id = re.sub(r"[^\w\-]", "_", document_id)
++        filename = f"compose_illustration_{safe_doc_id}_{uuid.uuid4().hex[:8]}.png"
++        image_url = await upload_image_to_storage(image_bytes, filename)
++
++        now_iso = dt.now(timezone.utc).isoformat()
++        update_payload = {
++            "illustration_url": image_url,
++            "illustration_status": "ready",
++            "illustration_prompt": illustration_prompt,
++            "illustration_style": safe_style,
++            "illustration_updated_at": now_iso,
++            "updated_at": now_iso,
++        }
++        await asyncio.to_thread(doc_ref.set, sanitize_for_firestore(update_payload), merge=True)
++
++        updated_doc = await asyncio.to_thread(doc_ref.get)
++        updated_payload = updated_doc.to_dict() or {}
++        return JSONResponse(content={"success": True, "document": _normalize_compose_doc_for_response(updated_doc.id, updated_payload)})
++    except HTTPException as http_error:
++        return JSONResponse(content={"success": False, "error": str(http_error.detail)}, status_code=http_error.status_code)
++    except Exception as e:
++        logging.error(f"Error generating compose illustration for {document_id}: {e}", exc_info=True)
++        return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
++
++
++@app.post("/api/compose/documents/{document_id}/send-email")
++async def send_compose_document_email(
++    document_id: str,
++    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
++):
++    account_id = current_ids["account_id"]
++    aac_user_id = current_ids["aac_user_id"]
++
++    try:
++        doc_ref = _compose_documents_collection_ref(account_id, aac_user_id).document(document_id)
++        doc = await asyncio.to_thread(doc_ref.get)
++        if not doc.exists:
++            return JSONResponse(content={"success": False, "error": "Document not found"}, status_code=404)
++
++        compose_doc = doc.to_dict() or {}
++        to_list = [str(item).strip() for item in (compose_doc.get("to") or []) if str(item).strip()]
++        cc_list = [str(item).strip() for item in (compose_doc.get("cc") or []) if str(item).strip()]
++        bcc_list = [str(item).strip() for item in (compose_doc.get("bcc") or []) if str(item).strip()]
++        subject = re.sub(r"\s+", " ", str(compose_doc.get("subject", "")).strip())
++        body = str(compose_doc.get("body", ""))
++        reply_to_thread_id = _clean_header_token(compose_doc.get("reply_to_thread_id", ""))
++        in_reply_to = _clean_header_token(compose_doc.get("in_reply_to", ""))
++        references = _clean_header_token(compose_doc.get("references", ""))
++
++        recipients = to_list + cc_list + bcc_list
++        if not recipients:
++            return JSONResponse(content={"success": False, "error": "At least one recipient is required"}, status_code=400)
++
++        provider_state = await _load_email_provider_state(account_id, aac_user_id)
++        from_address = provider_state.get("email_address")
++        if not from_address:
++            return JSONResponse(content={"success": False, "error": "Connected Gmail address is missing"}, status_code=400)
++
++        message = EmailMessage()
++        message["From"] = from_address
++        message["To"] = ", ".join(to_list) if to_list else "undisclosed-recipients:;"
++        if cc_list:
++            message["Cc"] = ", ".join(cc_list)
++        if bcc_list:
++            message["Bcc"] = ", ".join(bcc_list)
++        message["Subject"] = subject
++        if in_reply_to:
++            message["In-Reply-To"] = in_reply_to
++        if references:
++            message["References"] = references
++        message.set_content(body)
++
++        encoded_message = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
++        send_payload: Dict[str, Any] = {"raw": encoded_message}
++        if reply_to_thread_id:
++            send_payload["threadId"] = reply_to_thread_id
++        send_result = await _gmail_post_json(
++            account_id,
++            aac_user_id,
++            "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
++            payload=send_payload,
++        )
++
++        now_iso = dt.now(timezone.utc).isoformat()
++        await asyncio.to_thread(doc_ref.set, sanitize_for_firestore({"updated_at": now_iso}), merge=True)
++
++        return JSONResponse(content={
++            "success": True,
++            "status": "sent",
++            "id": send_result.get("id"),
++            "thread_id": send_result.get("threadId"),
++            "label_ids": send_result.get("labelIds", []),
++        })
++    except HTTPException as http_error:
++        return JSONResponse(content={"success": False, "error": str(http_error.detail)}, status_code=http_error.status_code)
++    except Exception as e:
++        logging.error(f"Error sending compose email for {document_id}: {e}", exc_info=True)
++        return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
++
++
++@app.post("/api/compose/generate-title")
++async def generate_compose_title(
++    request: ComposeContentRequest,
++    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
++):
++    account_id = current_ids["account_id"]
++    aac_user_id = current_ids["aac_user_id"]
++
++    try:
++        body_text = re.sub(r"\s+", " ", str(request.body or "").strip())
++        if not body_text:
++            return JSONResponse(content={"success": False, "error": "Composition body is empty"}, status_code=400)
++
++        excerpt = body_text[:800]
++        llm_query = f"""Generate a concise title (2 to 6 words) for this AAC composition.
++
++Composition:
++{excerpt}
++
++Rules:
++- Return only the title text.
++- No punctuation at the end.
++- Keep wording clear and natural.
++"""
++
++        generated = await _generate_gemini_content_with_fallback(llm_query, None, account_id, aac_user_id)
++        generated = _strip_markdown_code_fences(str(generated or "")).strip()
++        generated = re.sub(r"\s+", " ", generated).strip('"\'` ')
++
++        if not generated:
++            generated = "Untitled Letter"
++
++        words = generated.split()
++        if len(words) > 6:
++            generated = " ".join(words[:6])
++
++        return JSONResponse(content={"success": True, "title": generated})
++    except Exception as e:
++        logging.error(f"Error generating compose title: {e}", exc_info=True)
++        return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
++
++
++@app.post("/api/compose/ai-edit")
++async def ai_edit_compose_content(
++    request: ComposeContentRequest,
++    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
++):
++    account_id = current_ids["account_id"]
++    aac_user_id = current_ids["aac_user_id"]
++
++    try:
++        body_text = str(request.body or "").strip()
++        if not body_text:
++            return JSONResponse(content={"success": False, "error": "Composition body is empty"}, status_code=400)
++
++        llm_query = f"""You are revising an AAC-composed written draft.
++
++    Original composition:
++    {body_text}
++
++    Tasks:
++    - Improve grammar, punctuation, sentence flow, and conversational readability.
++    - Keep the original meaning, tone, and important details intact.
++    - Resolve incomplete thoughts where possible without inventing new facts.
++    - Make the writing sound natural and polished.
++    - Return the FULL revised composition only.
++    """
++
++        edited = await _generate_gemini_content_with_fallback(llm_query, None, account_id, aac_user_id)
++        edited = _strip_markdown_code_fences(str(edited or "")).strip()
++        edited = re.sub(r"\s+\n", "\n", edited).strip()
++
++        if not edited:
++            edited = body_text
++
++        return JSONResponse(content={"success": True, "edited_body": edited})
++    except Exception as e:
++        logging.error(f"Error AI editing composition: {e}", exc_info=True)
++        return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
++
++
+ # --- Mood Selection Endpoint ---
+ 
+ @app.get("/api/mood/options")
+@@ -13047,6 +13738,51 @@ def _story_builder_collection_ref(account_id: str, aac_user_id: str):
+     )
+ 
+ 
++def _compose_documents_collection_ref(account_id: str, aac_user_id: str):
++    return firestore_db.collection(
++        f"{FIRESTORE_ACCOUNTS_COLLECTION}/{account_id}/{FIRESTORE_ACCOUNT_USERS_SUBCOLLECTION}/{aac_user_id}/compose_documents"
++    )
++
++
++def _normalize_compose_doc_for_response(doc_id: str, compose_doc: Dict[str, Any]) -> Dict[str, Any]:
++    doc_data = compose_doc if isinstance(compose_doc, dict) else {}
++    safe_type = str(doc_data.get("document_type", "story")).strip().lower()
++    if safe_type not in {"story", "email"}:
++        safe_type = "story"
++
++    title = re.sub(r"\s+", " ", str(doc_data.get("title", "")).strip())
++    body = str(doc_data.get("body", ""))
++    subject = re.sub(r"\s+", " ", str(doc_data.get("subject", "")).strip())
++
++    to_list = [str(item).strip() for item in (doc_data.get("to") or []) if str(item).strip()]
++    cc_list = [str(item).strip() for item in (doc_data.get("cc") or []) if str(item).strip()]
++    bcc_list = [str(item).strip() for item in (doc_data.get("bcc") or []) if str(item).strip()]
++    reply_to_message_id = _clean_header_token(doc_data.get("reply_to_message_id", ""))
++    reply_to_thread_id = _clean_header_token(doc_data.get("reply_to_thread_id", ""))
++    in_reply_to = _clean_header_token(doc_data.get("in_reply_to", ""))
++    references = _clean_header_token(doc_data.get("references", ""))
++
++    return {
++        "id": doc_id,
++        "document_type": safe_type,
++        "title": title,
++        "body": body,
++        "subject": subject,
++        "to": to_list,
++        "cc": cc_list,
++        "bcc": bcc_list,
++        "reply_to_message_id": reply_to_message_id,
++        "reply_to_thread_id": reply_to_thread_id,
++        "in_reply_to": in_reply_to,
++        "references": references,
++        "created_at": doc_data.get("created_at"),
++        "updated_at": doc_data.get("updated_at"),
++        "illustration_url": str(doc_data.get("illustration_url", "")).strip(),
++        "illustration_status": str(doc_data.get("illustration_status", "not_created")).strip() or "not_created",
++        "illustration_style": str(doc_data.get("illustration_style", "")).strip(),
++    }
++
++
+ def _build_story_transcript_context(transcript: Optional[List[Dict[str, str]]]) -> str:
+     if not transcript:
+         return "No prior story Q&A yet."
+diff --git a/lib/config/environment_config.dart.backup b/lib/config/environment_config.dart.backup
+index 5a971bc..63cbebf 100644
+--- a/lib/config/environment_config.dart.backup
++++ b/lib/config/environment_config.dart.backup
+@@ -5,7 +5,7 @@ enum Environment {
+ }
+ 
+ class EnvironmentConfig {
+-  static const Environment _currentEnvironment = Environment.prod; // Change this to switch environments
++  static const Environment _currentEnvironment = Environment.test; // Change this to switch environments
+   
+   // Firebase Configuration
+   static const String _devProjectId = 'bravo-dev-465400';
+diff --git a/lib/main.dart b/lib/main.dart
+index 84d2687..d2b072b 100644
+--- a/lib/main.dart
++++ b/lib/main.dart
+@@ -3225,6 +3225,53 @@ class _GridPageState extends State<GridPage>
+     return 'Original question: "$baseQuestion"\nSelected follow-ups so far:\n$historyText';
+   }
+ 
++  String _getComposePromptContext() {
++    if (!_composeSession.active) return '';
++    final compositionText = _composeSession.text.trim();
++    if (compositionText.isEmpty) return '';
++    return '\n\nCREATION CONTEXT:\n'
++        'The user is actively creating a written document for someone who may not be physically present. '
++        'Ignore current location, people present, room context, nearby people, and current activity. '
++        'Prioritize options that continue or refine this creation in natural written language:\n'
++        '"$compositionText"\n'
++        'Keep continuity with this creation.';
++  }
++
++  String _sanitizeComposePrompt(String prompt) {
++    if (!_composeSession.active) return prompt;
++    var cleaned = prompt;
++    final patterns = <RegExp>[
++      RegExp(
++        r"\bconsider the user's current location, people present, personal interests, and the time of year\b\.??",
++        caseSensitive: false,
++      ),
++      RegExp(
++        r'\bbased on my current location and interests\b\.??',
++        caseSensitive: false,
++      ),
++      RegExp(
++        r'\bprioritize options that are more relevant to the current location and people in the room\b\.??',
++        caseSensitive: false,
++      ),
++      RegExp(
++        r'\bphrase the option as if it is coming from the user and asking, suggesting or recommending the activity for those nearby\b\.??',
++        caseSensitive: false,
++      ),
++      RegExp(
++        r"\busing the 'people present' values from context\b\.??",
++        caseSensitive: false,
++      ),
++      RegExp(r'\bpeople present\b', caseSensitive: false),
++      RegExp(r'\bcurrent location\b', caseSensitive: false),
++      RegExp(r'\bin the room\b', caseSensitive: false),
++      RegExp(r'\bthose nearby\b', caseSensitive: false),
++    ];
++    for (final pattern in patterns) {
++      cleaned = cleaned.replaceAll(pattern, '');
++    }
++    return cleaned.replaceAll(RegExp(r'\s+'), ' ').trim();
++  }
++
+   List<String> _tokenizeForContext(String text) {
+     if (text.trim().isEmpty) return [];
+     const stopWords = {
+@@ -3797,6 +3844,56 @@ class _GridPageState extends State<GridPage>
+     required String? currentMood,
+     String excludedOptionsText = '',
+   }) {
++    if (_composeSession.active) {
++      final summaryInstruction = useSummary
++        ? 'If the generated option is more than 5 words, the "summary" key should be a 3-5 word abbreviation of each option, including the exact key words from the option. If the option is 5 words or less, the "summary" key should contain the exact same FULL text as the "option" key.'
++        : 'The "summary" key should contain the exact same FULL text as the "option" key.';
++      final composeBody = _composeSession.text.trim();
++      final latestSelectedResponse = _followUpSelectedResponses.isNotEmpty
++        ? _followUpSelectedResponses.last
++        : '';
++      final moodLine =
++        (currentMood != null &&
++          currentMood.isNotEmpty &&
++          currentMood != 'No Mood Selected')
++        ? 'Current user mood for this writing session: "$currentMood". Keep the tone naturally consistent with this mood.\n'
++        : '';
++      final exclusionLine = excludedOptionsText.trim().isNotEmpty
++        ? 'Avoid repeating these existing options: "$excludedOptionsText".\n'
++        : '';
++      return '''
++  AAC COMPOSE MODE - GENERATING THE USER'S NEXT WRITTEN OPTIONS
++
++  SCENARIO:
++  The user is actively writing a document using AAC.
++  This is written composition for someone who may NOT be physically present.
++  IGNORE ALL room-based context such as current location, people present, activity, and anything nearby.
++  Generate $llmOptions possible next phrases or sentences the user could ADD to the written composition.
++
++  CURRENT COMPOSITION:
++  "$composeBody"
++
++  MOST RECENTLY ADDED TEXT:
++  "$latestSelectedResponse"
++
++  YOUR TASK:
++  Generate natural next written options that continue or expand the composition.
++  These should sound like written message/story/letter text, not spoken conversation starters.
++
++  RULES:
++  1. Ignore location, room, nearby people, and in-person conversation context
++  2. Continue the written composition naturally
++  3. Improve flow, detail, and continuity without changing the meaning abruptly
++  4. Keep options concise, grammatical, and conversational in written form
++  5. Do not generate greetings tied to the current room or current activity
++
++  $moodLine$exclusionLine
++  Return ONLY a JSON list where each item has "option", "summary", and "keywords" keys.
++  The "option" key should contain the FULL option text.
++  $summaryInstruction
++  The "keywords" key should contain 3-5 words that match available symbols. Focus on concrete, simple words.
++  ''';
++    }
+     final summaryInstruction = useSummary
+         ? 'If the generated option is more than 5 words, the "summary" key should be a 3-5 word abbreviation of each option, including the exact key words from the option. If the option is 5 words or less, the "summary" key should contain the exact same FULL text as the "option" key.'
+         : 'The "summary" key should contain the exact same FULL text as the "option" key.';
+@@ -4377,6 +4474,10 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus
+   previousGridButtons; // Store previous grid for LLM
+   String? previousPageName; // Store previous page name for LLM
+ 
++  // Compose grid navigation stack (replaces dialog-based menus)
++  final List<List<Map<String, dynamic>>> _composeGridStack = [];
++  final List<String> _composePageStack = [];
++
+   String speechHistory = '';
+   ComposeSessionData _composeSession = const ComposeSessionData.inactive();
+   String questionDisplay = '';
+@@ -7693,11 +7794,128 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus
+     final composeSpecial = buttonData['composeSpecial'] as String?;
+     final keepFollowUpContext = buttonData['keepFollowUpContext'] == true;
+ 
+-    if (composeSpecial == 'exit_creation') {
+-      await _showComposeFinalizeMenu();
+-      WidgetsBinding.instance.addPostFrameCallback((_) {
+-        _maybeStartScanning();
+-      });
++    if (composeSpecial != null && composeSpecial.isNotEmpty) {
++      switch (composeSpecial) {
++        case 'exit_creation':
++          _openComposeFinalizeGrid();
++          return;
++        case 'compose_back':
++          _restoreFromComposeGrid();
++          return;
++        case 'compose_new':
++          _restoreFromComposeGrid();
++          await _startComposeSession(documentType: 'story');
++          return;
++        case 'compose_open_list':
++          await _openComposeDocListGrid();
++          return;
++        case 'compose_delete_list':
++          await _openComposeDocListGrid(forDelete: true);
++          return;
++        case 'compose_open_doc':
++          _restoreFromComposeGrid();
++          _composeGridStack.clear();
++          _composePageStack.clear();
++          final docId =
++              (buttonData['composeDocId'] ?? '').toString().trim();
++          await _startComposeSession(
++            documentType:
++                (buttonData['composeDocType'] ?? 'story').toString(),
++            seedText:
++                (buttonData['composeDocBody'] ?? '').toString(),
++            documentId: docId.isEmpty ? null : docId,
++            title: (buttonData['composeDocTitle'] ?? '').toString(),
++          );
++          return;
++        case 'compose_delete_select':
++          await _openComposeDeleteConfirmGrid(buttonData);
++          return;
++        case 'compose_delete_no':
++          _restoreFromComposeGrid();
++          setState(() {
++            statusMessage = 'Delete canceled.';
++          });
++          return;
++        case 'compose_delete_yes':
++          final docId =
++              (buttonData['composeDocId'] ?? '').toString().trim();
++          final title = (buttonData['composeDocTitle'] ?? 'Untitled')
++              .toString();
++          final isLocalFallback = buttonData['composeDocIsLocalFallback'] == true;
++          await _deleteComposeDocument(
++            documentId: docId,
++            title: title,
++            isLocalFallback: isLocalFallback,
++          );
++          return;
++        case 'compose_save':
++          _composeGridStack.clear();
++          _composePageStack.clear();
++          await _saveComposeAndExit();
++          return;
++        case 'compose_discard':
++          _restoreFromComposeGrid();
++          _composeGridStack.clear();
++          _composePageStack.clear();
++          await _discardComposeAndExit();
++          return;
++        case 'compose_read':
++          await _announceWithTimeout(
++            _composeSession.text.trim().isEmpty
++                ? 'Creation is empty.'
++                : _composeSession.text,
++            routing: 'system',
++          );
++          return;
++        case 'compose_export_menu':
++          _openComposeExportGrid();
++          return;
++        case 'compose_ai_edit':
++          final aiEditSucceeded = await _aiEditCompose();
++          if (aiEditSucceeded) {
++            setState(() {
++              questionDisplay = _composeSession.text;
++              statusMessage =
++                  'AI edit complete. Finalize options are still active.';
++            });
++            await _announceWithTimeout(
++              _composeSession.text.trim().isEmpty
++                  ? 'AI edit complete.'
++                  : _composeSession.text,
++              routing: 'system',
++            );
++            WidgetsBinding.instance.addPostFrameCallback((_) {
++              _maybeStartScanning();
++            });
++          } else {
++            final failureMessage =
++                (statusMessage ?? '').trim().isNotEmpty
++                ? statusMessage!.trim()
++                : 'Unable to AI edit creation right now.';
++            await _announceWithTimeout(
++              failureMessage,
++              routing: 'system',
++            );
++            WidgetsBinding.instance.addPostFrameCallback((_) {
++              _maybeStartScanning();
++            });
++          }
++          return;
++        case 'compose_copy':
++          await _copyComposeToClipboard();
++          return;
++        case 'compose_save_file':
++          await _saveComposeToFile();
++          return;
++        case 'compose_read_aloud':
++          await _announceWithTimeout(
++            _composeSession.text.trim().isEmpty
++                ? 'Creation is empty.'
++                : _composeSession.text,
++            routing: 'system',
++          );
++          return;
++      }
+       return;
+     }
+     // Debug: print entry to handleButtonAction with FULL button data
+@@ -7770,11 +7988,10 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus
+         String summaryInstruction = useSummary
+             ? 'If the generated option is more than 5 words, the "summary" key should be a 3-5 word abbreviation of each option, including the exact key words from the option. If the option is 5 words or less, the "summary" key should contain the exact same FULL text as the "option" key.'
+             : 'The "summary" key should contain the exact same FULL text as the "option" key.';
+-        String prompt = llmQuery.replaceAll(
++        final rawPrompt = llmQuery.replaceAll(
+           '#LLMOptions',
+           llmOptions.toString(),
+         );
+-        // Append formatting instructions and example at the end
+         final formatInstructions =
+             'Format your response as a JSON list where each item has "option", "summary", and "keywords" keys.\n'
+             'The "option" key should contain the FULL option text.\n'
+@@ -7786,7 +8003,13 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus
+             '  {"summary": "How are you?", "option": "Hello, how are you doing today?", "keywords": ["hello", "how", "you", "today", "doing"]},\n'
+             '  {"summary": "See You", "option": "Goodbye!  It was great seeing you. See you later!", "keywords": ["goodbye", "see", "you", "later", "great"]}\n'
+             ']';
+-        prompt = prompt.trim() + '\n' + formatInstructions;
++        final prompt = _composeSession.active
++            ? '"${_sanitizeComposePrompt(rawPrompt)}". '
++                  'Generate written composition options, not in-room conversation options. '
++                  'Ignore location, people present, nearby people, and current activity.\n'
++                  '$formatInstructions'
++                  '${_getComposePromptContext()}'
++            : rawPrompt.trim() + '\n' + formatInstructions;
+         llmOriginalPrompt = prompt; // Store for "Something Else"
+         if (!keepFollowUpContext) {
+           _initializeFollowUpConversation(llmQuery);
+@@ -9206,7 +9429,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus
+             ),
+           );
+         } else if (specialPage == 'compose' || specialPage == 'composition') {
+-          await _showComposeEntryMenu();
++          _openComposeEntryGrid();
+         } else {
+           setState(() {
+             statusMessage = 'Unknown special page: $specialPage';
+@@ -9649,128 +9872,299 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus
+     }
+   }
+ 
+-  Future<void> _showComposeEntryMenu() async {
+-    await showDialog<void>(
+-      context: context,
+-      builder: (context) {
+-        return AlertDialog(
+-          title: const Text('Create'),
+-          content: const Text('Start new or open existing creation?'),
+-          actions: [
+-            TextButton(
+-              onPressed: () {
+-                Navigator.of(context).pop();
+-              },
+-              child: const Text('Cancel'),
+-            ),
+-            TextButton(
+-              onPressed: () async {
+-                Navigator.of(context).pop();
+-                await _startComposeSession(documentType: 'story');
+-              },
+-              child: const Text('Create New'),
+-            ),
+-            TextButton(
+-              onPressed: () async {
+-                Navigator.of(context).pop();
+-                await _openExistingComposeDocument();
+-              },
+-              child: const Text('Open Existing'),
+-            ),
+-          ],
+-        );
++  // ---------- compose grid navigation helpers ----------
++
++  void _loadComposeGrid(
++    List<Map<String, dynamic>> buttons,
++    String gridName,
++    {
++    bool pushToStack = true,
++    String? nextStatusMessage,
++  }
++  ) {
++    if (pushToStack) {
++      _composeGridStack.add(List<Map<String, dynamic>>.from(gridButtons));
++      _composePageStack.add(currentPageName);
++    }
++    setState(() {
++      gridButtons = buttons;
++      currentPageName = gridName;
++      scanningIndex = null;
++      isLoading = false;
++      statusMessage = nextStatusMessage ?? '';
++    });
++    WidgetsBinding.instance.addPostFrameCallback((_) {
++      setState(() {
++        scanningIndex = null;
++      });
++      _maybeStartScanning();
++    });
++  }
++
++  void _restoreFromComposeGrid() {
++    if (_composeGridStack.isNotEmpty) {
++      final prevButtons = _composeGridStack.removeLast();
++      final prevPage = _composePageStack.isNotEmpty
++          ? _composePageStack.removeLast()
++          : 'home';
++      setState(() {
++        gridButtons = prevButtons;
++        currentPageName = prevPage;
++        scanningIndex = null;
++        statusMessage = '';
++      });
++      WidgetsBinding.instance.addPostFrameCallback((_) {
++        setState(() {
++          scanningIndex = null;
++        });
++        _maybeStartScanning();
++      });
++    } else {
++      fetchGridDataForPage('home');
++    }
++  }
++
++  void _openComposeEntryGrid() {
++    _loadComposeGrid([
++      {
++        'text': 'Cancel',
++        'speechPhrase': 'Cancel',
++        'composeSpecial': 'compose_back',
++        'hidden': false,
+       },
+-    );
++      {
++        'text': 'Create New',
++        'speechPhrase': 'Create New',
++        'composeSpecial': 'compose_new',
++        'hidden': false,
++      },
++      {
++        'text': 'Open Existing',
++        'speechPhrase': 'Open Existing',
++        'composeSpecial': 'compose_open_list',
++        'hidden': false,
++      },
++      {
++        'text': 'Delete Existing',
++        'speechPhrase': 'Delete Existing',
++        'composeSpecial': 'compose_delete_list',
++        'hidden': false,
++      },
++    ], '__compose_entry__');
+   }
+ 
+-  Future<void> _openExistingComposeDocument() async {
++  Future<void> _openComposeDocListGrid({
++    bool forDelete = false,
++    bool pushToStack = true,
++    String? statusOverride,
++  }) async {
+     setState(() {
+       isLoading = true;
+-      statusMessage = 'Loading saved creations...';
++      statusMessage = forDelete
++          ? 'Loading creations to delete...'
++          : 'Loading saved creations...';
+     });
+-
+     try {
++      List<dynamic> docs = <dynamic>[];
+       final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+         'GET',
+         '${EnvironmentConfig.apiBaseUrl}/api/compose/documents',
+         baseHeaders: {'X-User-ID': widget.aacUserId},
+       );
+-
+-      if (response.statusCode != 200) {
+-        if (!mounted) return;
++      if (!mounted) return;
++      if (response.statusCode == 404) {
++        docs = await ComposeSessionService.loadLocalDocuments(widget.aacUserId);
++      } else if (response.statusCode != 200) {
+         setState(() {
+-          statusMessage = 'Unable to load creations (${response.statusCode}).';
++          isLoading = false;
++          statusMessage =
++              'Unable to load creations (${response.statusCode}).';
+         });
+         return;
++      } else {
++        final decoded = json.decode(response.body);
++        docs = (decoded is Map<String, dynamic>
++                ? decoded['documents'] as List<dynamic>?
++                : null) ??
++            <dynamic>[];
+       }
+ 
+-      final decoded = json.decode(response.body);
+-      final docs = (decoded is Map<String, dynamic>
+-              ? decoded['documents'] as List<dynamic>?
+-              : null) ??
+-          <dynamic>[];
+-
+       if (docs.isEmpty) {
+-        if (!mounted) return;
+-        setState(() {
+-          statusMessage = 'No saved creations yet.';
+-        });
++        if (forDelete) {
++          _loadComposeGrid([
++            {
++              'text': 'Back',
++              'speechPhrase': 'Back',
++              'composeSpecial': 'compose_back',
++              'hidden': false,
++            },
++          ], '__compose_delete_list__',
++              pushToStack: pushToStack,
++              nextStatusMessage:
++                  statusOverride ?? 'No saved creations to delete.');
++        } else {
++          setState(() {
++            isLoading = false;
++            statusMessage = 'No saved creations yet.';
++          });
++        }
+         return;
+       }
+-
+-      if (!mounted) return;
+-      final selected = await showDialog<Map<String, dynamic>>(
+-        context: context,
+-        builder: (context) {
+-          return AlertDialog(
+-            title: const Text('Open Existing Creation'),
+-            content: SizedBox(
+-              width: 520,
+-              height: 420,
+-              child: ListView.builder(
+-                itemCount: docs.length,
+-                itemBuilder: (context, index) {
+-                  final doc = docs[index] as Map<String, dynamic>;
+-                  final title = (doc['title'] ?? 'Untitled').toString();
+-                  final type = (doc['document_type'] ?? 'story').toString();
+-                  return ListTile(
+-                    title: Text(title),
+-                    subtitle: Text(type),
+-                    onTap: () => Navigator.of(context).pop(doc),
+-                  );
+-                },
+-              ),
+-            ),
+-            actions: [
+-              TextButton(
+-                onPressed: () => Navigator.of(context).pop(),
+-                child: const Text('Cancel'),
+-              ),
+-            ],
+-          );
++      final List<Map<String, dynamic>> docButtons = [
++        {
++          'text': 'Back',
++          'speechPhrase': 'Back',
++          'composeSpecial': 'compose_back',
++          'hidden': false,
+         },
+-      );
+-
+-      if (selected == null) return;
+-      await _startComposeSession(
+-        documentType: (selected['document_type'] ?? 'story').toString(),
+-        seedText: (selected['body'] ?? '').toString(),
+-        documentId: (selected['id'] ?? '').toString().trim().isEmpty
+-            ? null
+-            : (selected['id'] ?? '').toString().trim(),
+-        title: (selected['title'] ?? '').toString(),
++      ];
++      for (final rawDoc in docs) {
++        final doc = rawDoc as Map<String, dynamic>;
++        final title = (doc['title'] ?? 'Untitled').toString();
++        docButtons.add({
++          'text': title,
++          'speechPhrase': title,
++          'composeSpecial': forDelete
++              ? 'compose_delete_select'
++              : 'compose_open_doc',
++          'composeDocId': (doc['id'] ?? '').toString(),
++          'composeDocType': (doc['document_type'] ?? 'story').toString(),
++          'composeDocBody': (doc['body'] ?? '').toString(),
++          'composeDocTitle': title,
++          'composeDocIsLocalFallback': doc['is_local_fallback'] == true,
++          'hidden': false,
++        });
++      }
++      _loadComposeGrid(
++        docButtons,
++        forDelete ? '__compose_delete_list__' : '__compose_doc_list__',
++        pushToStack: pushToStack,
++        nextStatusMessage: statusOverride,
+       );
+     } catch (e) {
+       if (!mounted) return;
+       setState(() {
++        isLoading = false;
+         statusMessage = 'Unable to load creations: $e';
+       });
+-    } finally {
+-      if (mounted) {
++    }
++  }
++
++  Future<void> _openComposeDeleteConfirmGrid(
++    Map<String, dynamic> buttonData,
++  ) async {
++    final title = (buttonData['composeDocTitle'] ?? 'Untitled').toString();
++    final docId = (buttonData['composeDocId'] ?? '').toString().trim();
++    final documentType =
++        (buttonData['composeDocType'] ?? 'story').toString();
++    final body = (buttonData['composeDocBody'] ?? '').toString();
++    final isLocalFallback = buttonData['composeDocIsLocalFallback'] == true;
++
++    _loadComposeGrid([
++      {
++        'text': 'No',
++        'speechPhrase': 'No',
++        'composeSpecial': 'compose_delete_no',
++        'hidden': false,
++      },
++      {
++        'text': 'Yes',
++        'speechPhrase': 'Yes',
++        'composeSpecial': 'compose_delete_yes',
++        'composeDocId': docId,
++        'composeDocType': documentType,
++        'composeDocBody': body,
++        'composeDocTitle': title,
++        'composeDocIsLocalFallback': isLocalFallback,
++        'hidden': false,
++      },
++    ], '__compose_delete_confirm__',
++        nextStatusMessage: 'Delete "$title"?');
++
++    await _announceWithTimeout(
++      'Delete $title? Select yes or no.',
++      routing: 'system',
++    );
++  }
++
++  Future<void> _deleteComposeDocument({
++    required String documentId,
++    required String title,
++    bool isLocalFallback = false,
++  }) async {
++    if (documentId.trim().isEmpty) {
++      setState(() {
++        statusMessage = 'Unable to delete this creation.';
++      });
++      return;
++    }
++
++    setState(() {
++      isLoading = true;
++      statusMessage = 'Deleting "$title"...';
++    });
++
++    try {
++      bool deleted = false;
++
++      if (isLocalFallback || documentId.startsWith('local_')) {
++        deleted = await ComposeSessionService.deleteLocalDocument(
++          widget.aacUserId,
++          documentId,
++        );
++      } else {
++        final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
++          'DELETE',
++          '${EnvironmentConfig.apiBaseUrl}/api/compose/documents/${Uri.encodeComponent(documentId)}',
++          baseHeaders: {'X-User-ID': widget.aacUserId},
++        );
++
++        if (!mounted) return;
++        if (response.statusCode == 200) {
++          deleted = true;
++        } else if (response.statusCode == 404) {
++          deleted = await ComposeSessionService.deleteLocalDocument(
++            widget.aacUserId,
++            documentId,
++          );
++        } else {
++          setState(() {
++            isLoading = false;
++            statusMessage =
++                'Delete failed (${response.statusCode}).';
++          });
++          return;
++        }
++      }
++
++      if (!deleted) {
+         setState(() {
+           isLoading = false;
++          statusMessage = 'Creation not found.';
+         });
++        return;
+       }
++
++      if (currentPageName == '__compose_delete_confirm__') {
++        _restoreFromComposeGrid();
++      }
++
++      await _announceWithTimeout(
++        'Deleted $title.',
++        routing: 'system',
++      );
++
++      await _openComposeDocListGrid(
++        forDelete: true,
++        pushToStack: false,
++        statusOverride: 'Deleted "$title".',
++      );
++    } catch (e) {
++      if (!mounted) return;
++      setState(() {
++        isLoading = false;
++        statusMessage = 'Delete failed: $e';
++      });
+     }
+   }
+ 
+@@ -9789,30 +10183,41 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus
+     });
+ 
+     try {
+-      String generatedTitle = _composeSession.title.trim();
+-      if (generatedTitle.isEmpty) {
+-        final titleResp = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+-          'POST',
+-          '${EnvironmentConfig.apiBaseUrl}/api/compose/generate-title',
+-          baseHeaders: {
+-            'X-User-ID': widget.aacUserId,
+-            'Content-Type': 'application/json',
+-          },
+-          body: json.encode({'body': body}),
+-        );
+-        if (titleResp.statusCode == 200) {
+-          final titleData = json.decode(titleResp.body);
+-          final candidate = (titleData['title'] ?? '').toString().trim();
+-          if (candidate.isNotEmpty) {
+-            generatedTitle = candidate;
+-          }
++      bool isTitleInvalid(String value) {
++        final normalized = value.trim().toLowerCase();
++        if (normalized.isEmpty) return true;
++        const invalid = <String>{
++          'json',
++          'title',
++          'response',
++          'option',
++          'options',
++          'untitled',
++          'untitled creation',
++          'n/a',
++          'na',
++          'null',
++        };
++        if (invalid.contains(normalized)) return true;
++        if (normalized.startsWith('{') || normalized.startsWith('[')) {
++          return true;
+         }
++        return false;
++      }
++
++      String generatedTitle = _composeSession.title.trim();
++      if (isTitleInvalid(generatedTitle)) {
++        generatedTitle = await _generateComposeTitle(body);
+       }
+ 
+-      if (generatedTitle.isEmpty) {
++      if (isTitleInvalid(generatedTitle)) {
+         generatedTitle = 'Untitled Creation';
+       }
+ 
++      setState(() {
++        statusMessage = 'Generated title: "$generatedTitle"';
++      });
++
+       final payload = {
+         'document_type': _composeSession.documentType,
+         'title': generatedTitle,
+@@ -9838,7 +10243,22 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus
+         body: json.encode(payload),
+       );
+ 
+-      if (response.statusCode != 200) {
++      var savedViaLocalFallback = false;
++      if (response.statusCode == 404) {
++        final localId = await ComposeSessionService.upsertLocalDocument(
++          widget.aacUserId,
++          documentId: _composeSession.documentId,
++          documentType: _composeSession.documentType,
++          title: generatedTitle,
++          body: body,
++        );
++        savedViaLocalFallback = true;
++        if ((_composeSession.documentId ?? '').trim().isEmpty) {
++          setState(() {
++            _composeSession = _composeSession.copyWith(documentId: localId);
++          });
++        }
++      } else if (response.statusCode != 200) {
+         setState(() {
+           statusMessage = 'Save failed (${response.statusCode}).';
+         });
+@@ -9847,9 +10267,26 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus
+ 
+       setState(() {
+         _composeSession = const ComposeSessionData.inactive();
+-        statusMessage = 'Creation saved.';
++        statusMessage = savedViaLocalFallback
++            ? 'Creation saved locally as "$generatedTitle".'
++            : 'Creation saved as "$generatedTitle".';
+       });
+       await ComposeSessionService.clear(widget.aacUserId);
++
++      await _announceWithTimeout(
++        savedViaLocalFallback
++            ? 'Creation saved locally as $generatedTitle. Returning home.'
++            : 'Creation saved as $generatedTitle. Returning home.',
++        routing: 'system',
++      );
++
++      await fetchGridDataForPage('home', addToHistory: false);
++      WidgetsBinding.instance.addPostFrameCallback((_) {
++        setState(() {
++          scanningIndex = null;
++        });
++        _maybeStartScanning();
++      });
+     } catch (e) {
+       if (!mounted) return;
+       setState(() {
+@@ -9864,6 +10301,230 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus
+     }
+   }
+ 
++  Future<String> _generateComposeTitle(String body) async {
++    final invalidExact = <String>{
++      'json',
++      'title',
++      'response',
++      'option',
++      'options',
++      'untitled',
++      'untitled creation',
++      'n/a',
++      'na',
++      'null',
++    };
++
++    String normalizeCandidate(String input) {
++      var text = input.replaceAll(RegExp(r'\s+'), ' ').trim();
++      text = text.replaceAll(RegExp(r'^```[a-zA-Z]*\s*'), '');
++      text = text.replaceAll(RegExp(r'\s*```$'), '');
++      text = text.replaceAll(RegExp(r'^[\-*#\d\.\)\s]+'), '');
++      text = text.replaceAll(RegExp(r'^(title|name|subject)\s*[:\-]\s*', caseSensitive: false), '');
++      text = text.replaceAll('`', '');
++      text = text.replaceAll(RegExp("^['\\\"]+|['\\\"]+\$"), '').trim();
++      text = text.replaceAll(RegExp(r'[.!?]+$'), '').trim();
++      if (text.contains('\n')) {
++        final firstLine = text
++            .split('\n')
++            .map((line) => line.trim())
++            .firstWhere((line) => line.isNotEmpty, orElse: () => '');
++        text = firstLine;
++      }
++      return text;
++    }
++
++    String extractCandidate(dynamic raw) {
++      if (raw == null) return '';
++
++      if (raw is Map<String, dynamic>) {
++        const preferredKeys = <String>[
++          'title',
++          'name',
++          'subject',
++          'text',
++          'content',
++          'response',
++          'option',
++        ];
++        for (final key in preferredKeys) {
++          if (raw.containsKey(key)) {
++            final candidate = extractCandidate(raw[key]);
++            if (candidate.isNotEmpty) return candidate;
++          }
++        }
++        for (final value in raw.values) {
++          final candidate = extractCandidate(value);
++          if (candidate.isNotEmpty) return candidate;
++        }
++        return '';
++      }
++
++      if (raw is List) {
++        for (final item in raw) {
++          final candidate = extractCandidate(item);
++          if (candidate.isNotEmpty) return candidate;
++        }
++        return '';
++      }
++
++      var text = normalizeCandidate(raw.toString());
++      if (text.isEmpty) return '';
++
++      if ((text.startsWith('{') && text.endsWith('}')) ||
++          (text.startsWith('[') && text.endsWith(']'))) {
++        try {
++          final decoded = json.decode(text);
++          final nested = extractCandidate(decoded);
++          if (nested.isNotEmpty) {
++            text = nested;
++          }
++        } catch (_) {}
++      }
++
++      text = normalizeCandidate(text);
++      final lower = text.toLowerCase();
++      if (invalidExact.contains(lower)) return '';
++      if (RegExp(r'^[^a-zA-Z0-9]+$').hasMatch(text)) return '';
++      if (lower.startsWith('json ') || lower.contains(' json ')) return '';
++
++      final words = text.split(' ').where((w) => w.trim().isNotEmpty).toList();
++      if (words.isEmpty) return '';
++      if (words.length == 1 && invalidExact.contains(words.first.toLowerCase())) {
++        return '';
++      }
++      if (words.length > 6) {
++        text = words.take(6).join(' ');
++      }
++      return text;
++    }
++
++    String buildContentBasedTitle(String text) {
++      final clean = text.replaceAll(RegExp(r'\s+'), ' ').trim();
++      if (clean.isEmpty) return 'Untitled Creation';
++
++      final stopwords = <String>{
++        'the', 'and', 'for', 'with', 'that', 'this', 'from', 'have', 'your',
++        'you', 'are', 'was', 'were', 'been', 'into', 'about', 'their', 'they',
++        'them', 'then', 'than', 'there', 'here', 'what', 'when', 'where',
++        'will', 'would', 'could', 'should', 'because', 'while', 'after',
++        'before', 'during', 'over', 'under', 'between', 'through', 'within',
++        'without', 'onto', 'upon', 'very', 'just', 'also', 'only', 'more',
++        'most', 'some', 'such', 'much', 'many', 'like', 'make', 'made', 'json',
++      };
++
++      final matches = RegExp(r"[A-Za-z][A-Za-z']+").allMatches(clean);
++      final freq = <String, int>{};
++      for (final match in matches) {
++        final word = match.group(0)!.toLowerCase();
++        if (word.length < 4) continue;
++        if (stopwords.contains(word)) continue;
++        freq[word] = (freq[word] ?? 0) + 1;
++      }
++
++      if (freq.isNotEmpty) {
++        final sorted = freq.entries.toList()
++          ..sort((a, b) => b.value.compareTo(a.value));
++        final topWords = sorted.take(3).map((entry) => entry.key).toList();
++        if (topWords.length >= 2) {
++          final titled = topWords
++              .map((word) => '${word[0].toUpperCase()}${word.substring(1)}')
++              .join(' ');
++          return titled;
++        }
++      }
++
++      final fallbackWords = clean
++          .split(' ')
++          .map((word) => word.replaceAll(RegExp(r"[^A-Za-z0-9'-]"), ''))
++          .where((word) => word.isNotEmpty)
++          .where((word) => word.toLowerCase() != 'json')
++          .take(5)
++          .toList();
++      if (fallbackWords.isNotEmpty) {
++        return fallbackWords.join(' ');
++      }
++      return 'Untitled Creation';
++    }
++
++    String generatedTitle = '';
++    String debugInfo = '';
++
++    try {
++      final titleResp = await AuthenticatedHttpClient.makeAuthenticatedRequest(
++        'POST',
++        '${EnvironmentConfig.apiBaseUrl}/api/compose/generate-title',
++        baseHeaders: {
++          'X-User-ID': widget.aacUserId,
++          'Content-Type': 'application/json',
++        },
++        body: json.encode({'body': body}),
++        timeoutSeconds: 45,
++      );
++      if (titleResp.statusCode == 200) {
++        try {
++          final titleData = json.decode(titleResp.body);
++          generatedTitle = extractCandidate(titleData);
++          debugInfo = generatedTitle.isNotEmpty
++              ? '[Tier1-compose-title]'
++              : '[Tier1-invalid-payload]';
++        } catch (e) {
++          debugInfo = '[Tier1-parse-error: $e]';
++        }
++      } else {
++        debugInfo = '[Tier1-http-${titleResp.statusCode}]';
++      }
++    } catch (e) {
++      debugInfo = '[Tier1-exception: $e]';
++    }
++
++    if (generatedTitle.isEmpty) {
++      try {
++        final fallbackPrompt =
++            'Read this composition and return exactly one descriptive title (2 to 6 words). '
++            'Return plain title text only. No JSON, no code block, no list, no explanation.\n\n'
++            'Composition:\n${body.substring(0, body.length > 800 ? 800 : body.length)}';
++
++        final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
++          'POST',
++          '${EnvironmentConfig.apiBaseUrl}/api/generate-options',
++          baseHeaders: {
++            'X-User-ID': widget.aacUserId,
++            'Content-Type': 'application/json',
++          },
++          body: json.encode({'prompt': fallbackPrompt, 'count': 1}),
++          timeoutSeconds: 45,
++        );
++
++        if (response.statusCode == 200) {
++          try {
++            final data = json.decode(response.body);
++            generatedTitle = extractCandidate(data);
++            debugInfo += generatedTitle.isNotEmpty
++                ? '[Tier2-generate-options]'
++                : '[Tier2-invalid-payload]';
++          } catch (e) {
++            debugInfo += '[Tier2-parse-error: $e]';
++          }
++        } else {
++          debugInfo += '[Tier2-http-${response.statusCode}]';
++        }
++      } catch (e) {
++        debugInfo += '[Tier2-exception: $e]';
++      }
++    }
++
++    if (generatedTitle.isEmpty) {
++      generatedTitle = buildContentBasedTitle(body);
++      debugInfo += '[Tier3-content-analysis]';
++    }
++
++    final finalTitle = normalizeCandidate(generatedTitle);
++    final resolvedTitle = finalTitle.isEmpty ? 'Untitled Creation' : finalTitle;
++    print('DEBUG_TITLE_GENERATION: $debugInfo => "$resolvedTitle"');
++    return resolvedTitle;
++  }
++
+   Future<void> _discardComposeAndExit() async {
+     setState(() {
+       _composeSession = const ComposeSessionData.inactive();
+@@ -9872,13 +10533,13 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus
+     await ComposeSessionService.clear(widget.aacUserId);
+   }
+ 
+-  Future<void> _aiEditCompose() async {
++  Future<bool> _aiEditCompose() async {
+     final body = _composeSession.text.trim();
+     if (body.isEmpty) {
+       setState(() {
+         statusMessage = 'Creation is empty. Add words before AI edit.';
+       });
+-      return;
++      return false;
+     }
+ 
+     setState(() {
+@@ -9895,39 +10556,107 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus
+           'Content-Type': 'application/json',
+         },
+         body: json.encode({'body': body}),
++        timeoutSeconds: 90,
+       );
+ 
++      if (response.statusCode == 404) {
++        final fallbackResponse =
++            await AuthenticatedHttpClient.makeAuthenticatedRequest(
++              'POST',
++              '${EnvironmentConfig.apiBaseUrl}/api/freestyle/cleanup-text',
++              baseHeaders: {
++                'X-User-ID': widget.aacUserId,
++                'Content-Type': 'application/json',
++              },
++              body: json.encode({'text_to_cleanup': body}),
++              timeoutSeconds: 90,
++            );
++
++        if (fallbackResponse.statusCode == 200) {
++          final fallbackDecoded = json.decode(fallbackResponse.body);
++          final cleaned = (fallbackDecoded is Map<String, dynamic>
++                  ? fallbackDecoded['cleaned_text']
++                  : '')
++              .toString()
++              .trim();
++
++          if (cleaned.isNotEmpty) {
++            setState(() {
++              _composeSession = _composeSession.copyWith(text: cleaned);
++              statusMessage =
++                  'AI edit complete. Revised creation loaded.';
++            });
++            await _persistComposeSession();
++            return true;
++          }
++        }
++
++        setState(() {
++          statusMessage =
++              'AI edit endpoint not available (404), and cleanup fallback failed.';
++        });
++        return false;
++      }
++
+       if (response.statusCode != 200) {
++        String backendError = '';
++        try {
++          final decoded = json.decode(response.body);
++          if (decoded is Map<String, dynamic>) {
++            backendError = (decoded['error'] ?? decoded['detail'] ?? '')
++                .toString()
++                .trim();
++          }
++        } catch (_) {}
+         setState(() {
+-          statusMessage = 'AI edit failed (${response.statusCode}).';
++          statusMessage = backendError.isNotEmpty
++              ? 'AI edit failed (${response.statusCode}): $backendError'
++              : 'AI edit failed (${response.statusCode}).';
+         });
+-        return;
++        return false;
+       }
+ 
+       final decoded = json.decode(response.body);
++      final success = decoded is Map<String, dynamic>
++          ? decoded['success'] != false
++          : false;
+       final edited = (decoded is Map<String, dynamic>
+               ? decoded['edited_body']
+               : '')
+           .toString()
+           .trim();
+ 
++      if (!success) {
++        final backendError = decoded is Map<String, dynamic>
++            ? (decoded['error'] ?? 'AI edit failed.')
++                .toString()
++                .trim()
++            : 'AI edit failed.';
++        setState(() {
++          statusMessage = backendError;
++        });
++        return false;
++      }
++
+       if (edited.isEmpty) {
+         setState(() {
+           statusMessage = 'AI edit returned empty content.';
+         });
+-        return;
++        return false;
+       }
+ 
+       setState(() {
+         _composeSession = _composeSession.copyWith(text: edited);
+-        statusMessage = 'AI edit complete.';
++        statusMessage = 'AI edit complete. Review updated creation below.';
+       });
+       await _persistComposeSession();
++      return true;
+     } catch (e) {
+-      if (!mounted) return;
++      if (!mounted) return false;
+       setState(() {
+         statusMessage = 'AI edit failed: $e';
+       });
++      return false;
+     } finally {
+       if (mounted) {
+         setState(() {
+@@ -9985,118 +10714,75 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus
+     });
+   }
+ 
+-  Future<void> _showComposeExportMenu() async {
+-    await showDialog<void>(
+-      context: context,
+-      builder: (context) {
+-        return AlertDialog(
+-          title: const Text('Export Creation'),
+-          content: const Text('Choose an export action.'),
+-          actions: [
+-            TextButton(
+-              onPressed: () {
+-                Navigator.of(context).pop();
+-              },
+-              child: const Text('Cancel'),
+-            ),
+-            TextButton(
+-              onPressed: () async {
+-                Navigator.of(context).pop();
+-                await _copyComposeToClipboard();
+-              },
+-              child: const Text('Copy'),
+-            ),
+-            TextButton(
+-              onPressed: () async {
+-                Navigator.of(context).pop();
+-                await _saveComposeToFile();
+-              },
+-              child: const Text('Save .txt'),
+-            ),
+-            TextButton(
+-              onPressed: () async {
+-                Navigator.of(context).pop();
+-                await _announceWithTimeout(
+-                  _composeSession.text.trim().isEmpty
+-                      ? 'Creation is empty.'
+-                      : _composeSession.text,
+-                  routing: 'system',
+-                );
+-                if (mounted) {
+-                  setState(() {
+-                    statusMessage = 'Creation read aloud.';
+-                  });
+-                }
+-              },
+-              child: const Text('Read Aloud'),
+-            ),
+-          ],
+-        );
++  void _openComposeExportGrid() {
++    _loadComposeGrid([
++      {
++        'text': 'Back',
++        'speechPhrase': 'Back',
++        'composeSpecial': 'compose_back',
++        'hidden': false,
+       },
+-    );
++      {
++        'text': 'Copy',
++        'speechPhrase': 'Copy to clipboard',
++        'composeSpecial': 'compose_copy',
++        'hidden': false,
++      },
++      {
++        'text': 'Save .txt',
++        'speechPhrase': 'Save as text file',
++        'composeSpecial': 'compose_save_file',
++        'hidden': false,
++      },
++      {
++        'text': 'Read Aloud',
++        'speechPhrase': 'Read aloud',
++        'composeSpecial': 'compose_read_aloud',
++        'hidden': false,
++      },
++    ], '__compose_export__');
+   }
+ 
+-  Future<void> _showComposeFinalizeMenu() async {
++  void _openComposeFinalizeGrid() {
+     if (!_composeSession.active) return;
+-    await showDialog<void>(
+-      context: context,
+-      builder: (context) {
+-        return AlertDialog(
+-          title: const Text('Finalize Creation'),
+-          content: const Text(
+-            'Choose to save, discard, read, export, AI edit, or return to creation.',
+-          ),
+-          actions: [
+-            TextButton(
+-              onPressed: () {
+-                Navigator.of(context).pop();
+-              },
+-              child: const Text('Return'),
+-            ),
+-            TextButton(
+-              onPressed: () async {
+-                Navigator.of(context).pop();
+-                await _saveComposeAndExit();
+-              },
+-              child: const Text('Save'),
+-            ),
+-            TextButton(
+-              onPressed: () async {
+-                Navigator.of(context).pop();
+-                await _discardComposeAndExit();
+-              },
+-              child: const Text('Discard'),
+-            ),
+-            TextButton(
+-              onPressed: () async {
+-                Navigator.of(context).pop();
+-                await _announceWithTimeout(
+-                  _composeSession.text.trim().isEmpty
+-                      ? 'Creation is empty.'
+-                      : _composeSession.text,
+-                  routing: 'system',
+-                );
+-              },
+-              child: const Text('Read'),
+-            ),
+-            TextButton(
+-              onPressed: () async {
+-                Navigator.of(context).pop();
+-                await _showComposeExportMenu();
+-              },
+-              child: const Text('Export'),
+-            ),
+-            TextButton(
+-              onPressed: () async {
+-                Navigator.of(context).pop();
+-                await _aiEditCompose();
+-              },
+-              child: const Text('AI Edit'),
+-            ),
+-          ],
+-        );
++    _loadComposeGrid([
++      {
++        'text': 'Return',
++        'speechPhrase': 'Return to creation',
++        'composeSpecial': 'compose_back',
++        'hidden': false,
+       },
+-    );
++      {
++        'text': 'Save',
++        'speechPhrase': 'Save creation',
++        'composeSpecial': 'compose_save',
++        'hidden': false,
++      },
++      {
++        'text': 'Discard',
++        'speechPhrase': 'Discard creation',
++        'composeSpecial': 'compose_discard',
++        'hidden': false,
++      },
++      {
++        'text': 'Read',
++        'speechPhrase': 'Read creation',
++        'composeSpecial': 'compose_read',
++        'hidden': false,
++      },
++      {
++        'text': 'Export',
++        'speechPhrase': 'Export creation',
++        'composeSpecial': 'compose_export_menu',
++        'hidden': false,
++      },
++      {
++        'text': 'AI Edit',
++        'speechPhrase': 'AI Edit creation',
++        'composeSpecial': 'compose_ai_edit',
++        'hidden': false,
++      },
++    ], '__compose_finalize__');
+   }
+ 
+   Future<void> _activateComposeFromEmail({
+@@ -10305,13 +10991,23 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus
+       final summaryInstruction = (userSettings?.summaryOff ?? false)
+           ? 'The "summary" key should contain the exact same FULL text as the "option" key.'
+           : 'If the generated option is more than 5 words, the "summary" key should be a 3-5 word abbreviation of each option, including the exact key words from the option. If the option is 5 words or less, the "summary" key should contain the exact same FULL text as the "option" key.';
+-      final promptForLLM =
+-          'Provide up to "$llmOptions" short, single-phrase options related to: "$question".\n'
+-          'Format your response as a JSON list where each item has "option", "summary", and "keywords" keys.\n'
+-          'The "option" key should contain the FULL option text.\n'
+-          'The "keywords" key should contain a list of 3-5 important words from the option.\n'
+-          '${summaryInstruction}\n'
+-          'Example: [{"option": "What a fantastic day!", "summary": "Fantastic day", "keywords": ["good", "happy", "great", "day", "fun"]}, {"option": "Can I have some water please?", "summary": "Water please", "keywords": ["water", "drink", "thirsty", "beverage"]}]';
++      final promptForLLM = _composeSession.active
++          ? 'Provide up to "$llmOptions" short written-composition options related to: "$question".\n'
++            'This is COMPOSE MODE. The user is writing a document for someone who may not be physically present.\n'
++            'Ignore location, people present, room context, and current activity.\n'
++            'Generate natural next phrases or sentences the user could add to the written composition.\n'
++            'Format your response as a JSON list where each item has "option", "summary", and "keywords" keys.\n'
++            'The "option" key should contain the FULL option text.\n'
++            'The "keywords" key should contain a list of 3-5 important words from the option.\n'
++            '${summaryInstruction}\n'
++                'Example: [{"option": "I wanted to write and tell you how much this meant to me.", "summary": "Tell you this meant", "keywords": ["write", "tell", "meant", "much", "you"]}, {"option": "It made the whole day feel more special.", "summary": "Day more special", "keywords": ["day", "special", "feel", "whole", "made"]}]'
++                '${_getComposePromptContext()}'
++          : 'Provide up to "$llmOptions" short, single-phrase options related to: "$question".\n'
++            'Format your response as a JSON list where each item has "option", "summary", and "keywords" keys.\n'
++            'The "option" key should contain the FULL option text.\n'
++            'The "keywords" key should contain a list of 3-5 important words from the option.\n'
++            '${summaryInstruction}\n'
++            'Example: [{"option": "What a fantastic day!", "summary": "Fantastic day", "keywords": ["good", "happy", "great", "day", "fun"]}, {"option": "Can I have some water please?", "summary": "Water please", "keywords": ["water", "drink", "thirsty", "beverage"]}]';
+       debugPrint('🤖🤖🤖 LLM REQUEST STARTED 🤖🤖🤖');
+       debugPrint('🤖 Question: $question');
+       debugPrint('🤖 LLM Options Count: $llmOptions');
+diff --git a/lib/services/compose_session_service.dart b/lib/services/compose_session_service.dart
+index 41f6833..c7fd66d 100644
+--- a/lib/services/compose_session_service.dart
++++ b/lib/services/compose_session_service.dart
+@@ -90,6 +90,9 @@ class ComposeSessionService {
+   static String _keyForUser(String aacUserId) =>
+       'compose_session_${aacUserId.trim()}';
+ 
++  static String _docsKeyForUser(String aacUserId) =>
++      'compose_docs_${aacUserId.trim()}';
++
+   static Future<ComposeSessionData> load(String aacUserId) async {
+     final prefs = await SharedPreferences.getInstance();
+     final raw = prefs.getString(_keyForUser(aacUserId));
+@@ -124,4 +127,105 @@ class ComposeSessionService {
+     final prefs = await SharedPreferences.getInstance();
+     await prefs.remove(_keyForUser(aacUserId));
+   }
++
++  static Future<List<Map<String, dynamic>>> loadLocalDocuments(
++    String aacUserId,
++  ) async {
++    final prefs = await SharedPreferences.getInstance();
++    final raw = prefs.getString(_docsKeyForUser(aacUserId));
++    if (raw == null || raw.trim().isEmpty) {
++      return <Map<String, dynamic>>[];
++    }
++    try {
++      final decoded = json.decode(raw);
++      if (decoded is! List) {
++        return <Map<String, dynamic>>[];
++      }
++      final docs = decoded
++          .whereType<Map>()
++          .map(
++            (doc) => doc.map(
++              (key, value) => MapEntry(key.toString(), value),
++            ),
++          )
++          .toList();
++
++      docs.sort((a, b) {
++        final aUpdated = (a['updated_at'] ?? '').toString();
++        final bUpdated = (b['updated_at'] ?? '').toString();
++        return bUpdated.compareTo(aUpdated);
++      });
++      return docs;
++    } catch (_) {
++      return <Map<String, dynamic>>[];
++    }
++  }
++
++  static Future<String> upsertLocalDocument(
++    String aacUserId, {
++    String? documentId,
++    required String documentType,
++    required String title,
++    required String body,
++  }) async {
++    final docs = await loadLocalDocuments(aacUserId);
++    final now = DateTime.now().toUtc().toIso8601String();
++    final effectiveId =
++        (documentId ?? '').trim().isNotEmpty
++        ? documentId!.trim()
++        : 'local_${DateTime.now().millisecondsSinceEpoch}';
++
++    final existingIndex = docs.indexWhere(
++      (doc) => (doc['id'] ?? '').toString().trim() == effectiveId,
++    );
++
++    final updatedDoc = <String, dynamic>{
++      'id': effectiveId,
++      'document_type': documentType,
++      'title': title,
++      'body': body,
++      'updated_at': now,
++      'is_local_fallback': true,
++    };
++
++    if (existingIndex >= 0) {
++      final existingCreatedAt =
++          (docs[existingIndex]['created_at'] ?? '').toString().trim();
++      updatedDoc['created_at'] = existingCreatedAt.isEmpty
++          ? now
++          : existingCreatedAt;
++      docs[existingIndex] = updatedDoc;
++    } else {
++      updatedDoc['created_at'] = now;
++      docs.add(updatedDoc);
++    }
++
++    final prefs = await SharedPreferences.getInstance();
++    await prefs.setString(_docsKeyForUser(aacUserId), json.encode(docs));
++    return effectiveId;
++  }
++
++  static Future<bool> deleteLocalDocument(
++    String aacUserId,
++    String documentId,
++  ) async {
++    final effectiveId = documentId.trim();
++    if (effectiveId.isEmpty) {
++      return false;
++    }
++
++    final docs = await loadLocalDocuments(aacUserId);
++    final originalLength = docs.length;
++    docs.removeWhere(
++      (doc) => (doc['id'] ?? '').toString().trim() == effectiveId,
++    );
++
++    if (docs.length == originalLength) {
++      return false;
++    }
++
++    final prefs = await SharedPreferences.getInstance();
++    await prefs.setString(_docsKeyForUser(aacUserId), json.encode(docs));
++    return true;
++  }
+ }

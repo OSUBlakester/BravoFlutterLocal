@@ -126,6 +126,7 @@ class _FreestylePageState extends State<FreestylePage> {
   // Wait-for-switch feature tracking
   bool _waitingForInitialSwitch = false;
   bool _switchStartRequested = false;
+  DateTime? _lastWaitForSwitchNotificationAt;
   
   // --- TTS ---
   late FlutterTts _flutterTts;
@@ -605,7 +606,7 @@ void dispose() {
         _waitingForInitialSwitch = true;
         _switchStartRequested = false;
       });
-      // Don't play prompt - only mood selection and first grid page should play it
+      unawaited(_playWaitForSwitchNotification());
       
       return; // IMPORTANT: Don't start scanning yet, wait for switch press
     }
@@ -686,6 +687,31 @@ void dispose() {
     });
     // Stop any ongoing TTS to prevent audio overlap
     _flutterTts.stop();
+  }
+
+  Future<void> _playWaitForSwitchNotification() async {
+    final now = DateTime.now();
+    if (_lastWaitForSwitchNotificationAt != null &&
+        now.difference(_lastWaitForSwitchNotificationAt!).inMilliseconds < 1200) {
+      debugPrint(
+        'FreestylePage waitForSwitchNotification: Skipping duplicate notification playback',
+      );
+      return;
+    }
+    _lastWaitForSwitchNotificationAt = now;
+
+    final player = AudioPlayer();
+    try {
+      await player.setAsset('assets/notification_v2.mp3');
+      await player.play();
+      await player.playerStateStream.firstWhere(
+        (state) => state.processingState == ProcessingState.completed,
+      );
+    } catch (e) {
+      debugPrint('FreestylePage waitForSwitchNotification: Playback failed: $e');
+    } finally {
+      await player.dispose();
+    }
   }
 
   void _performScanStep() async {

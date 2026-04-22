@@ -8,7 +8,6 @@ import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_tts/flutter_tts.dart';
-import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
@@ -83,7 +82,6 @@ Future<T> retryNetworkOperation<T>(
   throw Exception('All retries failed');
 }
 
-// Test your specific server with different approaches
 Future<void> testTalkWithBravoServer() async {
   final testUrls = [
     'https://app.talkwithbravo.com',
@@ -142,22 +140,17 @@ Future<void> testTalkWithBravoServer() async {
       debugPrint('🔍 FAILED: $testUrl -> $e');
     }
 
-    // Small delay between tests
     await Future.delayed(const Duration(milliseconds: 1000));
   }
 
   debugPrint('🔍 TalkWithBravo server test completed');
 }
 
-// Specialized HTTP client for cruise ship networks - forces standard ports with aggressive retry
-// Helper function to refresh and return the current Firebase ID token
 Future<String> getRefreshedIdToken() async {
-  // Use AuthenticatedHttpClient's proactively-maintained token cache
   final token = await AuthenticatedHttpClient.getRefreshedIdToken();
   return token ?? '';
 }
 
-// Enhanced authenticated request maker that handles token refresh
 Future<http.Response> makeAuthenticatedRequest(
   String method,
   String url, {
@@ -174,7 +167,6 @@ Future<http.Response> makeAuthenticatedRequest(
 
   for (int attempt = 1; attempt <= maxRetries; attempt++) {
     try {
-      // Refresh token BEFORE EACH ATTEMPT (not just once!)
       late String idToken;
       try {
         idToken = await getRefreshedIdToken();
@@ -190,7 +182,6 @@ Future<http.Response> makeAuthenticatedRequest(
         continue;
       }
 
-      // Merge headers with authorization
       final headers = {...?baseHeaders};
       headers['Authorization'] = 'Bearer $idToken';
 
@@ -218,7 +209,6 @@ Future<http.Response> makeAuthenticatedRequest(
 
       debugPrint('🔐 Attempt $attempt RESPONSE: Status ${response.statusCode}');
 
-      // Handle 401 Unauthorized - token is expired/invalid
       if (response.statusCode == 401) {
         debugPrint(
           '🔐 ⚠️ Attempt $attempt got 401 Unauthorized - token may be invalid',
@@ -228,10 +218,10 @@ Future<http.Response> makeAuthenticatedRequest(
             '🔐 Retrying (attempt ${attempt + 1}/$maxRetries) with fresh token...',
           );
           await Future.delayed(Duration(milliseconds: 500 * attempt));
-          continue; // Retry with fresh token (will refresh on next iteration)
+          continue;
         } else {
           debugPrint('🔐 ❌ Max retries exceeded on 401');
-          return response; // Return the 401 response so caller can handle it
+          return response;
         }
       }
 
@@ -240,7 +230,7 @@ Future<http.Response> makeAuthenticatedRequest(
         return response;
       } else {
         debugPrint('🔐 ERROR on attempt $attempt: HTTP ${response.statusCode}');
-        return response; // Return error responses so caller can handle them
+        return response;
       }
     } catch (e) {
       debugPrint('🔐 Attempt $attempt failed with exception: $e');
@@ -295,20 +285,17 @@ void main() {
     WidgetsFlutterBinding.ensureInitialized();
     print('✅ WidgetsFlutterBinding initialized');
 
-    // Force landscape orientations only (prevent portrait)
     SystemChrome.setPreferredOrientations([
       DeviceOrientation.landscapeLeft,
       DeviceOrientation.landscapeRight,
     ]);
     print('✅ Screen orientation set to landscape');
 
-    // Configure network settings
     if (!kIsWeb) {
       HttpOverrides.global = StandardHttpOverrides();
     }
     print('✅ Network configuration complete');
 
-    // Initialize SightWordService (NON-BLOCKING)
     SightWordService()
         .initialize()
         .then((_) {
@@ -2215,10 +2202,13 @@ class _GridPageState extends State<GridPage>
       ];
 
       // Configure group wake word from settings (defaults to 'hey friends' if not set)
-      final groupWakeWord = (settingsProvider.settings?.groupWakeWord ?? 'hey friends')
-          .trim()
-          .toLowerCase();
-      WakeWordService.setGroupWakeWord(groupWakeWord.isEmpty ? 'hey friends' : groupWakeWord);
+      final groupWakeWord =
+          (settingsProvider.settings?.groupWakeWord ?? 'hey friends')
+              .trim()
+              .toLowerCase();
+      WakeWordService.setGroupWakeWord(
+        groupWakeWord.isEmpty ? 'hey friends' : groupWakeWord,
+      );
 
       debugPrint(
         '🎤 Wake word variants configured: \'${_wakeWordVariants.join("' | ")}\'',
@@ -2337,7 +2327,8 @@ class _GridPageState extends State<GridPage>
       );
       settingsProvider.removeListener(_maybeStartScanning);
 
-      // POC APPROACH: Simple concurrent execution - start question listening while announcement plays
+      // Sequence the listening prompt ahead of question recognition so the app
+      // does not transcribe its own "I am listening" announcement.
       debugPrint(
         '[TIMER] GridPage: Before announceViaBackend at ${DateTime.now().millisecondsSinceEpoch}',
       );
@@ -2351,7 +2342,7 @@ class _GridPageState extends State<GridPage>
 
       try {
         debugPrint(
-          '[WakeWord] POC approach: concurrent announcement + question setup...',
+          '[WakeWord] Sequenced announcement + question setup...',
         );
 
         // SIMPLIFIED FAST APPROACH: Use backend but with shorter message
@@ -2375,8 +2366,8 @@ class _GridPageState extends State<GridPage>
         final fastAnnounceStart = DateTime.now().millisecondsSinceEpoch;
         debugPrint('[TIMER] Fast announce START at $fastAnnounceStart');
 
-        // Start listening cue in background so question listening can begin immediately
-        unawaited(_announceSimpleTTS('Listening'));
+        // Play the listening cue to completion before enabling question capture.
+        final announcementFuture = _announceSimpleTTS("I'm listening");
 
         final fastAnnounceEnd = DateTime.now().millisecondsSinceEpoch;
         debugPrint(
@@ -2411,16 +2402,21 @@ class _GridPageState extends State<GridPage>
           }();
         }
 
-        // Keep iOS audio-session setup short so it does not block speech capture startup
+        // Keep iOS audio-session setup short so it does not block the prompt.
         await audioSetupFuture.timeout(
           const Duration(milliseconds: 350),
           onTimeout: () {
-            debugPrint('[WakeWord] Audio setup timed out quickly, continuing to listening');
+            debugPrint(
+              '[WakeWord] Audio setup timed out quickly, continuing to listening',
+            );
           },
         );
 
+        await announcementFuture;
+        await Future.delayed(const Duration(milliseconds: 150));
+
         debugPrint(
-          '[WakeWord] Both fast announcement and audio setup completed',
+          '[WakeWord] Listening prompt and audio setup completed',
         );
         debugPrint(
           '[TIMER] GridPage: After fast announcement at ${DateTime.now().millisecondsSinceEpoch}',
@@ -2432,7 +2428,7 @@ class _GridPageState extends State<GridPage>
           });
         }
 
-        // NOW start question listening immediately - POC approach
+        // Only start question listening after the prompt has fully finished.
         debugPrint(
           '[TIMER] GridPage: Before startQuestionListening at ${DateTime.now().millisecondsSinceEpoch}',
         );
@@ -2445,7 +2441,7 @@ class _GridPageState extends State<GridPage>
           '[TIMER] Question listening call START at $questionListenStart',
         );
 
-        _wakeWordService!.startQuestionListening();
+        await _wakeWordService!.startQuestionListening();
 
         final questionListenEnd = DateTime.now().millisecondsSinceEpoch;
         debugPrint(
@@ -2534,11 +2530,18 @@ class _GridPageState extends State<GridPage>
             'Q: $question${speechHistory.isNotEmpty ? '\n' : ''}$speechHistory';
         _listeningForQuestion = false;
         _isProcessingLLM = true;
-        _showBottomStatusText = false;
-        statusMessage = '';
+        _showBottomStatusText = true;
+        statusMessage = 'Okay, I heard $question. Give me a moment to respond.';
         _microphoneListening = false;
       });
-      // Keep response snappy: skip blocking processing announcement and start LLM immediately
+
+      await _announceWithTimeout(
+        'Okay, I heard $question. Give me a moment to respond.',
+        routing: 'system',
+        speechRate: 140,
+      );
+
+      await Future.delayed(const Duration(milliseconds: 300));
       _inQuestionMode = false;
 
       await _getLLMResponse(question, wasInPausedState: wasScanningPaused);
@@ -3855,21 +3858,21 @@ class _GridPageState extends State<GridPage>
   }) {
     if (_composeSession.active) {
       final summaryInstruction = useSummary
-        ? 'If the generated option is more than 5 words, the "summary" key should be a 3-5 word abbreviation of each option, including the exact key words from the option. If the option is 5 words or less, the "summary" key should contain the exact same FULL text as the "option" key.'
-        : 'The "summary" key should contain the exact same FULL text as the "option" key.';
+          ? 'If the generated option is more than 5 words, the "summary" key should be a 3-5 word abbreviation of each option, including the exact key words from the option. If the option is 5 words or less, the "summary" key should contain the exact same FULL text as the "option" key.'
+          : 'The "summary" key should contain the exact same FULL text as the "option" key.';
       final composeBody = _composeSession.text.trim();
       final latestSelectedResponse = _followUpSelectedResponses.isNotEmpty
-        ? _followUpSelectedResponses.last
-        : '';
+          ? _followUpSelectedResponses.last
+          : '';
       final moodLine =
-        (currentMood != null &&
-          currentMood.isNotEmpty &&
-          currentMood != 'No Mood Selected')
-        ? 'Current user mood for this writing session: "$currentMood". Keep the tone naturally consistent with this mood.\n'
-        : '';
+          (currentMood != null &&
+              currentMood.isNotEmpty &&
+              currentMood != 'No Mood Selected')
+          ? 'Current user mood for this writing session: "$currentMood". Keep the tone naturally consistent with this mood.\n'
+          : '';
       final exclusionLine = excludedOptionsText.trim().isNotEmpty
-        ? 'Avoid repeating these existing options: "$excludedOptionsText".\n'
-        : '';
+          ? 'Avoid repeating these existing options: "$excludedOptionsText".\n'
+          : '';
       return '''
   AAC COMPOSE MODE - GENERATING THE USER'S NEXT WRITTEN OPTIONS
 
@@ -4184,6 +4187,14 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       debugPrint('maybeStartScanning: scanning suppressed');
       return;
     }
+
+    if (_isHandlingSwitchSelection) {
+      debugPrint(
+        'maybeStartScanning: selection handling in progress, delaying scan restart',
+      );
+      return;
+    }
+
     final settingsProvider = Provider.of<UserSettingsProvider>(
       context,
       listen: false,
@@ -4221,7 +4232,10 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       });
       // First grid wait prompt uses speech; later waits use a short notification sound.
       if (!hasPlayedInitialWaitForSwitchVoicePrompt) {
-        _speakPersonalVoice('Press switch to begin scanning');
+        unawaited(() async {
+          await _speakPersonalVoice('Press switch to begin scanning');
+          await _playWaitForSwitchNotification();
+        }());
         hasPlayedInitialWaitForSwitchVoicePrompt = true;
         _hasPlayedWaitPromptThisSession = true;
       } else {
@@ -4252,9 +4266,11 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
     try {
       await player.setAsset('assets/notification_v2.mp3');
       await player.play();
-      await player.playerStateStream.firstWhere(
-        (state) => state.processingState == ProcessingState.completed,
-      ).timeout(const Duration(seconds: 5));
+      await player.playerStateStream
+          .firstWhere(
+            (state) => state.processingState == ProcessingState.completed,
+          )
+          .timeout(const Duration(seconds: 5));
     } catch (e) {
       debugPrint(
         'waitForSwitchNotification: Error playing notification sound: $e',
@@ -4268,6 +4284,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
     if (!mounted) return false;
     if (ModalRoute.of(context)?.isCurrent == false) return false;
     if (_suppressScanning) return false;
+    if (_isHandlingSwitchSelection) return false;
     if (_isScanningPaused && _waitingForUserInput) return false;
     if (_waitingForInitialSwitch) return false;
     if (_isProcessingLLM || _inQuestionMode || _listeningForQuestion) {
@@ -4672,7 +4689,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       false; // Track explicit switch press for scan start
   bool _hasPlayedWaitPromptThisSession =
       false; // Track if we've already played the wait-for-switch prompt (only play once per session)
-    DateTime? _lastWaitForSwitchNotificationAt;
+  DateTime? _lastWaitForSwitchNotificationAt;
 
   WakeWordService? _wakeWordService;
   bool _listeningForQuestion = false;
@@ -4726,6 +4743,8 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
   // --- STEP MODE SCANNING ---
   bool _isAnnouncingScanningPrompt =
       false; // Track if current announcement is a scanning prompt (not regular announcement)
+    bool _isHandlingSwitchSelection =
+      false; // Ignore additional switch presses while selection is processing
   Timer? _scanWatchdogTimer; // Self-heal timer for stalled scanning sessions
   DateTime? _lastScanStepAt; // Last successful scan step execution timestamp
   bool _scanRecoveryInProgress = false; // Prevent overlapping recovery attempts
@@ -7800,7 +7819,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       }
 
       debugPrint(
-        '[POC TTS] Playing "I am listening" announcement through speaker...',
+        '[POC TTS] Playing "$text" announcement through speaker...',
       );
 
       // FAST ANNOUNCEMENT: Use announceViaBackendSimple with preserveMicrophoneSession=true
@@ -7809,7 +7828,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
 
       // Call simplified backend TTS that preserves microphone session (no audio routing changes)
       await announceViaBackendSimple(
-        "I am listening",
+        text,
         routing: 'system',
         preserveMicrophoneSession: true,
       );
@@ -7970,8 +7989,13 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           _restoreFromComposeGrid();
           return;
         case 'compose_new':
-          _restoreFromComposeGrid();
-          await _startComposeSession(documentType: 'story');
+          _composeGridStack.clear();
+          _composePageStack.clear();
+          await _initializeComposeSession(
+            documentType: 'story',
+            sourceFrom: 'compose',
+          );
+          await _openComposeBuilder(sourceContext: 'compose a message');
           return;
         case 'compose_open_list':
           await _openComposeDocListGrid();
@@ -7980,19 +8004,17 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           await _openComposeDocListGrid(forDelete: true);
           return;
         case 'compose_open_doc':
-          _restoreFromComposeGrid();
           _composeGridStack.clear();
           _composePageStack.clear();
-          final docId =
-              (buttonData['composeDocId'] ?? '').toString().trim();
-          await _startComposeSession(
-            documentType:
-                (buttonData['composeDocType'] ?? 'story').toString(),
-            seedText:
-                (buttonData['composeDocBody'] ?? '').toString(),
+          final docId = (buttonData['composeDocId'] ?? '').toString().trim();
+          await _initializeComposeSession(
+            documentType: (buttonData['composeDocType'] ?? 'story').toString(),
+            seedText: (buttonData['composeDocBody'] ?? '').toString(),
             documentId: docId.isEmpty ? null : docId,
             title: (buttonData['composeDocTitle'] ?? '').toString(),
+            sourceFrom: 'compose',
           );
+          await _openComposeBuilder(sourceContext: 'compose a message');
           return;
         case 'compose_delete_select':
           await _openComposeDeleteConfirmGrid(buttonData);
@@ -8004,11 +8026,11 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           });
           return;
         case 'compose_delete_yes':
-          final docId =
-              (buttonData['composeDocId'] ?? '').toString().trim();
+          final docId = (buttonData['composeDocId'] ?? '').toString().trim();
           final title = (buttonData['composeDocTitle'] ?? 'Untitled')
               .toString();
-          final isLocalFallback = buttonData['composeDocIsLocalFallback'] == true;
+          final isLocalFallback =
+              buttonData['composeDocIsLocalFallback'] == true;
           await _deleteComposeDocument(
             documentId: docId,
             title: title,
@@ -8019,6 +8041,11 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           _composeGridStack.clear();
           _composePageStack.clear();
           await _saveComposeAndExit();
+          return;
+        case 'compose_return_builder':
+          _composeGridStack.clear();
+          _composePageStack.clear();
+          await _openComposeBuilder();
           return;
         case 'compose_discard':
           _restoreFromComposeGrid();
@@ -8055,14 +8082,10 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
               _maybeStartScanning();
             });
           } else {
-            final failureMessage =
-                (statusMessage ?? '').trim().isNotEmpty
+            final failureMessage = (statusMessage ?? '').trim().isNotEmpty
                 ? statusMessage!.trim()
                 : 'Unable to AI edit creation right now.';
-            await _announceWithTimeout(
-              failureMessage,
-              routing: 'system',
-            );
+            await _announceWithTimeout(failureMessage, routing: 'system');
             WidgetsBinding.instance.addPostFrameCallback((_) {
               _maybeStartScanning();
             });
@@ -9634,6 +9657,15 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
             ),
           );
         } else if (specialPage == 'compose' || specialPage == 'composition') {
+          setState(() {
+            statusMessage = 'Opening creation menu...';
+          });
+
+          setState(() {
+            activeLLMPromptForContext = null;
+            originatingButtonText = null;
+          });
+
           _openComposeEntryGrid();
         } else {
           setState(() {
@@ -10020,15 +10052,6 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
         .map((btn) => Map<String, dynamic>.from(btn))
         .toList();
 
-    if (_composeSession.active && currentPageName == 'home') {
-      baseButtons.add({
-        'text': 'Exit Creation',
-        'speechPhrase': 'Exit Creation',
-        'composeSpecial': 'exit_creation',
-        'hidden': false,
-      });
-    }
-
     return baseButtons;
   }
 
@@ -10077,16 +10100,90 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
     }
   }
 
+  Future<void> _initializeComposeSession({
+    required String documentType,
+    String seedText = '',
+    String? documentId,
+    String title = '',
+    String? sourceFrom,
+  }) async {
+    final now = DateTime.now().toUtc().toIso8601String();
+    setState(() {
+      _composeSession = ComposeSessionData(
+        active: true,
+        documentType: documentType,
+        documentId: documentId,
+        title: title,
+        text: seedText.trim(),
+        startedAt: now,
+        sourceFrom: sourceFrom ?? currentPageName,
+      );
+      statusMessage = 'Creation in progress';
+    });
+    await _persistComposeSession();
+  }
+
+  Future<void> _openComposeBuilder({String? sourceContext}) async {
+    final initialSession = _composeSession.active
+        ? _composeSession
+        : await ComposeSessionService.load(widget.aacUserId);
+    if (!mounted || !initialSession.active) {
+      return;
+    }
+
+    const resolvedSourceContext = 'compose a message';
+
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => FreestylePage(
+          idToken: widget.idToken,
+          aacUserId: widget.aacUserId,
+          displayName: widget.displayName,
+          sourceContext: resolvedSourceContext,
+          sourcePage: 'compose',
+          isLLMGenerated: false,
+          originatingButtonText: null,
+          composeMode: true,
+          initialComposeSession: initialSession,
+          initialDocumentType: initialSession.documentType,
+        ),
+      ),
+    );
+
+    if (!mounted) return;
+
+    final refreshed = await ComposeSessionService.load(widget.aacUserId);
+    if (!mounted) return;
+
+    setState(() {
+      _composeSession = refreshed;
+    });
+
+    if (_composeSession.active) {
+      _composeGridStack.clear();
+      _composePageStack.clear();
+      _openComposeFinalizeGrid();
+      return;
+    }
+
+    await fetchGridDataForPage('home', addToHistory: false);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() {
+        scanningIndex = null;
+      });
+      _maybeStartScanning();
+    });
+  }
+
   // ---------- compose grid navigation helpers ----------
 
   void _loadComposeGrid(
     List<Map<String, dynamic>> buttons,
-    String gridName,
-    {
+    String gridName, {
     bool pushToStack = true,
     String? nextStatusMessage,
-  }
-  ) {
+  }) {
     if (pushToStack) {
       _composeGridStack.add(List<Map<String, dynamic>>.from(gridButtons));
       _composePageStack.add(currentPageName);
@@ -10182,13 +10279,13 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       } else if (response.statusCode != 200) {
         setState(() {
           isLoading = false;
-          statusMessage =
-              'Unable to load creations (${response.statusCode}).';
+          statusMessage = 'Unable to load creations (${response.statusCode}).';
         });
         return;
       } else {
         final decoded = json.decode(response.body);
-        docs = (decoded is Map<String, dynamic>
+        docs =
+            (decoded is Map<String, dynamic>
                 ? decoded['documents'] as List<dynamic>?
                 : null) ??
             <dynamic>[];
@@ -10196,17 +10293,20 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
 
       if (docs.isEmpty) {
         if (forDelete) {
-          _loadComposeGrid([
-            {
-              'text': 'Back',
-              'speechPhrase': 'Back',
-              'composeSpecial': 'compose_back',
-              'hidden': false,
-            },
-          ], '__compose_delete_list__',
-              pushToStack: pushToStack,
-              nextStatusMessage:
-                  statusOverride ?? 'No saved creations to delete.');
+          _loadComposeGrid(
+            [
+              {
+                'text': 'Back',
+                'speechPhrase': 'Back',
+                'composeSpecial': 'compose_back',
+                'hidden': false,
+              },
+            ],
+            '__compose_delete_list__',
+            pushToStack: pushToStack,
+            nextStatusMessage:
+                statusOverride ?? 'No saved creations to delete.',
+          );
         } else {
           setState(() {
             isLoading = false;
@@ -10260,31 +10360,33 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
   ) async {
     final title = (buttonData['composeDocTitle'] ?? 'Untitled').toString();
     final docId = (buttonData['composeDocId'] ?? '').toString().trim();
-    final documentType =
-        (buttonData['composeDocType'] ?? 'story').toString();
+    final documentType = (buttonData['composeDocType'] ?? 'story').toString();
     final body = (buttonData['composeDocBody'] ?? '').toString();
     final isLocalFallback = buttonData['composeDocIsLocalFallback'] == true;
 
-    _loadComposeGrid([
-      {
-        'text': 'No',
-        'speechPhrase': 'No',
-        'composeSpecial': 'compose_delete_no',
-        'hidden': false,
-      },
-      {
-        'text': 'Yes',
-        'speechPhrase': 'Yes',
-        'composeSpecial': 'compose_delete_yes',
-        'composeDocId': docId,
-        'composeDocType': documentType,
-        'composeDocBody': body,
-        'composeDocTitle': title,
-        'composeDocIsLocalFallback': isLocalFallback,
-        'hidden': false,
-      },
-    ], '__compose_delete_confirm__',
-        nextStatusMessage: 'Delete "$title"?');
+    _loadComposeGrid(
+      [
+        {
+          'text': 'No',
+          'speechPhrase': 'No',
+          'composeSpecial': 'compose_delete_no',
+          'hidden': false,
+        },
+        {
+          'text': 'Yes',
+          'speechPhrase': 'Yes',
+          'composeSpecial': 'compose_delete_yes',
+          'composeDocId': docId,
+          'composeDocType': documentType,
+          'composeDocBody': body,
+          'composeDocTitle': title,
+          'composeDocIsLocalFallback': isLocalFallback,
+          'hidden': false,
+        },
+      ],
+      '__compose_delete_confirm__',
+      nextStatusMessage: 'Delete "$title"?',
+    );
 
     await _announceWithTimeout(
       'Delete $title? Select yes or no.',
@@ -10335,8 +10437,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
         } else {
           setState(() {
             isLoading = false;
-            statusMessage =
-                'Delete failed (${response.statusCode}).';
+            statusMessage = 'Delete failed (${response.statusCode}).';
           });
           return;
         }
@@ -10354,10 +10455,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
         _restoreFromComposeGrid();
       }
 
-      await _announceWithTimeout(
-        'Deleted $title.',
-        routing: 'system',
-      );
+      await _announceWithTimeout('Deleted $title.', routing: 'system');
 
       await _openComposeDocListGrid(
         forDelete: true,
@@ -10525,7 +10623,10 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       text = text.replaceAll(RegExp(r'^```[a-zA-Z]*\s*'), '');
       text = text.replaceAll(RegExp(r'\s*```$'), '');
       text = text.replaceAll(RegExp(r'^[\-*#\d\.\)\s]+'), '');
-      text = text.replaceAll(RegExp(r'^(title|name|subject)\s*[:\-]\s*', caseSensitive: false), '');
+      text = text.replaceAll(
+        RegExp(r'^(title|name|subject)\s*[:\-]\s*', caseSensitive: false),
+        '',
+      );
       text = text.replaceAll('`', '');
       text = text.replaceAll(RegExp("^['\\\"]+|['\\\"]+\$"), '').trim();
       text = text.replaceAll(RegExp(r'[.!?]+$'), '').trim();
@@ -10595,7 +10696,8 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
 
       final words = text.split(' ').where((w) => w.trim().isNotEmpty).toList();
       if (words.isEmpty) return '';
-      if (words.length == 1 && invalidExact.contains(words.first.toLowerCase())) {
+      if (words.length == 1 &&
+          invalidExact.contains(words.first.toLowerCase())) {
         return '';
       }
       if (words.length > 6) {
@@ -10609,13 +10711,63 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       if (clean.isEmpty) return 'Untitled Creation';
 
       final stopwords = <String>{
-        'the', 'and', 'for', 'with', 'that', 'this', 'from', 'have', 'your',
-        'you', 'are', 'was', 'were', 'been', 'into', 'about', 'their', 'they',
-        'them', 'then', 'than', 'there', 'here', 'what', 'when', 'where',
-        'will', 'would', 'could', 'should', 'because', 'while', 'after',
-        'before', 'during', 'over', 'under', 'between', 'through', 'within',
-        'without', 'onto', 'upon', 'very', 'just', 'also', 'only', 'more',
-        'most', 'some', 'such', 'much', 'many', 'like', 'make', 'made', 'json',
+        'the',
+        'and',
+        'for',
+        'with',
+        'that',
+        'this',
+        'from',
+        'have',
+        'your',
+        'you',
+        'are',
+        'was',
+        'were',
+        'been',
+        'into',
+        'about',
+        'their',
+        'they',
+        'them',
+        'then',
+        'than',
+        'there',
+        'here',
+        'what',
+        'when',
+        'where',
+        'will',
+        'would',
+        'could',
+        'should',
+        'because',
+        'while',
+        'after',
+        'before',
+        'during',
+        'over',
+        'under',
+        'between',
+        'through',
+        'within',
+        'without',
+        'onto',
+        'upon',
+        'very',
+        'just',
+        'also',
+        'only',
+        'more',
+        'most',
+        'some',
+        'such',
+        'much',
+        'many',
+        'like',
+        'make',
+        'made',
+        'json',
       };
 
       final matches = RegExp(r"[A-Za-z][A-Za-z']+").allMatches(clean);
@@ -10779,17 +10931,17 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
 
         if (fallbackResponse.statusCode == 200) {
           final fallbackDecoded = json.decode(fallbackResponse.body);
-          final cleaned = (fallbackDecoded is Map<String, dynamic>
-                  ? fallbackDecoded['cleaned_text']
-                  : '')
-              .toString()
-              .trim();
+          final cleaned =
+              (fallbackDecoded is Map<String, dynamic>
+                      ? fallbackDecoded['cleaned_text']
+                      : '')
+                  .toString()
+                  .trim();
 
           if (cleaned.isNotEmpty) {
             setState(() {
               _composeSession = _composeSession.copyWith(text: cleaned);
-              statusMessage =
-                  'AI edit complete. Revised creation loaded.';
+              statusMessage = 'AI edit complete. Revised creation loaded.';
             });
             await _persistComposeSession();
             return true;
@@ -10825,17 +10977,14 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       final success = decoded is Map<String, dynamic>
           ? decoded['success'] != false
           : false;
-      final edited = (decoded is Map<String, dynamic>
-              ? decoded['edited_body']
-              : '')
-          .toString()
-          .trim();
+      final edited =
+          (decoded is Map<String, dynamic> ? decoded['edited_body'] : '')
+              .toString()
+              .trim();
 
       if (!success) {
         final backendError = decoded is Map<String, dynamic>
-            ? (decoded['error'] ?? 'AI edit failed.')
-                .toString()
-                .trim()
+            ? (decoded['error'] ?? 'AI edit failed.').toString().trim()
             : 'AI edit failed.';
         setState(() {
           statusMessage = backendError;
@@ -10895,10 +11044,11 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       return;
     }
 
-    final safeTitle = (_composeSession.title.trim().isEmpty
-            ? 'creation_${DateTime.now().toIso8601String().substring(0, 10)}'
-            : _composeSession.title.trim())
-        .replaceAll(RegExp(r'[^a-zA-Z0-9_\-]+'), '_');
+    final safeTitle =
+        (_composeSession.title.trim().isEmpty
+                ? 'creation_${DateTime.now().toIso8601String().substring(0, 10)}'
+                : _composeSession.title.trim())
+            .replaceAll(RegExp(r'[^a-zA-Z0-9_\-]+'), '_');
 
     final path = await FilePicker.platform.saveFile(
       dialogTitle: 'Save creation',
@@ -10954,7 +11104,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       {
         'text': 'Return',
         'speechPhrase': 'Return to creation',
-        'composeSpecial': 'compose_back',
+        'composeSpecial': 'compose_return_builder',
         'hidden': false,
       },
       {
@@ -11024,13 +11174,34 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
   }
 
   void _onButtonSelected(int index) async {
+    if (_isHandlingSwitchSelection) {
+      debugPrint('_onButtonSelected: Ignoring duplicate switch selection');
+      return;
+    }
+
+    _isHandlingSwitchSelection = true;
     _stopAuditoryScanning();
-    final definedButtons = _effectiveGridButtons();
-    if (index < 0 || index >= definedButtons.length) return;
-    final btn = definedButtons[index];
-    // Only handle the button action; let handleButtonAction manage all TTS/announcement logic
-    await handleButtonAction(btn);
-    // Do NOT restart scanning here. Scanning will be restarted after grid update/navigation.
+    if (_isAnnouncingScanningPrompt) {
+      flutterTts.stop();
+      if (mounted) {
+        setState(() {
+          _isAnnouncingScanningPrompt = false;
+        });
+      } else {
+        _isAnnouncingScanningPrompt = false;
+      }
+    }
+
+    try {
+      final definedButtons = _effectiveGridButtons();
+      if (index < 0 || index >= definedButtons.length) return;
+      final btn = definedButtons[index];
+      // Only handle the button action; let handleButtonAction manage all TTS/announcement logic
+      await handleButtonAction(btn);
+      // Do NOT restart scanning here. Scanning will be restarted after grid update/navigation.
+    } finally {
+      _isHandlingSwitchSelection = false;
+    }
   }
 
   void _handleStepModeTabAdvance() {
@@ -11198,21 +11369,21 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           : 'If the generated option is more than 5 words, the "summary" key should be a 3-5 word abbreviation of each option, including the exact key words from the option. If the option is 5 words or less, the "summary" key should contain the exact same FULL text as the "option" key.';
       final promptForLLM = _composeSession.active
           ? 'Provide up to "$llmOptions" short written-composition options related to: "$question".\n'
-            'This is COMPOSE MODE. The user is writing a document for someone who may not be physically present.\n'
-            'Ignore location, people present, room context, and current activity.\n'
-            'Generate natural next phrases or sentences the user could add to the written composition.\n'
-            'Format your response as a JSON list where each item has "option", "summary", and "keywords" keys.\n'
-            'The "option" key should contain the FULL option text.\n'
-            'The "keywords" key should contain a list of 3-5 important words from the option.\n'
-            '${summaryInstruction}\n'
+                'This is COMPOSE MODE. The user is writing a document for someone who may not be physically present.\n'
+                'Ignore location, people present, room context, and current activity.\n'
+                'Generate natural next phrases or sentences the user could add to the written composition.\n'
+                'Format your response as a JSON list where each item has "option", "summary", and "keywords" keys.\n'
+                'The "option" key should contain the FULL option text.\n'
+                'The "keywords" key should contain a list of 3-5 important words from the option.\n'
+                '${summaryInstruction}\n'
                 'Example: [{"option": "I wanted to write and tell you how much this meant to me.", "summary": "Tell you this meant", "keywords": ["write", "tell", "meant", "much", "you"]}, {"option": "It made the whole day feel more special.", "summary": "Day more special", "keywords": ["day", "special", "feel", "whole", "made"]}]'
                 '${_getComposePromptContext()}'
           : 'Provide up to "$llmOptions" short, single-phrase options related to: "$question".\n'
-            'Format your response as a JSON list where each item has "option", "summary", and "keywords" keys.\n'
-            'The "option" key should contain the FULL option text.\n'
-            'The "keywords" key should contain a list of 3-5 important words from the option.\n'
-            '${summaryInstruction}\n'
-            'Example: [{"option": "What a fantastic day!", "summary": "Fantastic day", "keywords": ["good", "happy", "great", "day", "fun"]}, {"option": "Can I have some water please?", "summary": "Water please", "keywords": ["water", "drink", "thirsty", "beverage"]}]';
+                'Format your response as a JSON list where each item has "option", "summary", and "keywords" keys.\n'
+                'The "option" key should contain the FULL option text.\n'
+                'The "keywords" key should contain a list of 3-5 important words from the option.\n'
+                '${summaryInstruction}\n'
+                'Example: [{"option": "What a fantastic day!", "summary": "Fantastic day", "keywords": ["good", "happy", "great", "day", "fun"]}, {"option": "Can I have some water please?", "summary": "Water please", "keywords": ["water", "drink", "thirsty", "beverage"]}]';
       debugPrint('🤖🤖🤖 LLM REQUEST STARTED 🤖🤖🤖');
       debugPrint('🤖 Question: $question');
       debugPrint('🤖 LLM Options Count: $llmOptions');
@@ -12141,6 +12312,13 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
               return;
             }
 
+            if (_isHandlingSwitchSelection) {
+              debugPrint(
+                '🚫 SWITCH BLOCKED: Selection already in progress',
+              );
+              return;
+            }
+
             // Handle initial switch press to start scanning
             if (_waitingForInitialSwitch) {
               debugPrint(
@@ -12459,7 +12637,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
                             return Row(
                               children: [
                                 Text(
-                                  composeActive ? 'Create:' : 'Speech History:',
+                                  'Speech History:',
                                   style: const TextStyle(
                                     fontSize: 18,
                                     fontWeight: FontWeight.bold,

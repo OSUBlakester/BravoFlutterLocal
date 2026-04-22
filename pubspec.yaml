@@ -58,3 +58,4 @@ flutter:
     - assets/speech_bubble_spinner.png
     - assets/whitespeechbubble.jpg
     - assets/dolch_sight_words.json
+    - assets/spelling_fallback_words.txt

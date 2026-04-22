@@ -8,6 +8,7 @@ import '../services/authenticated_http_client.dart';
 class TapInterfaceCategory {
   final String id;
   final String label;
+  final String? promptCategory;
   final String? speechText;
   final String? imageUrl;
   final String? customAudioFile;
@@ -24,6 +25,7 @@ class TapInterfaceCategory {
   TapInterfaceCategory({
     required this.id,
     required this.label,
+    this.promptCategory,
     this.speechText,
     this.imageUrl,
     this.customAudioFile,
@@ -87,6 +89,7 @@ class TapInterfaceCategory {
     return TapInterfaceCategory(
       id: (json['id'] ?? effectiveLabel).toString(),
       label: effectiveLabel,
+      promptCategory: json['prompt_category']?.toString(),
       speechText: json['speech_text'],
       imageUrl: json['image_url'],
       customAudioFile: json['custom_audio_file'],

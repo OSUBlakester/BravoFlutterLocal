@@ -82,6 +82,7 @@ class _GamesPageState extends State<GamesPage> {
   int _maxQuestions = 20;
   int _maxGuesses = 5;
   int _scanDelay = 3500;
+  int _llmOptions = 5; // Number of LLM options to show
   // ignore: unused_field
   String _wakeWord = 'Hey Bravo';
   bool _enableScanning = false;
@@ -125,6 +126,8 @@ class _GamesPageState extends State<GamesPage> {
   Timer? _playerQuestionCommitTimer;
   String _pendingPlayerQuestionTranscript = '';
   Timer? _guessClueSilenceTimer;
+  Timer? _hmLetterSilenceTimer;
+  String _lastPartialHmLetterTranscript = '';
   String _lastPartialGuessClueTranscript = '';
   bool _guessClueDetectedFirstSpeech = false;
   Timer? _storyQuestionCommitTimer;
@@ -376,6 +379,7 @@ class _GamesPageState extends State<GamesPage> {
     _playerGuessCommitTimer?.cancel();
     _playerQuestionCommitTimer?.cancel();
     _guessClueSilenceTimer?.cancel();
+    _hmLetterSilenceTimer?.cancel();
     _storyQuestionCommitTimer?.cancel();
     super.dispose();
   }
@@ -533,6 +537,32 @@ class _GamesPageState extends State<GamesPage> {
     _guessClueDetectedFirstSpeech = false;
   }
 
+  void _resetHmLetterSilenceTimer() {
+    _hmLetterSilenceTimer?.cancel();
+    _hmLetterSilenceTimer = Timer(const Duration(milliseconds: 1200), () {
+      if (!mounted || _isExiting) return;
+      if (!_isListening || _listeningFor != 'hm_letter') return;
+      if (_isProcessingSpeechResult) return;
+
+      final committedTranscript = _lastPartialHmLetterTranscript.trim();
+      if (committedTranscript.isEmpty) return;
+
+      debugPrint(
+        'Games page: [HM_LETTER_COMMIT] Committing letter after silence: "$committedTranscript"',
+      );
+      _isProcessingSpeechResult = true;
+      _lastProcessedTranscript = committedTranscript;
+      _speech.stop();
+      _handleSpeechResult(committedTranscript, 'hm_letter');
+    });
+  }
+
+  void _clearHmLetterSilenceTimer() {
+    _hmLetterSilenceTimer?.cancel();
+    _hmLetterSilenceTimer = null;
+    _lastPartialHmLetterTranscript = '';
+  }
+
   void _scheduleStoryQuestionCommit(String transcript) {
     final cleanedTranscript = transcript.trim();
     if (cleanedTranscript.isEmpty) return;
@@ -599,7 +629,8 @@ class _GamesPageState extends State<GamesPage> {
     return listeningFor == 'player_question' ||
         listeningFor == 'player_guess' ||
         listeningFor == 'story_partner_question' ||
-        listeningFor == 'hm_letter_count';
+      listeningFor == 'hm_letter_count' ||
+      listeningFor == 'hm_letter';
   }
 
   Future<void> _initializeSpeech() async {
@@ -608,24 +639,8 @@ class _GamesPageState extends State<GamesPage> {
       bool available = await _speech.initialize(
         onError: (error) {
           debugPrint('Speech recognition error: $error');
-          // Auto-retry for hangman letter listening on error_no_match
-          // Single letters are hard for speech recognition, so retry automatically
-          if (_listeningFor == 'hm_letter' &&
-              error.errorMsg == 'error_no_match' &&
-              mounted) {
-            debugPrint(
-              'Games page: [HM_LETTER] error_no_match, prompting retry',
-            );
-            _speak("I didn't catch that. Say the letter again.").then((_) {
-              if (mounted && _listeningFor == 'hm_letter') {
-                Future.delayed(Duration(milliseconds: 300), () {
-                  if (mounted) _startListening('hm_letter');
-                });
-              }
-            });
-            return;
-          }
-
+          // Treat hangman letter no-match the same way other capture flows recover:
+          // route through the normal no-letter handling path instead of restart loops.
           if (_isGuessGame &&
               _listeningFor == 'player_guess' &&
               !_guessModeBListeningForClue) {
@@ -673,6 +688,7 @@ class _GamesPageState extends State<GamesPage> {
 
       setState(() {
         _scanDelay = settingsProvider.settings?.scanDelay ?? 3500;
+        _llmOptions = settingsProvider.settings?.llmOptions ?? 5;
         _wakeWord =
             '${settingsProvider.settings?.wakeWordInterjection ?? 'Hey'} ${settingsProvider.settings?.wakeWordName ?? 'Bravo'}';
         _maxQuestions = 20; // Will be loaded from backend later
@@ -685,7 +701,7 @@ class _GamesPageState extends State<GamesPage> {
       });
 
       debugPrint(
-        'Games page settings: enableScanning=$_enableScanning, waitForSwitch=$_waitForSwitchToScan, scanDelay=$_scanDelay',
+        'Games page settings: enableScanning=$_enableScanning, waitForSwitch=$_waitForSwitchToScan, scanDelay=$_scanDelay, llmOptions=$_llmOptions',
       );
     } catch (e) {
       debugPrint('Error loading settings: $e');
@@ -763,6 +779,8 @@ class _GamesPageState extends State<GamesPage> {
         _lastPartialGuessClueTranscript = '';
         _guessClueSilenceTimer?.cancel();
       }
+    } else if (listeningFor == 'hm_letter') {
+      _clearHmLetterSilenceTimer();
     }
 
     debugPrint(
@@ -782,8 +800,6 @@ class _GamesPageState extends State<GamesPage> {
               listeningFor == 'hm_letter_count' ||
               listeningFor == 'hm_yes_no')
         ? Duration(seconds: 8)
-        : (listeningFor == 'hm_letter')
-        ? Duration(seconds: 5)
         : Duration(seconds: 60);
 
     debugPrint(
@@ -986,17 +1002,14 @@ class _GamesPageState extends State<GamesPage> {
             _lastProcessedTranscript = transcript;
             _speech.stop();
             _handleSpeechResult(transcript, listeningFor);
-          } else if (listeningFor == 'hm_letter' &&
-              result.finalResult &&
-              transcript.isNotEmpty) {
-            // Hangman Mode B: capture a letter from voice
-            debugPrint(
-              'Games page: [MATCH_FOUND] DETECTED hangman letter guess: "$transcript"',
-            );
-            _isProcessingSpeechResult = true;
-            _lastProcessedTranscript = transcript;
-            _speech.stop();
-            _handleSpeechResult(transcript, listeningFor);
+          } else if (listeningFor == 'hm_letter') {
+            if (transcript.isNotEmpty) {
+              debugPrint(
+                'Games page: [HM_LETTER] Captured partial transcript: "$transcript"',
+              );
+              _lastPartialHmLetterTranscript = transcript.trim();
+              _resetHmLetterSilenceTimer();
+            }
           } else if (result.finalResult && listeningFor == 'ready') {
             // For 'ready' mode, don't restart - the listener will keep running
             debugPrint(
@@ -1108,6 +1121,7 @@ class _GamesPageState extends State<GamesPage> {
 
   void _stopListening({bool resumeWakeWordService = false}) {
     _listeningRestartTimer?.cancel();
+    _clearHmLetterSilenceTimer();
     if (_listeningFor == 'player_guess') {
       _clearGuessNoInputTimeoutWindow();
       _clearPlayerGuessCommitTimer();
@@ -1318,121 +1332,7 @@ class _GamesPageState extends State<GamesPage> {
       }
     } else if (listeningMode == 'hm_letter') {
       // Mode B letter capture: parse the letter from the transcript
-      final upper = transcript.toUpperCase().trim();
-      String? detectedLetter;
-
-      // Try single character
-      if (upper.length == 1 && RegExp(r'[A-Z]').hasMatch(upper)) {
-        detectedLetter = upper;
-      }
-
-      // Try extracting a single letter word from the transcript
-      if (detectedLetter == null) {
-        final match = RegExp(r'\b([A-Z])\b').firstMatch(upper);
-        if (match != null) {
-          detectedLetter = match.group(1);
-        }
-      }
-
-      // Try "the letter X" or "X as in" patterns
-      if (detectedLetter == null) {
-        final letterPattern = RegExp(
-          r'(?:THE\s+)?LETTER\s+([A-Z])\b',
-        ).firstMatch(upper);
-        if (letterPattern != null) {
-          detectedLetter = letterPattern.group(1);
-        }
-      }
-      if (detectedLetter == null) {
-        final asInPattern = RegExp(r'\b([A-Z])\s+AS\s+IN\b').firstMatch(upper);
-        if (asInPattern != null) {
-          detectedLetter = asInPattern.group(1);
-        }
-      }
-
-      // Phonetic/homophone mapping — speech recognizers often hear letters as words
-      if (detectedLetter == null) {
-        final lower = transcript.toLowerCase().trim();
-        const phoneticMap = {
-          // A
-          'hey': 'A', 'ay': 'A', 'eh': 'A', 'a.': 'A', 'aye': 'A', 'eight': 'A',
-          // B
-          'bee': 'B', 'be': 'B', 'b.': 'B', 'bea': 'B',
-          // C
-          'see': 'C', 'sea': 'C', 'c.': 'C', 'si': 'C',
-          // D
-          'dee': 'D', 'de': 'D', 'd.': 'D',
-          // E
-          'ee': 'E', 'e.': 'E',
-          // F
-          'ef': 'F', 'eff': 'F', 'f.': 'F', 'half': 'F',
-          // G
-          'gee': 'G', 'g.': 'G', 'ji': 'G', 'jee': 'G',
-          // H
-          'aitch': 'H', 'h.': 'H', 'age': 'H', 'ach': 'H', 'each': 'H',
-          // I
-          'eye': 'I', 'i.': 'I',
-          // J
-          'jay': 'J', 'j.': 'J', 'je': 'J',
-          // K
-          'kay': 'K',
-          'k.': 'K',
-          'ok': 'K',
-          'okay': 'K',
-          'kei': 'K',
-          'cake': 'K',
-          // L
-          'el': 'L', 'elle': 'L', 'l.': 'L', 'ale': 'L', 'ell': 'L',
-          // M
-          'em': 'M', 'm.': 'M',
-          // N
-          'en': 'N', 'n.': 'N', 'and': 'N',
-          // O
-          'oh': 'O', 'o.': 'O', 'owe': 'O',
-          // P
-          'pee': 'P', 'pe': 'P', 'p.': 'P',
-          // Q
-          'queue': 'Q',
-          'cue': 'Q',
-          'q.': 'Q',
-          'cute': 'Q',
-          'kew': 'Q',
-          'que': 'Q',
-          // R
-          'are': 'R', 'ar': 'R', 'r.': 'R', 'our': 'R',
-          // S
-          'es': 'S', 'ass': 'S', 's.': 'S',
-          // T
-          'tee': 'T', 'tea': 'T', 'te': 'T', 't.': 'T',
-          // U
-          'you': 'U', 'u.': 'U', 'ewe': 'U', 'yu': 'U',
-          // V
-          'vee': 'V', 've': 'V', 'v.': 'V', 'we': 'V',
-          // W
-          'double you': 'W', 'w.': 'W', 'double u': 'W', 'dubya': 'W',
-          // X
-          'ex': 'X', 'x.': 'X', 'axe': 'X', 'eggs': 'X',
-          // Y
-          'why': 'Y', 'y.': 'Y', 'wie': 'Y', 'wye': 'Y',
-          // Z
-          'zee': 'Z', 'zed': 'Z', 'z.': 'Z',
-        };
-
-        // Check exact match first
-        if (phoneticMap.containsKey(lower)) {
-          detectedLetter = phoneticMap[lower];
-        }
-
-        // Check if transcript contains a phonetic match (for "the letter bee" etc.)
-        if (detectedLetter == null) {
-          for (final entry in phoneticMap.entries) {
-            if (lower.endsWith(entry.key) || lower.contains(' ${entry.key}')) {
-              detectedLetter = entry.value;
-              break;
-            }
-          }
-        }
-      }
+      final detectedLetter = _extractHangmanLetter(transcript);
 
       debugPrint(
         'Games page: [HM_LETTER] transcript="$transcript", detected=$detectedLetter',
@@ -1443,17 +1343,26 @@ class _GamesPageState extends State<GamesPage> {
       if (detectedLetter != null) {
         if (_hmGuessedLetters.contains(detectedLetter)) {
           await _speak(
-            'You already guessed $detectedLetter. Try another letter. Say $_wakeWord first.',
+            'You already guessed $detectedLetter. Try another letter.',
           );
-          await Future.delayed(Duration(milliseconds: 500));
-          await _startListening('wake_word');
+          await _startListeningWithGuard(
+            'hm_letter',
+            preListenDelay: const Duration(milliseconds: 250),
+            ignoreWindow: const Duration(milliseconds: 350),
+          );
         } else {
           await _hmHandleLetterSelected(detectedLetter);
         }
       } else {
-        await _speak("I didn't catch a letter. Say $_wakeWord and try again.");
-        await Future.delayed(Duration(milliseconds: 500));
-        await _startListening('wake_word');
+        setState(() {
+          _statusText = 'I did not catch a letter. Please say one letter.';
+        });
+        await _speak("I didn't catch a letter. Please say one letter.");
+        await _startListeningWithGuard(
+          'hm_letter',
+          preListenDelay: const Duration(milliseconds: 250),
+          ignoreWindow: const Duration(milliseconds: 350),
+        );
       }
     }
   }
@@ -2065,7 +1974,7 @@ class _GamesPageState extends State<GamesPage> {
     setState(() {
       _isLoading = true;
       _currentView = 'loading';
-      _statusText = 'Generating responses...';
+      _statusText = 'Generating $_llmOptions responses...';
     });
 
     try {
@@ -2691,7 +2600,7 @@ class _GamesPageState extends State<GamesPage> {
     setState(() {
       _isLoading = true;
       _currentView = 'loading';
-      _statusText = 'Generating story options...';
+      _statusText = 'Generating $_llmOptions story options...';
     });
 
     try {
@@ -2775,7 +2684,7 @@ class _GamesPageState extends State<GamesPage> {
     setState(() {
       _isLoading = true;
       _currentView = 'loading';
-      _statusText = 'Generating title options...';
+      _statusText = 'Generating $_llmOptions title options...';
     });
 
     try {
@@ -3857,6 +3766,126 @@ class _GamesPageState extends State<GamesPage> {
     return null;
   }
 
+  String? _extractHangmanLetter(String transcript) {
+    final upper = transcript.toUpperCase().trim();
+    String? detectedLetter;
+
+    // Try single character
+    if (upper.length == 1 && RegExp(r'[A-Z]').hasMatch(upper)) {
+      detectedLetter = upper;
+    }
+
+    // Try extracting a single letter word from the transcript
+    if (detectedLetter == null) {
+      final match = RegExp(r'\b([A-Z])\b').firstMatch(upper);
+      if (match != null) {
+        detectedLetter = match.group(1);
+      }
+    }
+
+    // Try "the letter X" or "X as in" patterns
+    if (detectedLetter == null) {
+      final letterPattern = RegExp(
+        r'(?:THE\s+)?LETTER\s+([A-Z])\b',
+      ).firstMatch(upper);
+      if (letterPattern != null) {
+        detectedLetter = letterPattern.group(1);
+      }
+    }
+    if (detectedLetter == null) {
+      final asInPattern = RegExp(r'\b([A-Z])\s+AS\s+IN\b').firstMatch(upper);
+      if (asInPattern != null) {
+        detectedLetter = asInPattern.group(1);
+      }
+    }
+
+    // Phonetic/homophone mapping — speech recognizers often hear letters as words.
+    if (detectedLetter == null) {
+      final lower = transcript.toLowerCase().trim();
+      const phoneticMap = {
+        // A
+        'hey': 'A', 'ay': 'A', 'eh': 'A', 'a.': 'A', 'aye': 'A', 'eight': 'A',
+        // B
+        'bee': 'B', 'be': 'B', 'b.': 'B', 'bea': 'B',
+        // C
+        'see': 'C', 'sea': 'C', 'c.': 'C', 'si': 'C',
+        // D
+        'dee': 'D', 'de': 'D', 'd.': 'D',
+        // E
+        'ee': 'E', 'e.': 'E',
+        // F
+        'ef': 'F', 'eff': 'F', 'f.': 'F', 'half': 'F',
+        // G
+        'gee': 'G', 'g.': 'G', 'ji': 'G', 'jee': 'G',
+        // H
+        'aitch': 'H', 'h.': 'H', 'age': 'H', 'ach': 'H', 'each': 'H',
+        // I
+        'eye': 'I', 'i.': 'I',
+        // J
+        'jay': 'J', 'j.': 'J', 'je': 'J',
+        // K
+        'kay': 'K',
+        'k.': 'K',
+        'ok': 'K',
+        'okay': 'K',
+        'kei': 'K',
+        'cake': 'K',
+        // L
+        'el': 'L', 'elle': 'L', 'l.': 'L', 'ale': 'L', 'ell': 'L',
+        // M
+        'em': 'M', 'm.': 'M',
+        // N
+        'en': 'N', 'n.': 'N', 'and': 'N',
+        // O
+        'oh': 'O', 'o.': 'O', 'owe': 'O',
+        // P
+        'pee': 'P', 'pe': 'P', 'p.': 'P',
+        // Q
+        'queue': 'Q',
+        'cue': 'Q',
+        'q.': 'Q',
+        'cute': 'Q',
+        'kew': 'Q',
+        'que': 'Q',
+        // R
+        'are': 'R', 'ar': 'R', 'r.': 'R', 'our': 'R',
+        // S
+        'es': 'S', 'ass': 'S', 's.': 'S',
+        // T
+        'tee': 'T', 'tea': 'T', 'te': 'T', 't.': 'T',
+        // U
+        'you': 'U', 'u.': 'U', 'ewe': 'U', 'yu': 'U',
+        // V
+        'vee': 'V', 've': 'V', 'v.': 'V', 'we': 'V',
+        // W
+        'double you': 'W', 'w.': 'W', 'double u': 'W', 'dubya': 'W',
+        // X
+        'ex': 'X', 'x.': 'X', 'axe': 'X', 'eggs': 'X',
+        // Y
+        'why': 'Y', 'y.': 'Y', 'wie': 'Y', 'wye': 'Y',
+        // Z
+        'zee': 'Z', 'zed': 'Z', 'z.': 'Z',
+      };
+
+      // Check exact match first.
+      if (phoneticMap.containsKey(lower)) {
+        detectedLetter = phoneticMap[lower];
+      }
+
+      // Check if transcript contains a phonetic match (for "the letter bee" etc.).
+      if (detectedLetter == null) {
+        for (final entry in phoneticMap.entries) {
+          if (lower.endsWith(entry.key) || lower.contains(' ${entry.key}')) {
+            detectedLetter = entry.value;
+            break;
+          }
+        }
+      }
+    }
+
+    return detectedLetter;
+  }
+
   void _hmHandleLetterCount(int count) async {
     _hmWordLength = count;
     _hmRevealedLetters = List.filled(count, false);
@@ -4394,8 +4423,12 @@ class _GamesPageState extends State<GamesPage> {
       _currentOptionType = 'hm_playing';
     });
 
-    // Start listening for wake word (Mode B)
-    _startListening('wake_word');
+    // Start listening for wake word (Mode B) using guarded startup like Guess Mode B.
+    await _startListeningWithGuard(
+      'wake_word',
+      preListenDelay: const Duration(milliseconds: 1800),
+      ignoreWindow: const Duration(milliseconds: 4000),
+    );
   }
 
   // Mode B: handle letter guess (app auto-checks)
@@ -4432,9 +4465,11 @@ class _GamesPageState extends State<GamesPage> {
         _statusText = 'Say $_wakeWord then guess a letter!';
       });
 
-      // Delay to let the iOS audio session settle after system speaker announcement
-      await Future.delayed(Duration(milliseconds: 500));
-      await _startListening('wake_word');
+      await _startListeningWithGuard(
+        'wake_word',
+        preListenDelay: const Duration(milliseconds: 1800),
+        ignoreWindow: const Duration(milliseconds: 4000),
+      );
     } else {
       // Wrong
       _hmWrongGuesses++;
@@ -4460,27 +4495,39 @@ class _GamesPageState extends State<GamesPage> {
         _statusText = 'Say $_wakeWord then guess a letter!';
       });
 
-      // Delay to let the iOS audio session settle after system speaker announcement
-      await Future.delayed(Duration(milliseconds: 500));
-      await _startListening('wake_word');
+      await _startListeningWithGuard(
+        'wake_word',
+        preListenDelay: const Duration(milliseconds: 1800),
+        ignoreWindow: const Duration(milliseconds: 4000),
+      );
     }
   }
 
   // Mode B: wake word detected, now listen for a letter
   Future<void> _hmHandleWakeWordForModeB() async {
-    _stopListening();
-    await _speak('What letter do you want to guess?');
+    if (_isWakeWordTransitionInProgress) {
+      debugPrint(
+        'Games page: [HM_WAKE_WORD] Transition already in progress, ignoring duplicate wake word',
+      );
+      return;
+    }
+    _isWakeWordTransitionInProgress = true;
+    try {
+      _stopListening();
+      await _speak('I\'m listening for your letter now.');
 
-    setState(() {
-      _statusText = 'Listening for a letter...';
-    });
+      setState(() {
+        _statusText = 'Listening for a letter...';
+      });
 
-    // Delay to let the audio session settle after the system announcement
-    // On iOS, the audio routing change (forceSpeaker → routeToPersonal) needs time
-    await Future.delayed(Duration(milliseconds: 500));
-
-    // Use short pause for letter capture
-    _startListening('hm_letter');
+      await _startListeningWithGuard(
+        'hm_letter',
+        preListenDelay: const Duration(milliseconds: 900),
+        ignoreWindow: const Duration(milliseconds: 1500),
+      );
+    } finally {
+      _isWakeWordTransitionInProgress = false;
+    }
   }
 
   // ===== HANGMAN GAME OVER =====
@@ -4997,8 +5044,8 @@ class _GamesPageState extends State<GamesPage> {
         debugPrint('[GuessGame] Using LLM fallback to generate ${_guessConfig['itemTypePlural']}');
         try {
           final fallbackPrompt =
-              'Generate exactly 5 different ${_guessCategory!.toLowerCase()} ${_guessConfig['itemTypePlural']}. '
-              'Return them as a simple comma-separated list with no numbering, no explanation. Example: Item 1, Item 2, Item 3, Item 4, Item 5';
+              'Generate exactly $_llmOptions different ${_guessCategory!.toLowerCase()} ${_guessConfig['itemTypePlural']}. '
+              'Return them as a simple comma-separated list with no numbering, no explanation.';
 
           final fallbackResponse = await http.post(
             Uri.parse('${EnvironmentConfig.apiBaseUrl}/api/generate-options'),
@@ -5007,7 +5054,7 @@ class _GamesPageState extends State<GamesPage> {
               'Authorization': 'Bearer ${widget.idToken}',
               'X-User-ID': widget.aacUserId,
             },
-            body: jsonEncode({'prompt': fallbackPrompt, 'count': 5}),
+            body: jsonEncode({'prompt': fallbackPrompt, 'count': _llmOptions}),
           ).timeout(Duration(seconds: 30));
 
           if (fallbackResponse.statusCode == 200) {
@@ -5120,8 +5167,10 @@ class _GamesPageState extends State<GamesPage> {
       if (newPeopleOptions.isEmpty) {
         debugPrint('[GuessGame] Using LLM fallback to refresh ${_guessConfig['itemTypePlural']}');
         try {
+          // Request a reasonable number of new options (at least 2, but proportional to _llmOptions for larger settings)
+          final refreshCount = (_llmOptions / 3).ceil().clamp(2, _llmOptions);
           final fallbackPrompt =
-              'Generate 2 different ${_guessCategory!.toLowerCase()} ${_guessConfig['itemTypePlural']} NOT in this list: ${_guessPeopleOptions.join(', ')}. '
+              'Generate $refreshCount different ${_guessCategory!.toLowerCase()} ${_guessConfig['itemTypePlural']} NOT in this list: ${_guessPeopleOptions.join(', ')}. '
               'Return them as a simple comma-separated list with no numbering, no explanation.';
 
           final fallbackResponse = await http.post(
@@ -5131,7 +5180,7 @@ class _GamesPageState extends State<GamesPage> {
               'Authorization': 'Bearer $idToken',
               'X-User-ID': widget.aacUserId,
             },
-            body: jsonEncode({'prompt': fallbackPrompt, 'count': 2}),
+            body: jsonEncode({'prompt': fallbackPrompt, 'count': refreshCount}),
           ).timeout(Duration(seconds: 30));
 
           if (fallbackResponse.statusCode == 200) {
@@ -5194,7 +5243,7 @@ class _GamesPageState extends State<GamesPage> {
     setState(() {
       _isLoading = true;
       _currentView = 'loading';
-      _statusText = 'Generating clues...';
+      _statusText = 'Generating $_llmOptions clues...';
     });
 
     // Fire announcement in parallel with API call to reduce perceived delay
@@ -5250,8 +5299,8 @@ class _GamesPageState extends State<GamesPage> {
         debugPrint('[GuessGame] Using LLM fallback to generate clues');
         try {
           final fallbackPrompt =
-              'Generate 3 specific clues to help someone guess the ${_guessCategory!.toLowerCase()} "$person". '
-              'Each clue should be a single sentence. Return them as a simple numbered list: "1. ...\\n2. ...\\n3. ..."';
+              'Generate $_llmOptions specific clues to help someone guess the ${_guessCategory!.toLowerCase()} "$person". '
+              'Each clue should be a single sentence. Return them as a simple comma-separated list.';
 
           final fallbackResponse = await http.post(
             Uri.parse('${EnvironmentConfig.apiBaseUrl}/api/generate-options'),
@@ -5260,7 +5309,7 @@ class _GamesPageState extends State<GamesPage> {
               'Authorization': 'Bearer $idToken',
               'X-User-ID': widget.aacUserId,
             },
-            body: jsonEncode({'prompt': fallbackPrompt, 'count': 3}),
+            body: jsonEncode({'prompt': fallbackPrompt, 'count': _llmOptions}),
           ).timeout(Duration(seconds: 30));
 
           if (fallbackResponse.statusCode == 200) {
@@ -5449,13 +5498,15 @@ class _GamesPageState extends State<GamesPage> {
       if (cluesData.isEmpty) {
         debugPrint('[GuessGame] Using LLM fallback to refresh clues');
         try {
+          // Request a smaller number of new clues during refresh (proportional to _llmOptions)
+          final refreshClueCount = (_llmOptions / 4).ceil().clamp(1, _llmOptions);
           final shownCluesStr = allShownClues.isNotEmpty
               ? 'Already shown: ${allShownClues.join(", ")}. '
               : '';
           final fallbackPrompt =
-              'Generate 1 new clue to help guess the ${_guessCategory!.toLowerCase()} "$_guessSelectedPerson". '
+              'Generate $refreshClueCount new clue(s) to help guess the ${_guessCategory!.toLowerCase()} "$_guessSelectedPerson". '
               '${shownCluesStr}'
-              'Make it a different type of clue than what was already shown.';
+              'Make them different types of clues than what was already shown.';
 
           final fallbackResponse = await http.post(
             Uri.parse('${EnvironmentConfig.apiBaseUrl}/api/generate-options'),
@@ -5464,7 +5515,7 @@ class _GamesPageState extends State<GamesPage> {
               'Authorization': 'Bearer $idToken',
               'X-User-ID': widget.aacUserId,
             },
-            body: jsonEncode({'prompt': fallbackPrompt, 'count': 1}),
+            body: jsonEncode({'prompt': fallbackPrompt, 'count': refreshClueCount}),
           ).timeout(Duration(seconds: 30));
 
           if (fallbackResponse.statusCode == 200) {
@@ -5753,7 +5804,7 @@ class _GamesPageState extends State<GamesPage> {
     _guessCluesGiven.add(clueText);
 
     setState(() {
-      _statusText = 'Ok. "$clueText". Give me a moment to make a guess.';
+      _statusText = 'Generating $_llmOptions guesses...';
       _isLoading = true;
       _currentView = 'loading';
     });
@@ -5819,7 +5870,7 @@ class _GamesPageState extends State<GamesPage> {
               : '';
           final fallbackPrompt =
               'Based on these clues: $cluesStr, '
-              'generate 5 possible ${_guessCategory!.toLowerCase()} ${_guessConfig['itemTypePlural']}$previousGuessesStr. '
+              'generate $_llmOptions possible ${_guessCategory!.toLowerCase()} ${_guessConfig['itemTypePlural']}$previousGuessesStr. '
               'Return as simple comma-separated list with no numbering or explanation.';
 
           final fallbackResponse = await http.post(
@@ -5829,7 +5880,7 @@ class _GamesPageState extends State<GamesPage> {
               'Authorization': 'Bearer $idToken',
               'X-User-ID': widget.aacUserId,
             },
-            body: jsonEncode({'prompt': fallbackPrompt, 'count': 5}),
+            body: jsonEncode({'prompt': fallbackPrompt, 'count': _llmOptions}),
           ).timeout(Duration(seconds: 30));
 
           if (fallbackResponse.statusCode == 200) {
@@ -5873,7 +5924,7 @@ class _GamesPageState extends State<GamesPage> {
         .where((g) => !_guessGuessOptionsShown.contains(g))
         .toList();
 
-    final guessesToShow = availableGuesses.take(5).toList();
+    final guessesToShow = availableGuesses.take(_llmOptions).toList();
     _guessGuessOptionsShown.addAll(guessesToShow);
 
     _deferSelectionScanning = true;

@@ -140,7 +140,10 @@ class _MoodSelectionPageState extends State<MoodSelectionPage> {
       });
       // First spoken guidance happens once per session; later waits use a short notification sound.
       if (!hasPlayedInitialWaitForSwitchVoicePrompt) {
-        _speakSystemVoice('Press switch to begin scanning');
+        unawaited(() async {
+          await _speakSystemVoice('Press switch to begin scanning');
+          await _playWaitForSwitchNotification();
+        }());
         hasPlayedInitialWaitForSwitchVoicePrompt = true;
       } else {
         unawaited(_playWaitForSwitchNotification());

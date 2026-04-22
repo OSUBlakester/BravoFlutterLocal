@@ -10801,37 +10801,19 @@ async def public_bravo_images_search(
 
 # Missing image logging functions
 def normalize_search_term(term: str) -> str:
-    """Normalize search term to base form for deduplication (singular form)"""
+    """Normalize search term for deduplication without stemming/singularizing."""
     if not term or not isinstance(term, str):
         return term
-        
-    term_lower = term.lower().strip()
-    
-    # Remove common plural endings to get base form
-    if term_lower.endswith('ies') and len(term_lower) > 4:
-        # parties → party, stories → story
-        return term[:-3] + 'y'
-    elif term_lower.endswith('es') and len(term_lower) > 3:
-        # Check if it needs 'es' for pluralization
-        stem = term_lower[:-2]
-        if stem.endswith(('ch', 'sh', 'x', 'z', 's', 'ss')):
-            # boxes → box, dishes → dish
-            return term[:-2]
-        else:
-            # jokes → joke
-            return term[:-1]
-    elif term_lower.endswith('s') and len(term_lower) > 2 and not term_lower.endswith('ss'):
-        # questions → question, foods → food, but not "bass"
-        return term[:-1]
-    
-    return term
+
+    # Keep the full original word form (e.g., "thanks" stays "thanks").
+    return re.sub(r"\s+", " ", term.lower().strip())
 
 async def log_missing_image(search_term: str, search_context: dict = None):
     """Log a missing image to Firestore for permanent tracking"""
     try:
         from datetime import datetime
         
-        # Normalize search term to base form (remove common plural endings)
+        # Normalize search term for stable deduplication key (no singularization)
         normalized_term = normalize_search_term(search_term)
         
         # Create document ID from normalized term

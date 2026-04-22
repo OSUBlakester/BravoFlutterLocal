@@ -918,7 +918,7 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
   /// Calculate the proper height for single-row phrases section
   double _calculateSingleRowPhrasesHeight(UserSettings? userSettings) {
     // Component heights:
-    const headerHeight = 22.0; // Icon + text + padding (8px vertical padding + ~14px content)
+    const headerHeight = 0.0; // Header removed
     const gridPadding = 6.0; // 3px padding all around
     const containerBorder = 4.0; // 2px border top + bottom
     const extraBottomPadding = 10.0; // Extra padding to ensure buttons aren't cut off
@@ -966,8 +966,7 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
         final buttonHeight = buttonWidth / 1.1; // Aspect ratio 1.1
         
         // Calculate total height needed
-        // Header is approx 24px (4+14+4 padding + text)
-        const headerHeight = 24.0;
+        const headerHeight = 0.0;
         const verticalPadding = 6.0; // 3 top + 3 bottom grid padding
         const verticalBorder = 4.0; // 2 top + 2 bottom border
         
@@ -1004,33 +1003,6 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
           ),
           child: Column(
             children: [
-              // Section header
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                decoration: BoxDecoration(
-                  color: Colors.green[100],
-                  borderRadius: const BorderRadius.only(
-                    topLeft: Radius.circular(10),
-                    topRight: Radius.circular(10),
-                  ),
-                ),
-                child: Row(
-                  children: [
-                    Icon(Icons.speaker_notes, size: 14, color: Colors.green[700]),
-                    const SizedBox(width: 4),
-                    Text(
-                      'QUICK TALK',
-                      style: TextStyle(
-                        fontSize: 10,
-                        fontWeight: FontWeight.bold,
-                        color: Colors.green[700],
-                        letterSpacing: 0.5,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
               // Grid content
               Expanded(
                 child: Padding(
@@ -2137,10 +2109,10 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
                 children: [
                   Row(
                     children: [
-                      Icon(Icons.category, color: Colors.purple[700]),
+                      Icon(Icons.library_books, color: Colors.purple[700]),
                       const SizedBox(width: 8),
                       const Text(
-                        'All Categories',
+                        'All Boards',
                         style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
                       ),
                     ],
@@ -4194,33 +4166,6 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
               ),
               child: Column(
                 children: [
-                  // Section header
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                    decoration: BoxDecoration(
-                      color: Colors.blue[100],
-                      borderRadius: const BorderRadius.only(
-                        topLeft: Radius.circular(10),
-                        topRight: Radius.circular(10),
-                      ),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(Icons.text_fields, size: 14, color: Colors.blue[700]),
-                        const SizedBox(width: 4),
-                        Text(
-                          'FREE STYLE',
-                          style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.bold,
-                            color: Colors.blue[700],
-                            letterSpacing: 0.5,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
                   // Grid content
                   Expanded(
                     child: Padding(
@@ -5419,6 +5364,41 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
                   ),
                   child: Row(
                     children: [
+                      // Home Button (Icon Only) - Returns to original page
+                      Tooltip(
+                        message: 'Home',
+                        child: Container(
+                          height: 40,
+                          width: 50,
+                          decoration: BoxDecoration(
+                            gradient: LinearGradient(
+                              colors: [
+                                Colors.blueGrey[300] ?? Colors.blueGrey.shade300,
+                                Colors.blueGrey[500] ?? Colors.blueGrey.shade500,
+                              ],
+                              begin: Alignment.topCenter,
+                              end: Alignment.bottomCenter,
+                            ),
+                            borderRadius: BorderRadius.circular(6),
+                            boxShadow: [
+                              BoxShadow(
+                                color: Colors.blueGrey.withOpacity(0.25),
+                                offset: const Offset(0, 2),
+                                blurRadius: 4,
+                              ),
+                            ],
+                          ),
+                          child: IconButton(
+                            onPressed: _resetPage,
+                            icon: const Icon(Icons.home, size: 28, color: Colors.white),
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints(),
+                          ),
+                        ),
+                      ),
+
+                      const SizedBox(width: 8),
+
                       // Speech History Text Field (serves as build space)
                       Expanded(
                         child: Container(
@@ -5548,14 +5528,14 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
                           width: 50,
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
-                              colors: [Colors.orange[400] ?? Colors.orange.shade400, Colors.orange[600] ?? Colors.orange.shade600],
+                              colors: [Colors.red[400] ?? Colors.red.shade400, Colors.red[600] ?? Colors.red.shade600],
                               begin: Alignment.topCenter,
                               end: Alignment.bottomCenter,
                             ),
                             borderRadius: BorderRadius.circular(6),
                             boxShadow: [
                               BoxShadow(
-                                color: Colors.orange.withOpacity(0.3),
+                                color: Colors.red.withOpacity(0.3),
                                 offset: const Offset(0, 2),
                                 blurRadius: 4,
                               ),
@@ -5572,38 +5552,6 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
                       
                       const SizedBox(width: 4),
                       
-                      // Reset Button (Icon Only) - Renamed from Clear
-                      Tooltip(
-                        message: 'Reset',
-                        child: Container(
-                          height: 40,
-                          width: 50,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [Colors.red[400] ?? Colors.red.shade400, Colors.red[600] ?? Colors.red.shade600],
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                            ),
-                            borderRadius: BorderRadius.circular(6),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.red.withOpacity(0.3),
-                                offset: const Offset(0, 2),
-                                blurRadius: 4,
-                              ),
-                            ],
-                          ),
-                          child: IconButton(
-                            onPressed: _resetPage,
-                            icon: const Icon(Icons.restart_alt, size: 31, color: Colors.white),
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(),
-                          ),
-                        ),
-                      ),
-                      
-                      const SizedBox(width: 4),
-
                       // Audio Surfing Toggle Button (Icon Only)
                       Tooltip(
                         message: _isAudioSurfingEnabled ? 'Audio Surfing: ON' : 'Audio Surfing: OFF',
@@ -5756,7 +5704,7 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
                                 width: double.infinity,
                                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                                 decoration: BoxDecoration(
-                                  color: Colors.purple[100],
+                                  color: Colors.purple[50] ?? Colors.purple.shade50,
                                   borderRadius: const BorderRadius.only(
                                     topLeft: Radius.circular(10),
                                     topRight: Radius.circular(10),
@@ -5770,31 +5718,29 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
                                     child: Container(
                                       padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
                                       decoration: BoxDecoration(
-                                        border: Border.all(color: Colors.purple[300]!, width: 1),
+                                        border: Border.all(color: Colors.teal[300]!, width: 1.5),
                                         borderRadius: BorderRadius.circular(6),
-                                        color: Colors.purple[50],
+                                        color: Colors.teal[50],
                                       ),
                                       child: Column(
                                         mainAxisSize: MainAxisSize.min,
                                         children: [
                                           Text(
-                                            'CATEGORIES',
+                                            'BOARDS',
                                             style: TextStyle(
                                               fontSize: 8,
                                               fontWeight: FontWeight.bold,
-                                              color: Colors.purple[700],
+                                              color: Colors.teal[800],
                                               letterSpacing: 0.3,
                                             ),
                                           ),
                                           const SizedBox(height: 4),
-                                          Divider(color: Colors.purple[300], height: 1, thickness: 1),
+                                          Divider(color: Colors.teal[300], height: 1, thickness: 1),
                                           const SizedBox(height: 4),
                                           Row(
                                             mainAxisAlignment: MainAxisAlignment.center,
                                             children: [
-                                              Icon(Icons.folder_open, size: 36, color: Colors.purple[700]),
-                                              const SizedBox(width: 4),
-                                              Icon(Icons.open_in_full, size: 12, color: Colors.purple[700]),
+                                              Icon(Icons.library_books, size: 32, color: Colors.teal[800]),
                                             ],
                                           ),
                                         ],
@@ -5879,16 +5825,6 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
               ),
               child: Row(
                 children: [
-                  // Lock/Unlock Icon
-                  IconButton(
-                    icon: Icon(
-                      _isAdminToolbarLocked ? Icons.lock : Icons.lock_open,
-                      color: Colors.black87,
-                    ),
-                    tooltip: _isAdminToolbarLocked ? 'Unlock Admin Toolbar' : 'Lock Admin Toolbar',
-                    onPressed: _toggleAdminToolbarLock,
-                  ),
-                  
                   // Status Message - takes up remaining space (fade in/out)
                   Expanded(
                     child: AnimatedSwitcher(
@@ -5985,6 +5921,16 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
                       onPressed: _signOut,
                     ),
                   ],
+
+                  // Lock/Unlock Icon (moved to right side)
+                  IconButton(
+                    icon: Icon(
+                      _isAdminToolbarLocked ? Icons.lock : Icons.lock_open,
+                      color: Colors.black87,
+                    ),
+                    tooltip: _isAdminToolbarLocked ? 'Unlock Admin Toolbar' : 'Lock Admin Toolbar',
+                    onPressed: _toggleAdminToolbarLock,
+                  ),
                 ],
               ),
             ),

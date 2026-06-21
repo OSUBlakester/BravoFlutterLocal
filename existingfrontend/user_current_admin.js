@@ -2,13 +2,26 @@
 let isAuthContextReady = false;
 let isDomContentLoaded = false;
 
+function markAdminSaving() {
+    window.adminUnsavedIndicator?.markSaving?.();
+}
+
+function markAdminSaved() {
+    window.adminUnsavedIndicator?.markSaved?.();
+}
+
 
 // DOM Elements - declare with 'let', assign in initializePage
 let locationInput = null;
+let locationLanguageOverrideSelect = null;
 let peopleInput = null;
 let activityInput = null;
+let topicTitleInput = null;
+let focusChaptersInput = null;
+let topicSummaryInput = null;
 let saveButton = null;
 let dictationButton = null;
+let clearButton = null;
 
 // Favorites DOM elements
 let favoritesSelect = null;
@@ -32,6 +45,121 @@ let scheduleDaysContainer = null; // Container for checkboxes
 let scheduleStartTime = null;
 let scheduleEndTime = null;
 let editingFavoriteName = null; // To track if we are editing
+
+const LOCALE_LABEL_TO_TAG = {
+    'english (us)': 'en-US',
+    'spanish (us)': 'es-US',
+    'french (france)': 'fr-FR',
+    'german (germany)': 'de-DE',
+    'italian (italy)': 'it-IT',
+    'portuguese (brazil)': 'pt-BR',
+    'arabic': 'ar-XA'
+};
+
+const LOCALE_TAG_TO_LABEL = {
+    'en-US': 'English (US)',
+    'es-US': 'Spanish (US)',
+    'fr-FR': 'French (France)',
+    'de-DE': 'German (Germany)',
+    'it-IT': 'Italian (Italy)',
+    'pt-BR': 'Portuguese (Brazil)',
+    'ar-XA': 'Arabic'
+};
+
+function normalizeLocaleTag(value) {
+    if (!value || typeof value !== 'string') return '';
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+
+    const labelMatch = LOCALE_LABEL_TO_TAG[trimmed.toLowerCase()];
+    if (labelMatch) return labelMatch;
+
+    const cleaned = trimmed.replace(/_/g, '-');
+    const localeMatch = cleaned.match(/^([a-zA-Z]{2})(?:-([a-zA-Z]{2,3}))?$/);
+    if (!localeMatch) return '';
+
+    const lang = localeMatch[1].toLowerCase();
+    const region = localeMatch[2] ? localeMatch[2].toUpperCase() : '';
+    return region ? `${lang}-${region}` : lang;
+}
+
+function formatLocaleForDisplay(localeTag) {
+    const normalized = normalizeLocaleTag(localeTag);
+    if (!normalized) return '(not set)';
+    const label = LOCALE_TAG_TO_LABEL[normalized];
+    return label ? `${label} (${normalized})` : normalized;
+}
+
+function getSelectedLocationOverrideLocale() {
+    const raw = locationLanguageOverrideSelect ? (locationLanguageOverrideSelect.value || '') : '';
+    return normalizeLocaleTag(raw);
+}
+
+function applyLocationOverrideSelection(value) {
+    if (!locationLanguageOverrideSelect) return;
+    const normalizedValue = normalizeLocaleTag(value);
+    if (!normalizedValue) {
+        locationLanguageOverrideSelect.value = '';
+        return;
+    }
+
+    const optionExists = Array.from(locationLanguageOverrideSelect.options || []).some(
+        option => normalizeLocaleTag(option.value) === normalizedValue
+    );
+
+    if (!optionExists) {
+        const option = document.createElement('option');
+        option.value = normalizedValue;
+        option.textContent = formatLocaleForDisplay(normalizedValue);
+        locationLanguageOverrideSelect.appendChild(option);
+    }
+
+    locationLanguageOverrideSelect.value = normalizedValue;
+}
+
+async function loadLocationOverrideLanguageOptions(selectedValue = '') {
+    if (!locationLanguageOverrideSelect) return;
+    try {
+        const response = await window.authenticatedFetch('/api/settings');
+        if (!response.ok) throw new Error(`Failed to load settings: ${response.statusText}`);
+        const settings = await response.json();
+        const languagesRaw = Array.isArray(settings.locationOverrideLanguages) ? settings.locationOverrideLanguages : [];
+        const languages = [];
+        languagesRaw.forEach(locale => {
+            const normalized = normalizeLocaleTag(locale);
+            if (normalized && !languages.includes(normalized)) {
+                languages.push(normalized);
+            }
+        });
+
+        const defaultPartnerLanguageDisplay = document.getElementById('defaultPartnerLanguageDisplay');
+        if (defaultPartnerLanguageDisplay) {
+            defaultPartnerLanguageDisplay.textContent = `Default partner language: ${formatLocaleForDisplay(settings.defaultPartnerLanguage)}`;
+        }
+
+        locationLanguageOverrideSelect.innerHTML = '<option value="">None (use default partner language)</option>';
+        languages.forEach(locale => {
+            const option = document.createElement('option');
+            option.value = locale;
+            option.textContent = formatLocaleForDisplay(locale);
+            locationLanguageOverrideSelect.appendChild(option);
+        });
+        const normalizedSelectedValue = normalizeLocaleTag(selectedValue);
+        if (normalizedSelectedValue) {
+            locationLanguageOverrideSelect.value = normalizedSelectedValue;
+            if (locationLanguageOverrideSelect.value !== normalizedSelectedValue) {
+                locationLanguageOverrideSelect.value = '';
+            }
+        }
+    } catch (error) {
+        console.error('Error loading location override language options:', error);
+        locationLanguageOverrideSelect.innerHTML = '<option value="">None (use default partner language)</option>';
+        const defaultPartnerLanguageDisplay = document.getElementById('defaultPartnerLanguageDisplay');
+        if (defaultPartnerLanguageDisplay) {
+            defaultPartnerLanguageDisplay.textContent = 'Default partner language: unavailable';
+        }
+    }
+}
 
 
 // Utility function to display status messages
@@ -58,8 +186,12 @@ async function loadCurrentUserState() {
         if (!response.ok) throw new Error(`Failed to load: ${response.statusText}`);
         const data = await response.json();
         locationInput.value = data.location || '';
+        await loadLocationOverrideLanguageOptions(data.locationLanguageOverride || '');
         peopleInput.value = data.people || '';
         activityInput.value = data.activity || '';
+        topicTitleInput.value = data.topicTitle || '';
+        focusChaptersInput.value = data.focusChapters || '';
+        topicSummaryInput.value = data.topicSummary || data.focusPlotPoints || '';
         
         // Check if there's a loaded favorite and enable thread button if so
         if (data.favorite_name && data.loaded_at && openThreadBtn) {
@@ -132,15 +264,23 @@ async function loadSelectedFavorite() {
         
         // Update the form fields
         locationInput.value = favorite.location || '';
+        applyLocationOverrideSelection(favorite.locationLanguageOverride);
         peopleInput.value = favorite.people || '';
         activityInput.value = favorite.activity || '';
+        topicTitleInput.value = favorite.topicTitle || '';
+        focusChaptersInput.value = favorite.focusChapters || '';
+        topicSummaryInput.value = favorite.topicSummary || favorite.focusPlotPoints || '';
         
         // Automatically save the loaded data to the database
         const loadTimestamp = new Date().toISOString(); // Use same timestamp for both loaded_at and saved_at
         const saveData = {
             location: favorite.location || '',
+            locationLanguageOverride: normalizeLocaleTag(favorite.locationLanguageOverride),
             people: favorite.people || '',
             activity: favorite.activity || '',
+            topicTitle: favorite.topicTitle || '',
+            focusChapters: favorite.focusChapters || '',
+            topicSummary: favorite.topicSummary || favorite.focusPlotPoints || '',
             loaded_at: loadTimestamp,  // Timestamp when favorite is loaded
             favorite_name: favorite.name,  // Include the favorite name for tracking
             saved_at: loadTimestamp  // Use same timestamp to indicate this save is part of loading, not manual
@@ -197,6 +337,9 @@ function showAddFavoriteModal() {
     document.getElementById('favoritePreviewLocation').textContent = `Location: ${locationInput.value || '(empty)'}`;
     document.getElementById('favoritePreviewPeople').textContent = `People: ${peopleInput.value || '(empty)'}`;
     document.getElementById('favoritePreviewActivity').textContent = `Activity: ${activityInput.value || '(empty)'}`;
+    document.getElementById('favoritePreviewTopicTitle').textContent = `Book Title or Subject: ${topicTitleInput.value || '(empty)'}`;
+    document.getElementById('favoritePreviewFocusChapters').textContent = `Focus Pages or Chapters: ${focusChaptersInput.value || '(empty)'}`;
+    document.getElementById('favoritePreviewTopicSummary').textContent = `Discussion Narrative: ${topicSummaryInput.value || '(empty)'}`;
     
     // Clear the name input
     favoriteName.value = '';
@@ -232,8 +375,12 @@ async function saveFavorite() {
     const favoriteData = {
         name: name,
         location: locationInput.value || '',
+        locationLanguageOverride: getSelectedLocationOverrideLocale(),
         people: peopleInput.value || '',
-        activity: activityInput.value || ''
+        activity: activityInput.value || '',
+        topicTitle: topicTitleInput.value || '',
+        focusChapters: focusChaptersInput.value || '',
+        topicSummary: topicSummaryInput.value || ''
     };
 
     // Add schedule if enabled
@@ -264,6 +411,7 @@ async function saveFavorite() {
     }
     
     try {
+        markAdminSaving();
         let response;
         if (editingFavoriteName) {
             // We are editing an existing favorite
@@ -318,6 +466,7 @@ async function saveFavorite() {
         
         const result = await response.json();
         if (result.success) {
+            markAdminSaved();
             showStatus(result.message, false);
             addFavoriteModal.classList.add('hidden');
             await showManageFavoritesModal(); // Refresh the management list if it was open
@@ -373,8 +522,12 @@ async function showManageFavoritesModal() {
                             <h4 class="font-medium text-gray-800 mb-1">${favorite.name}</h4>
                             <div class="text-sm mb-2">${scheduleInfo}</div>
                             <p class="text-sm text-gray-600">Location: ${favorite.location || '(empty)'}</p>
+                            <p class="text-sm text-gray-600">Location Language Override: ${favorite.locationLanguageOverride || '(none)'}</p>
                             <p class="text-sm text-gray-600">People: ${favorite.people || '(empty)'}</p>
                             <p class="text-sm text-gray-600">Activity: ${favorite.activity || '(empty)'}</p>
+                            <p class="text-sm text-gray-600">Book Title or Subject: ${favorite.topicTitle || '(empty)'}</p>
+                            <p class="text-sm text-gray-600">Focus Pages or Chapters: ${favorite.focusChapters || '(empty)'}</p>
+                            <p class="text-sm text-gray-600">Discussion Narrative: ${favorite.topicSummary || favorite.focusPlotPoints || '(empty)'}</p>
                         </div>
                         <div class="flex gap-2 ml-4">
                             <button onclick="editFavorite('${favorite.name.replace(/'/g, "\\'")}')" class="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1 rounded text-sm">
@@ -414,13 +567,20 @@ async function editFavorite(favoriteName) {
     // Ideally, we should have separate inputs in the modal for editing these values, 
     // but reusing the "Add" modal structure implies we use the page inputs.
     locationInput.value = favorite.location || '';
+    applyLocationOverrideSelection(favorite.locationLanguageOverride);
     peopleInput.value = favorite.people || '';
     activityInput.value = favorite.activity || '';
+    topicTitleInput.value = favorite.topicTitle || '';
+    focusChaptersInput.value = favorite.focusChapters || '';
+    topicSummaryInput.value = favorite.topicSummary || favorite.focusPlotPoints || '';
 
     // Update preview with these values
     document.getElementById('favoritePreviewLocation').textContent = `Location: ${locationInput.value || '(empty)'}`;
     document.getElementById('favoritePreviewPeople').textContent = `People: ${peopleInput.value || '(empty)'}`;
     document.getElementById('favoritePreviewActivity').textContent = `Activity: ${activityInput.value || '(empty)'}`;
+    document.getElementById('favoritePreviewTopicTitle').textContent = `Book Title or Subject: ${topicTitleInput.value || '(empty)'}`;
+    document.getElementById('favoritePreviewFocusChapters').textContent = `Focus Pages or Chapters: ${focusChaptersInput.value || '(empty)'}`;
+    document.getElementById('favoritePreviewTopicSummary').textContent = `Discussion Narrative: ${topicSummaryInput.value || '(empty)'}`;
 
     // Populate name
     document.getElementById('favoriteName').value = favorite.name;
@@ -476,6 +636,7 @@ async function deleteFavorite(favoriteName) {
     if (!confirm(`Are you sure you want to delete the favorite "${favoriteName}"?`)) return;
     
     try {
+        markAdminSaving();
         const response = await window.authenticatedFetch('/api/user-current-favorites/manage', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -487,6 +648,7 @@ async function deleteFavorite(favoriteName) {
         
         const result = await response.json();
         if (result.success) {
+            markAdminSaved();
             showStatus(result.message, false);
             await showManageFavoritesModal(); // Refresh the modal
             await loadFavorites(); // Refresh the dropdown
@@ -516,10 +678,15 @@ async function initializePage() {
 
         // Assign DOM Elements
         locationInput = document.getElementById('location');
+        locationLanguageOverrideSelect = document.getElementById('locationLanguageOverride');
         peopleInput = document.getElementById('people');
         activityInput = document.getElementById('activity');
+        topicTitleInput = document.getElementById('topicTitle');
+        focusChaptersInput = document.getElementById('focusChapters');
+        topicSummaryInput = document.getElementById('topicSummary');
         saveButton = document.getElementById('saveButton');
         dictationButton = document.getElementById('dictationButton');
+        clearButton = document.getElementById('clearButton');
         
         // Favorites DOM elements
         favoritesSelect = document.getElementById('favoritesSelect');
@@ -544,7 +711,7 @@ async function initializePage() {
         scheduleEndTime = document.getElementById('scheduleEndTime');
 
         // Basic check for essential elements
-        if (!locationInput || !peopleInput || !activityInput || !saveButton || !dictationButton || !favoritesSelect || !loadFavoriteBtn || !openThreadBtn || !addToFavoritesBtn || !manageFavoritesBtn) {
+        if (!locationInput || !locationLanguageOverrideSelect || !peopleInput || !activityInput || !topicTitleInput || !focusChaptersInput || !topicSummaryInput || !saveButton || !dictationButton || !clearButton || !favoritesSelect || !loadFavoriteBtn || !openThreadBtn || !addToFavoritesBtn || !manageFavoritesBtn) {
             console.error("CRITICAL ERROR: One or more essential DOM elements for user_current_admin.js not found.");
             return;
         }
@@ -552,6 +719,7 @@ async function initializePage() {
         // Add Event Listeners
         if (saveButton) saveButton.addEventListener('click', saveCurrentUserState);
         if (dictationButton) dictationButton.addEventListener('click', dictationButtonHandler);
+        if (clearButton) clearButton.addEventListener('click', clearCurrentUserForm);
         
         // Favorites event listeners
         if (favoritesSelect) favoritesSelect.addEventListener('change', updateLoadButtonState);
@@ -610,17 +778,55 @@ async function initializePage() {
     }
 }
 
+function clearCurrentUserForm() {
+    if (isDictating && recognition) {
+        try {
+            recognition.stop();
+        } catch (error) {
+            console.warn('Error stopping dictation during clear:', error);
+        }
+        isDictating = false;
+        if (dictationButton) {
+            dictationButton.textContent = 'Start Dictation';
+        }
+    }
+
+    if (locationInput) locationInput.value = '';
+    if (locationLanguageOverrideSelect) locationLanguageOverrideSelect.value = '';
+    if (peopleInput) peopleInput.value = '';
+    if (activityInput) activityInput.value = '';
+    if (topicTitleInput) topicTitleInput.value = '';
+    if (focusChaptersInput) focusChaptersInput.value = '';
+    if (topicSummaryInput) topicSummaryInput.value = '';
+
+    if (openThreadBtn) {
+        openThreadBtn.disabled = true;
+        openThreadBtn.removeAttribute('data-favorite-name');
+    }
+
+    showStatus('Fields cleared. Click Save to persist changes.', false);
+}
+
 
 // --- DOMContentLoaded Initialization ---
 async function saveCurrentUserState() { 
         console.log("location input value", locationInput.value);
         console.log("people input value", peopleInput.value);
         console.log("activity input value", activityInput.value);
+        console.log("topicTitle input value", topicTitleInput.value);
+        console.log("focusChapters input value", focusChaptersInput.value);
+        console.log("topicSummary input value", topicSummaryInput.value);
+        console.log("locationLanguageOverride value", locationLanguageOverrideSelect ? locationLanguageOverrideSelect.value : '');
         const location = locationInput.value;
+        const locationLanguageOverride = getSelectedLocationOverrideLocale();
         const people = peopleInput.value;
         const activity = activityInput.value;
+        const topicTitle = topicTitleInput.value;
+        const focusChapters = focusChaptersInput.value;
+        const topicSummary = topicSummaryInput.value;
 
-        console.log('Data sent to backend:', { location, people, activity }); // Add this line
+        console.log('Data sent to backend:', { location, locationLanguageOverride, people, activity, topicTitle, focusChapters, topicSummary }); // Add this line
+        markAdminSaving();
         showStatus("Saving...", false, 0);
 
         try {
@@ -628,11 +834,12 @@ async function saveCurrentUserState() {
             const response = await window.authenticatedFetch('/user_current', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' }, // X-User-ID added by authenticatedFetch
-                body: JSON.stringify({ location, people, activity })
+                body: JSON.stringify({ location, locationLanguageOverride, people, activity, topicTitle, focusChapters, topicSummary })
             });
 
             if (response.ok) {
                 console.log('User current updated successfully.');
+                markAdminSaved();
                 showStatus("Current state saved successfully!", false);
             } else {
                 console.error('Failed to update user current:', response.statusText);

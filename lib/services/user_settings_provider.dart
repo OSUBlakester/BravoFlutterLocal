@@ -2,7 +2,25 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'authenticated_http_client.dart';
+import '../config/language_config.dart';
+
+class LocationLanguageEntry {
+  final String locale;
+  final String voice;
+
+  const LocationLanguageEntry({required this.locale, required this.voice});
+
+  factory LocationLanguageEntry.fromJson(Map<String, dynamic> json) {
+    return LocationLanguageEntry(
+      locale: json['locale'] as String? ?? kDefaultPartnerLanguage,
+      voice: json['voice'] as String? ?? '',
+    );
+  }
+
+  Map<String, dynamic> toJson() => {'locale': locale, 'voice': voice};
+}
 
 
 
@@ -54,6 +72,9 @@ class UserSettings {
   // Wait for switch press before starting scanning (only on page load)
   bool waitForSwitchToScan;
 
+  // Play a short notification chime while waiting for switch to start scanning
+  bool playWaitForSwitchChime;
+
   // Scanning mode: 'auto' for timed auto-advance, 'step' for switch-based manual advance
   String scanMode;
 
@@ -76,6 +97,12 @@ class UserSettings {
   
   // System volume setting (0-10) - for speech output (Built-in Speaker)
   int systemVolume;
+
+  // Language settings
+  String userLanguage;           // BCP 47, e.g. 'en-US' — language for AI-generated options
+  String defaultPartnerLanguage; // BCP 47 — language for partner-facing TTS announcements
+  String defaultPartnerVoice;   // TTS voice name for partner announcements
+  List<LocationLanguageEntry> locationOverrideLanguages; // admin-configured location override pairs
 
   // Positive logic fields
   bool get enableAuditoryScanning => !scanningOff;
@@ -118,6 +145,7 @@ class UserSettings {
     required this.spellLetterOrder,
     required this.vocabularyLevel, // Added vocabulary level field
     required this.waitForSwitchToScan, // Added wait for switch field
+    required this.playWaitForSwitchChime,
     required this.scanMode, // Added scan mode field
     required this.useTapInterface, // Added interface mode field
     required this.applicationVolume, // Added application volume field
@@ -126,14 +154,60 @@ class UserSettings {
     required this.emailSubjectTemplate,
     required this.personalVolume, // Added personal volume field
     required this.systemVolume, // Added system volume field
+    required this.userLanguage,
+    required this.defaultPartnerLanguage,
+    required this.defaultPartnerVoice,
+    required this.locationOverrideLanguages,
   });
 
 
   factory UserSettings.fromJson(Map<String, dynamic> json) {
+    final Map<String, String> localeVoiceMap = {};
+    final Set<String> localeSet = {};
+
+    final rawOverrideVoices = json['locationOverrideVoices'];
+    if (rawOverrideVoices is Map) {
+      rawOverrideVoices.forEach((key, value) {
+        final locale = key.toString().trim();
+        final voice = (value ?? '').toString().trim();
+        if (locale.isNotEmpty) {
+          localeSet.add(locale);
+          localeVoiceMap[locale] = voice;
+        }
+      });
+    }
+
+    final rawOverrideLanguages = json['locationOverrideLanguages'];
+    if (rawOverrideLanguages is List) {
+      for (final entry in rawOverrideLanguages) {
+        if (entry is String) {
+          final locale = entry.trim();
+          if (locale.isNotEmpty) localeSet.add(locale);
+          continue;
+        }
+
+        // Legacy/mobile format: [{locale, voice}, ...]
+        if (entry is Map<String, dynamic>) {
+          final locale = (entry['locale'] ?? '').toString().trim();
+          final voice = (entry['voice'] ?? '').toString().trim();
+          if (locale.isNotEmpty) {
+            localeSet.add(locale);
+            if (voice.isNotEmpty && !(localeVoiceMap.containsKey(locale) && localeVoiceMap[locale]!.isNotEmpty)) {
+              localeVoiceMap[locale] = voice;
+            }
+          }
+        }
+      }
+    }
+
+    final parsedOverrideEntries = localeSet
+        .map((locale) => LocationLanguageEntry(locale: locale, voice: localeVoiceMap[locale] ?? ''))
+        .toList();
+
     return UserSettings(
       scanDelay: json['scanDelay'] ?? 3500,
-      wakeWordInterjection: json['wakeWordInterjection'] ?? '',
-      wakeWordName: json['wakeWordName'] ?? '',
+      wakeWordInterjection: (json['wakeWordInterjection'] as String? ?? '').trim().isEmpty ? 'hey' : (json['wakeWordInterjection'] as String).trim(),
+      wakeWordName: (json['wakeWordName'] as String? ?? '').trim().isEmpty ? 'bravo' : (json['wakeWordName'] as String).trim(),
       countryCode: json['CountryCode'] ?? '',
       speechRate: json['speech_rate'] ?? 180,
       llmOptions: json['LLMOptions'] ?? 10,
@@ -158,7 +232,7 @@ class UserSettings {
       toolbarPIN: json['toolbarPIN'] ?? '1234',
       scanLoopLimit: json['scanLoopLimit'] ?? 0, // Changed to match web app default
       autoClean: json['autoClean'] ?? false, // Added autoClean field
-      displaySplash: json['displaySplash'] ?? false, // Added splash screen field
+      displaySplash: (json['displaySplash'] == true || json['displaySplash'] == 1 || json['displaySplash'] == 'true'), // Added splash screen field
       displaySplashtime: json['displaySplashtime'] ?? 3000, // Added splash screen field
       enableMoodSelection: json['enableMoodSelection'] ?? false, // Added mood selection field
       currentMood: json['currentMood'] ?? 'No Mood Selected', // Added mood selection field
@@ -169,6 +243,7 @@ class UserSettings {
       vocabularyLevel: json['vocabularyLevel'] ?? 'functional', // Default to functional vocabulary
       enableSightWords: json['enableSightWords'] ?? true,
       waitForSwitchToScan: json['waitForSwitchToScan'] ?? false, // Default to false (start immediately)
+      playWaitForSwitchChime: json['playWaitForSwitchChime'] ?? false,
       scanMode: json['scanMode'] == 'step' ? 'step' : 'auto', // Default to auto
       useTapInterface: json['useTapInterface'] ?? false, // Default to scanning interface
       applicationVolume: json['applicationVolume'] ?? 10, // Default to maximum volume (10/10)
@@ -177,6 +252,10 @@ class UserSettings {
       emailSubjectTemplate: json['emailSubjectTemplate'] ?? 'Message from Bravo AAC',
       personalVolume: json['personalVolume'] ?? 10, // Default to maximum volume
       systemVolume: json['systemVolume'] ?? 10, // Default to maximum volume
+      userLanguage: json['userLanguage'] as String? ?? kDefaultUserLanguage,
+      defaultPartnerLanguage: json['defaultPartnerLanguage'] as String? ?? kDefaultPartnerLanguage,
+      defaultPartnerVoice: json['defaultPartnerVoice'] as String? ?? '',
+      locationOverrideLanguages: parsedOverrideEntries,
     );
   }
 
@@ -209,6 +288,7 @@ class UserSettings {
         'vocabularyLevel': vocabularyLevel,
         'enableSightWords': enableSightWords,
         'waitForSwitchToScan': waitForSwitchToScan, // Added wait for switch field
+        'playWaitForSwitchChime': playWaitForSwitchChime,
         'scanMode': scanMode, // Added scan mode field
         'useTapInterface': useTapInterface, // Added interface mode field
         'applicationVolume': applicationVolume, // Added application volume field
@@ -217,6 +297,20 @@ class UserSettings {
         'emailSubjectTemplate': emailSubjectTemplate,
         'personalVolume': personalVolume, // Added personal volume field
         'systemVolume': systemVolume, // Added system volume field
+        'userLanguage': userLanguage,
+        'defaultPartnerLanguage': defaultPartnerLanguage,
+        'defaultPartnerVoice': defaultPartnerVoice,
+        // Web schema compatibility:
+        // - locationOverrideLanguages: ["es-US", "fr-FR", ...]
+        // - locationOverrideVoices: {"es-US": "voice-name", ...}
+        'locationOverrideLanguages': locationOverrideLanguages
+            .map((e) => e.locale)
+            .where((locale) => locale.trim().isNotEmpty)
+            .toList(),
+        'locationOverrideVoices': {
+          for (final e in locationOverrideLanguages)
+            if (e.locale.trim().isNotEmpty) e.locale: e.voice,
+        },
       };
 }
 
@@ -230,7 +324,51 @@ class UserSettingsProvider extends ChangeNotifier {
   String? userId;
   final String apiBaseUrl;
 
+  // Runtime-only location override (not persisted to backend, only to local prefs)
+  String? _currentLocationOverrideLocale;
+  String? _currentLocationOverrideVoice;
+
+  String? get currentLocationOverrideLocale => _currentLocationOverrideLocale;
+  String? get currentLocationOverrideVoice => _currentLocationOverrideVoice;
+
+  String get effectivePartnerLanguage =>
+      _currentLocationOverrideLocale ?? settings?.defaultPartnerLanguage ?? kDefaultPartnerLanguage;
+
+  String get effectivePartnerVoice {
+    final overrideVoice = _currentLocationOverrideVoice?.trim() ?? '';
+    if (overrideVoice.isNotEmpty) return overrideVoice;
+    return settings?.defaultPartnerVoice ?? '';
+  }
+
+  void setLocationOverride(String locale, String voice) {
+    _currentLocationOverrideLocale = locale;
+    _currentLocationOverrideVoice = voice;
+    safeNotifyListeners();
+  }
+
+  void clearLocationOverride() {
+    _currentLocationOverrideLocale = null;
+    _currentLocationOverrideVoice = null;
+    safeNotifyListeners();
+  }
+
   UserSettingsProvider({required this.apiBaseUrl, this.idToken, this.userId});
+
+  String get _playWaitForSwitchChimePrefsKey =>
+      'playWaitForSwitchChime_${userId ?? 'anonymous'}';
+
+  Future<bool?> _loadLocalPlayWaitForSwitchChime() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!prefs.containsKey(_playWaitForSwitchChimePrefsKey)) {
+      return null;
+    }
+    return prefs.getBool(_playWaitForSwitchChimePrefsKey);
+  }
+
+  Future<void> _saveLocalPlayWaitForSwitchChime(bool value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_playWaitForSwitchChimePrefsKey, value);
+  }
 
   /// Safely notify listeners, deferring if we're currently in a build phase.
   /// This prevents "setState() during build" errors.
@@ -304,6 +442,19 @@ class UserSettingsProvider extends ChangeNotifier {
         final jsonData = json.decode(response.body);
         debugPrint("🔍 waitForSwitchToScan in JSON: ${jsonData['waitForSwitchToScan']}");
         settings = UserSettings.fromJson(jsonData);
+        if (jsonData['playWaitForSwitchChime'] == null) {
+          final localPlayChime = await _loadLocalPlayWaitForSwitchChime();
+          if (localPlayChime != null) {
+            settings!.playWaitForSwitchChime = localPlayChime;
+            debugPrint(
+              "🔔 Using local fallback for playWaitForSwitchChime: $localPlayChime",
+            );
+          }
+        } else {
+          await _saveLocalPlayWaitForSwitchChime(
+            settings!.playWaitForSwitchChime,
+          );
+        }
         debugPrint("🔍 waitForSwitchToScan after fromJson: ${settings?.waitForSwitchToScan}");
         error = null;
       } else {
@@ -346,6 +497,8 @@ class UserSettingsProvider extends ChangeNotifier {
     safeNotifyListeners();
     
     try {
+      await _saveLocalPlayWaitForSwitchChime(newSettings.playWaitForSwitchChime);
+
       // Use authenticated request with automatic token refresh
       final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
         'POST',
@@ -359,13 +512,34 @@ class UserSettingsProvider extends ChangeNotifier {
       );
       
       if (response.statusCode == 200) {
-        settings = UserSettings.fromJson(json.decode(response.body));
+        final responseJson = json.decode(response.body);
+        settings = UserSettings.fromJson(responseJson);
+        if (responseJson['playWaitForSwitchChime'] == null) {
+          settings!.playWaitForSwitchChime = newSettings.playWaitForSwitchChime;
+        }
         error = null;
         isLoading = false;
         safeNotifyListeners();
         return true;
       } else {
-        error = 'Failed to save settings: ${response.statusCode}';
+        String details = '';
+        try {
+          final body = response.body.trim();
+          if (body.isNotEmpty) {
+            final decoded = json.decode(body);
+            if (decoded is Map<String, dynamic>) {
+              details = (decoded['detail'] ?? decoded['message'] ?? decoded['error'] ?? '').toString();
+            } else {
+              details = body;
+            }
+          }
+        } catch (_) {
+          details = response.body.trim();
+        }
+
+        error = details.isNotEmpty
+            ? 'Failed to save settings (${response.statusCode}): $details'
+            : 'Failed to save settings: ${response.statusCode}';
         isLoading = false;
         safeNotifyListeners();
         return false;
@@ -381,6 +555,14 @@ class UserSettingsProvider extends ChangeNotifier {
 
   List<String> availableTtsVoices = [];
   List<Map<String, dynamic>> availableTtsVoicesDetailed = []; // Store full voice data
+
+  List<Map<String, dynamic>> voicesForLocale(String locale) {
+    final langCode = locale.split('-').first.toLowerCase();
+    return availableTtsVoicesDetailed.where((v) {
+      final name = (v['name'] as String? ?? '').toLowerCase();
+      return name.startsWith(langCode);
+    }).toList();
+  }
 
   Future<void> fetchTtsVoices() async {
     if (userId == null) return;

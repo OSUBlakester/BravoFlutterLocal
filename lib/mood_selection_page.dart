@@ -11,6 +11,7 @@ import 'services/user_settings_provider.dart';
 import 'constants/mood_options.dart';
 import 'config/environment_config.dart';
 import 'services/mood_image_service.dart';
+import 'services/authenticated_http_client.dart';
 import 'main.dart'; // Import GridPage from main.dart
 import 'tap_interface_page.dart'; // Import TapInterfacePage directly
 
@@ -31,6 +32,76 @@ class MoodSelectionPage extends StatefulWidget {
 }
 
 class _MoodSelectionPageState extends State<MoodSelectionPage> {
+  static const _translations = <String, Map<String, String>>{
+    'How are you feeling?': {
+      'es-US': '¿Cómo te sientes?',
+      'fr-FR': 'Comment vous sentez-vous ?',
+      'de-DE': 'Wie fühlst du dich?',
+      'it-IT': 'Come ti senti?',
+      'pt-BR': 'Como você está se sentindo?',
+      'ar-XA': 'كيف تشعر؟',
+    },
+    'Select your current mood:': {
+      'es-US': 'Selecciona tu estado de ánimo:',
+      'fr-FR': 'Sélectionnez votre humeur :',
+      'de-DE': 'Wähle deine aktuelle Stimmung:',
+      'it-IT': 'Seleziona il tuo umore attuale:',
+      'pt-BR': 'Selecione seu humor atual:',
+      'ar-XA': 'اختر حالتك المزاجية الحالية:',
+    },
+    'Tap a mood to continue, or tap Skip to proceed without selecting a mood.': {
+      'es-US': 'Toca un estado de ánimo o toca Omitir para continuar sin seleccionar.',
+      'fr-FR': 'Appuyez sur une humeur ou sur Ignorer pour continuer sans en choisir.',
+      'de-DE': 'Tippe auf eine Stimmung oder auf Überspringen, um ohne Auswahl fortzufahren.',
+      'it-IT': 'Tocca un umore o tocca Salta per continuare senza selezionarne uno.',
+      'pt-BR': 'Toque em um humor ou em Pular para continuar sem selecionar.',
+      'ar-XA': 'اضغط على حالة مزاجية أو اضغط تخطى للمتابعة بدون اختيار.',
+    },
+    'Auditory scanning is active. Press spacebar or tap to select the highlighted option.': {
+      'es-US': 'Escaneo auditivo activo. Presiona la barra espaciadora o toca para seleccionar.',
+      'fr-FR': 'Balayage auditif actif. Appuyez sur la barre d\'espace ou touchez pour sélectionner.',
+      'de-DE': 'Auditive Abtastung aktiv. Drücke die Leertaste oder tippe, um auszuwählen.',
+      'it-IT': 'Scansione uditiva attiva. Premi la barra spaziatrice o tocca per selezionare.',
+      'pt-BR': 'Varredura auditiva ativa. Pressione a barra de espaço ou toque para selecionar.',
+      'ar-XA': 'المسح السمعي نشط. اضغط المسافة أو المس للاختيار.',
+    },
+    'Press switch to begin scanning': {
+      'es-US': 'Presiona el interruptor para comenzar el escaneo',
+      'fr-FR': 'Appuyez sur le commutateur pour commencer le balayage',
+      'de-DE': 'Schalter drücken, um das Abtasten zu starten',
+      'it-IT': 'Premi l\'interruttore per avviare la scansione',
+      'pt-BR': 'Pressione o interruptor para iniciar a varredura',
+      'ar-XA': 'اضغط المفتاح لبدء المسح',
+    },
+    'Happy': {'es-US': 'Feliz', 'fr-FR': 'Joyeux', 'de-DE': 'Froh', 'it-IT': 'Felice', 'pt-BR': 'Feliz', 'ar-XA': 'سعيد'},
+    'Sad': {'es-US': 'Triste', 'fr-FR': 'Triste', 'de-DE': 'Traurig', 'it-IT': 'Triste', 'pt-BR': 'Triste', 'ar-XA': 'حزين'},
+    'Excited': {'es-US': 'Emocionado', 'fr-FR': 'Enthousiaste', 'de-DE': 'Aufgeregt', 'it-IT': 'Entusiasta', 'pt-BR': 'Animado', 'ar-XA': 'متحمس'},
+    'Calm': {'es-US': 'Tranquilo', 'fr-FR': 'Calme', 'de-DE': 'Ruhig', 'it-IT': 'Calmo', 'pt-BR': 'Calmo', 'ar-XA': 'هادئ'},
+    'Angry': {'es-US': 'Enojado', 'fr-FR': 'En colère', 'de-DE': 'Wütend', 'it-IT': 'Arrabbiato', 'pt-BR': 'Com raiva', 'ar-XA': 'غاضب'},
+    'Silly': {'es-US': 'Tontito', 'fr-FR': 'Rigolo', 'de-DE': 'Albern', 'it-IT': 'Sciocco', 'pt-BR': 'Bobo', 'ar-XA': 'مضحك'},
+    'Tired': {'es-US': 'Cansado', 'fr-FR': 'Fatigué', 'de-DE': 'Müde', 'it-IT': 'Stanco', 'pt-BR': 'Cansado', 'ar-XA': 'متعب'},
+    'Bored': {'es-US': 'Aburrido', 'fr-FR': 'Ennuyé', 'de-DE': 'Gelangweilt', 'it-IT': 'Annoiato', 'pt-BR': 'Entediado', 'ar-XA': 'ممل'},
+    'Anxious': {'es-US': 'Ansioso', 'fr-FR': 'Anxieux', 'de-DE': 'Ängstlich', 'it-IT': 'Ansioso', 'pt-BR': 'Ansioso', 'ar-XA': 'قلق'},
+    'Confused': {'es-US': 'Confundido', 'fr-FR': 'Confus', 'de-DE': 'Verwirrt', 'it-IT': 'Confuso', 'pt-BR': 'Confuso', 'ar-XA': 'مرتبك'},
+    'Surprised': {'es-US': 'Sorprendido', 'fr-FR': 'Surpris', 'de-DE': 'Überrascht', 'it-IT': 'Sorpreso', 'pt-BR': 'Surpreso', 'ar-XA': 'متفاجئ'},
+    'Proud': {'es-US': 'Orgulloso', 'fr-FR': 'Fier', 'de-DE': 'Stolz', 'it-IT': 'Orgoglioso', 'pt-BR': 'Orgulhoso', 'ar-XA': 'فخور'},
+    'Worried': {'es-US': 'Preocupado', 'fr-FR': 'Inquiet', 'de-DE': 'Besorgt', 'it-IT': 'Preoccupato', 'pt-BR': 'Preocupado', 'ar-XA': 'قلق'},
+    'Cranky': {'es-US': 'Malhumorado', 'fr-FR': 'Grincheux', 'de-DE': 'Griesgrämig', 'it-IT': 'Scontroso', 'pt-BR': 'Mal-humorado', 'ar-XA': 'سريع الغضب'},
+    'Peaceful': {'es-US': 'En paz', 'fr-FR': 'Paisible', 'de-DE': 'Friedlich', 'it-IT': 'Pacifico', 'pt-BR': 'Pacífico', 'ar-XA': 'مسالم'},
+    'Playful': {'es-US': 'Juguetón', 'fr-FR': 'Joueur', 'de-DE': 'Verspielt', 'it-IT': 'Giocoso', 'pt-BR': 'Brincalhão', 'ar-XA': 'مرح'},
+    'Frustrated': {'es-US': 'Frustrado', 'fr-FR': 'Frustré', 'de-DE': 'Frustriert', 'it-IT': 'Frustrato', 'pt-BR': 'Frustrado', 'ar-XA': 'محبط'},
+    'Curious': {'es-US': 'Curioso', 'fr-FR': 'Curieux', 'de-DE': 'Neugierig', 'it-IT': 'Curioso', 'pt-BR': 'Curioso', 'ar-XA': 'فضولي'},
+    'Grateful': {'es-US': 'Agradecido', 'fr-FR': 'Reconnaissant', 'de-DE': 'Dankbar', 'it-IT': 'Grato', 'pt-BR': 'Grato', 'ar-XA': 'ممتنن'},
+    'Lonely': {'es-US': 'Solo', 'fr-FR': 'Seul', 'de-DE': 'Einsam', 'it-IT': 'Solo', 'pt-BR': 'Solitário', 'ar-XA': 'وحيد'},
+    'Content': {'es-US': 'Satisfecho', 'fr-FR': 'Content', 'de-DE': 'Zufrieden', 'it-IT': 'Contento', 'pt-BR': 'Satisfeito', 'ar-XA': 'راضٍ'},
+    'Skip': {'es-US': 'Omitir', 'fr-FR': 'Ignorer', 'de-DE': 'Überspringen', 'it-IT': 'Salta', 'pt-BR': 'Pular', 'ar-XA': 'تخطى'},
+  };
+
+  String _t(String key) {
+    final provider = Provider.of<UserSettingsProvider>(context, listen: false);
+    final locale = provider.settings?.userLanguage ?? 'en-US';
+    return _translations[key]?[locale] ?? key;
+  }
   // Wait-for-switch feature tracking
   bool _waitingForInitialSwitch = false;
   bool _switchStartRequested = false;
@@ -141,7 +212,7 @@ class _MoodSelectionPageState extends State<MoodSelectionPage> {
       // First spoken guidance happens once per session; later waits use a short notification sound.
       if (!hasPlayedInitialWaitForSwitchVoicePrompt) {
         unawaited(() async {
-          await _speakSystemVoice('Press switch to begin scanning');
+          await _speakSystemVoice(_t('Press switch to begin scanning'));
           await _playWaitForSwitchNotification();
         }());
         hasPlayedInitialWaitForSwitchVoicePrompt = true;
@@ -218,7 +289,7 @@ class _MoodSelectionPageState extends State<MoodSelectionPage> {
     // Speak the current option
     if (scanningIndex != null && scanningIndex! >= 0 && scanningIndex! < allOptions.length) {
       final currentOption = allOptions[scanningIndex!];
-      _speakSystemVoice(currentOption['name']!);
+      _speakSystemVoice(_t(currentOption['name']!));
     }
 
     if (scanMode == 'auto') {
@@ -261,6 +332,9 @@ class _MoodSelectionPageState extends State<MoodSelectionPage> {
       
       // Use simple local TTS for mood selection scanning
       await flutterTts.stop();
+      // Ensure awaited calls to _speakSystemVoice complete only after speech
+      // playback actually finishes (important before playing notification chime).
+      await flutterTts.awaitSpeakCompletion(true);
       // Configure TTS for Fire tablet compatibility  
       await flutterTts.setSpeechRate(0.5); // Slower speech for clarity
       
@@ -287,9 +361,35 @@ class _MoodSelectionPageState extends State<MoodSelectionPage> {
   }
 
   Future<void> _playWaitForSwitchNotification() async {
+    final settingsProvider = Provider.of<UserSettingsProvider>(
+      context,
+      listen: false,
+    );
+    final playChime =
+        settingsProvider.settings?.playWaitForSwitchChime ?? false;
+    if (!playChime) {
+      debugPrint('MoodSelection: wait notification chime disabled in settings');
+      return;
+    }
+
     final player = AudioPlayer();
     try {
-      await player.setAsset('assets/notification_v2.mp3');
+      final personalVolume = await _getEffectivePersonalVolume();
+      const chimeCompensation = 0.18;
+      const chimeMaxCap = 0.16;
+      const chimeMinFloor = 0.10;
+      final chimeVolume = ((personalVolume / 10.0) * chimeCompensation)
+          .clamp(chimeMinFloor, chimeMaxCap);
+
+      debugPrint(
+        'MoodSelection: wait notification volume from personal $personalVolume/10 -> $chimeVolume',
+      );
+
+      // Give the TTS engine a short moment to release focus before chime.
+      await Future.delayed(const Duration(milliseconds: 200));
+
+      await player.setAsset('assets/notification.mp3');
+      await player.setVolume(chimeVolume);
       await player.play();
       await player.playerStateStream.firstWhere(
         (state) => state.processingState == ProcessingState.completed,
@@ -305,10 +405,10 @@ class _MoodSelectionPageState extends State<MoodSelectionPage> {
   Future<void> _saveMoodToUserInfo(String mood) async {
     try {
       // First get current user info to preserve it
-      final getCurrentResponse = await http.get(
-        Uri.parse('${EnvironmentConfig.apiBaseUrl}/api/user-info'),
-        headers: {
-          'Authorization': 'Bearer ${widget.idToken}',
+      final getCurrentResponse = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+        'GET',
+        '${EnvironmentConfig.apiBaseUrl}/api/user-info',
+        baseHeaders: {
           'X-User-ID': widget.aacUserId,
           'Content-Type': 'application/json',
         },
@@ -321,10 +421,10 @@ class _MoodSelectionPageState extends State<MoodSelectionPage> {
       }
       
       // Save mood along with existing user info to the user-info API
-      final response = await http.post(
-        Uri.parse('${EnvironmentConfig.apiBaseUrl}/api/user-info'),
-        headers: {
-          'Authorization': 'Bearer ${widget.idToken}',
+      final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+        'POST',
+        '${EnvironmentConfig.apiBaseUrl}/api/user-info',
+        baseHeaders: {
           'X-User-ID': widget.aacUserId,
           'Content-Type': 'application/json',
         },
@@ -521,7 +621,7 @@ class _MoodSelectionPageState extends State<MoodSelectionPage> {
                 child: LayoutBuilder(
                   builder: (context, constraints) {
                     final double availableWidth = constraints.maxWidth;
-                    final String text = moodName;
+                    final String text = _t(moodName);
                     final bool isSingleWord = !text.trim().contains(' ');
                     
                     // Base font size target
@@ -636,7 +736,7 @@ class _MoodSelectionPageState extends State<MoodSelectionPage> {
       },
       child: Scaffold(
         appBar: AppBar(
-          title: const Text('How are you feeling?'),
+          title: Text(_t('How are you feeling?')),
           backgroundColor: Theme.of(context).colorScheme.inversePrimary,
           automaticallyImplyLeading: false, // Remove back button
         ),
@@ -644,9 +744,9 @@ class _MoodSelectionPageState extends State<MoodSelectionPage> {
           padding: const EdgeInsets.all(16.0),
           child: Column(
             children: [
-              const Text(
-                'Select your current mood:',
-                style: TextStyle(
+              Text(
+                _t('Select your current mood:'),
+                style: const TextStyle(
                   fontSize: 24,
                   fontWeight: FontWeight.bold,
                 ),
@@ -674,10 +774,10 @@ class _MoodSelectionPageState extends State<MoodSelectionPage> {
               const SizedBox(height: 16),
               Text(
                 (useTapInterface)
-                    ? 'Tap a mood to continue, or tap Skip to proceed without selecting a mood.'
-                    : (isScanning 
-                    ? 'Auditory scanning is active. Press spacebar or tap to select the highlighted option.'
-                    : 'Tap a mood to continue, or tap Skip to proceed without selecting a mood.'),
+                    ? _t('Tap a mood to continue, or tap Skip to proceed without selecting a mood.')
+                    : (isScanning
+                    ? _t('Auditory scanning is active. Press spacebar or tap to select the highlighted option.')
+                    : _t('Tap a mood to continue, or tap Skip to proceed without selecting a mood.')),
                 style: const TextStyle(
                   fontSize: 16,
                   color: Colors.grey,

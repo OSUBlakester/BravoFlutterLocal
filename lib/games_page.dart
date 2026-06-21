@@ -30,6 +30,7 @@ class GamesPage extends StatefulWidget {
     bool showSpeechBubble,
   })?
   announceFunction;
+  final Future<void> Function()? stopAnnouncementFunction;
   final String? initialGame; // Auto-start a specific game (e.g., 'guess_who')
 
   const GamesPage({
@@ -38,6 +39,7 @@ class GamesPage extends StatefulWidget {
     required this.idToken,
     required this.aacUserId,
     this.announceFunction,
+    this.stopAnnouncementFunction,
     this.initialGame,
   }) : super(key: key);
 
@@ -94,6 +96,7 @@ class _GamesPageState extends State<GamesPage> {
   final ScrollController _optionsScrollController = ScrollController();
   final ScrollController _historyScrollController = ScrollController();
   bool _isSpacebarDown = false;
+  bool _suspendPageFocusRequests = false;
 
   // Speech recognition
   late stt.SpeechToText _speech;
@@ -107,6 +110,8 @@ class _GamesPageState extends State<GamesPage> {
   int _ignoreSpeechInputUntilMs =
       0; // Ignore recognizer callbacks during TTS bleed-through windows
   bool _isAnnouncementActive = false;
+  bool _isGuessAudioPreviewEnabled = false;
+  String? _guessPreviewOptionKey;
   Timer? _listeningRestartTimer;
   bool _isReadyTransitionInProgress =
       false; // Prevent duplicate ready transitions
@@ -118,6 +123,8 @@ class _GamesPageState extends State<GamesPage> {
       false; // Prevent duplicate question transitions
   bool _isGuessTransitionInProgress =
       false; // Prevent duplicate guess transitions
+  Timer? _storyQuestionNoSpeechTimer; // 10s no-speech timeout
+  Timer? _storyQuestionHardTimeoutTimer; // 30s hard cap
   int _lastGuessResultAtMs = 0; // Deduplicate rapid guess result handling
   Timer? _guessNoInputTimer;
   int _guessNoInputDeadlineMs = 0;
@@ -299,6 +306,9 @@ class _GamesPageState extends State<GamesPage> {
   String? _storySelectedStoryId;
   String _storyCurrentTitle = '';
   String _storyCurrentText = '';
+  bool _isStoryReadingActive = false;
+  bool _storyReadingInterrupted = false;
+  String _storyReadingReturnMenu = 'story_post_actions';
   bool _storyEditMode = false;
   bool _storyVerifiedAdminPin = false;
   final TextEditingController _storyPinController = TextEditingController();
@@ -369,6 +379,8 @@ class _GamesPageState extends State<GamesPage> {
     _optionsScrollController.dispose();
     _historyScrollController.dispose();
     _storyPinController.dispose();
+    _storyQuestionNoSpeechTimer?.cancel();
+    _storyQuestionHardTimeoutTimer?.cancel();
     _speech.stop();
     if (!_skipTtsStopOnDispose) {
       _flutterTts.stop();
@@ -791,8 +803,10 @@ class _GamesPageState extends State<GamesPage> {
     final useDictationMode = _usesDictationListenMode(listeningFor);
 
     // Set pause duration based on what we're listening for
+    // NOTE: pauseFor is "silence between utterances" - NOT the session timeout
+    // For story questions, use a long pause so our 10s/30s timeout timers can control the session
     final pauseDuration = (listeningFor == 'story_partner_question')
-        ? Duration(seconds: 3)
+        ? Duration(seconds: 20) // Allow 20s silence between utterances (our timeout controls the session)
       : (listeningFor == 'player_question')
       ? Duration(seconds: 4)
       : (listeningFor == 'yes_no' ||
@@ -805,6 +819,36 @@ class _GamesPageState extends State<GamesPage> {
     debugPrint(
       'Games page: [LISTEN] Using pauseFor: ${pauseDuration.inSeconds}s for mode: $listeningFor',
     );
+
+    // Story partner question: add 10s no-speech timeout and 30s hard cap
+    if (listeningFor == 'story_partner_question') {
+      _storyQuestionNoSpeechTimer?.cancel();
+      _storyQuestionHardTimeoutTimer?.cancel();
+      
+      _storyQuestionNoSpeechTimer = Timer(const Duration(seconds: 10), () {
+        if (!_isListening || _listeningFor != 'story_partner_question') return;
+        if (_isProcessingSpeechResult) return;
+        debugPrint(
+          'Games page: [STORY_TIMEOUT] No speech detected in 10s, stopping listening',
+        );
+        _storyQuestionHardTimeoutTimer?.cancel();
+        _isProcessingSpeechResult = true;
+        _speech.stop();
+        _handleSpeechResult('', 'story_partner_question_timeout');
+      });
+      
+      _storyQuestionHardTimeoutTimer = Timer(const Duration(seconds: 30), () {
+        if (!_isListening || _listeningFor != 'story_partner_question') return;
+        if (_isProcessingSpeechResult) return;
+        debugPrint(
+          'Games page: [STORY_TIMEOUT] Hard timeout 30s reached, stopping listening',
+        );
+        _storyQuestionNoSpeechTimer?.cancel();
+        _isProcessingSpeechResult = true;
+        _speech.stop();
+        _handleSpeechResult('', 'story_partner_question_timeout');
+      });
+    }
 
     try {
       _speech.listen(
@@ -875,6 +919,7 @@ class _GamesPageState extends State<GamesPage> {
             _handleSpeechResult(transcript, listeningFor);
           } else if (listeningFor == 'story_partner_question') {
             if (transcript.isNotEmpty) {
+              _storyQuestionNoSpeechTimer?.cancel();
               if (result.finalResult) {
                 debugPrint(
                   'Games page: [MATCH_FOUND] DETECTED story partner question (final)',
@@ -883,6 +928,7 @@ class _GamesPageState extends State<GamesPage> {
                 _isProcessingSpeechResult = true;
                 _lastProcessedTranscript = transcript;
                 _speech.stop();
+                _storyQuestionHardTimeoutTimer?.cancel();
                 _handleSpeechResult(transcript, listeningFor);
               } else {
                 _scheduleStoryQuestionCommit(transcript);
@@ -1121,6 +1167,8 @@ class _GamesPageState extends State<GamesPage> {
 
   void _stopListening({bool resumeWakeWordService = false}) {
     _listeningRestartTimer?.cancel();
+    _storyQuestionNoSpeechTimer?.cancel();
+    _storyQuestionHardTimeoutTimer?.cancel();
     _clearHmLetterSilenceTimer();
     if (_listeningFor == 'player_guess') {
       _clearGuessNoInputTimeoutWindow();
@@ -1184,7 +1232,27 @@ class _GamesPageState extends State<GamesPage> {
       return;
     }
 
+    if (listeningMode == 'story_partner_question_timeout') {
+      debugPrint(
+        'Games page: [STORY_TIMEOUT] No speech timeout, restarting',
+      );
+      _stopListening();
+      await _speak("I didn't hear anything. Try asking again.");
+      if (!mounted) return;
+      setState(() {
+        _statusText = 'Ready to hear your question';
+      });
+      await _startListeningWithGuard(
+        'story_partner_question',
+        preListenDelay: const Duration(milliseconds: 500),
+        ignoreWindow: const Duration(milliseconds: 1200),
+      );
+      return;
+    }
+
     if (listeningMode == 'story_partner_question') {
+      _storyQuestionNoSpeechTimer?.cancel();
+      _storyQuestionHardTimeoutTimer?.cancel();
       await _handleStoryPartnerQuestion(transcript);
       return;
     }
@@ -1519,6 +1587,17 @@ class _GamesPageState extends State<GamesPage> {
   }
 
   Future<void> _playWaitForSwitchNotification() async {
+    final settingsProvider = Provider.of<UserSettingsProvider>(
+      context,
+      listen: false,
+    );
+    final playChime =
+        settingsProvider.settings?.playWaitForSwitchChime ?? false;
+    if (!playChime) {
+      debugPrint('Games waitForSwitchNotification: Chime disabled in settings');
+      return;
+    }
+
     final now = DateTime.now();
     if (_lastWaitForSwitchNotificationAt != null &&
         now.difference(_lastWaitForSwitchNotificationAt!).inMilliseconds <
@@ -1532,7 +1611,31 @@ class _GamesPageState extends State<GamesPage> {
 
     final player = AudioPlayer();
     try {
-      await player.setAsset('assets/notification_v2.mp3');
+      if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+        try {
+          const platform = MethodChannel('audio_routing');
+          if (Platform.isIOS) {
+            await platform.invokeMethod('routeToPersonal');
+          } else {
+            await platform.invokeMethod('resetToDefault');
+          }
+        } catch (e) {
+          debugPrint(
+            'Games waitForSwitchNotification: Personal routing setup failed (non-critical): $e',
+          );
+        }
+      }
+
+      final personalVolume = await _getEffectivePersonalVolume(
+        settingsProvider,
+      );
+      const chimeCompensation = 0.18;
+      const chimeMaxCap = 0.16;
+      final chimeVolume = ((personalVolume / 10.0) * chimeCompensation)
+          .clamp(0.0, chimeMaxCap);
+
+      await player.setAsset('assets/notification.mp3');
+      await player.setVolume(chimeVolume);
       await player.play();
       await player.playerStateStream.firstWhere(
         (state) => state.processingState == ProcessingState.completed,
@@ -1744,6 +1847,7 @@ class _GamesPageState extends State<GamesPage> {
   }
 
   void _handleOptionClick(String option) {
+    _guessPreviewOptionKey = null;
     _stopScanning();
 
     if (_currentOptionType == 'game') {
@@ -2163,8 +2267,10 @@ class _GamesPageState extends State<GamesPage> {
     // may fail to route to the built-in speaker.
     await _flutterTts.stop();
 
-    // Show speech bubble on games page first
-    _showSpeechBubbleOverlay(text);
+    // Story Builder should show story text in-page instead of splash bubble.
+    if (_selectedGame != 'story_builder') {
+      _showSpeechBubbleOverlay(text);
+    }
 
     // Use the announcement function passed from main.dart for audio playback
     // Use 'system' routing so other players can hear the announcements
@@ -2191,6 +2297,97 @@ class _GamesPageState extends State<GamesPage> {
       _isAnnouncementActive = false;
       _suppressSpeechInputFor(const Duration(milliseconds: 2500));
     }
+  }
+
+  Future<void> _announceGuessPreview(String text) async {
+    try {
+      await _flutterTts.stop();
+
+      final settingsProvider = Provider.of<UserSettingsProvider>(
+        context,
+        listen: false,
+      );
+      final userSettings = settingsProvider.settings;
+
+      await _flutterTts.setSharedInstance(true);
+      await _flutterTts.setLanguage('en-US');
+      await _flutterTts.setSpeechRate(0.48);
+      await _flutterTts.setPitch(1.0);
+
+      final baseVolume = ((userSettings?.personalVolume ?? 10) / 10.0).clamp(
+        0.0,
+        1.0,
+      );
+      final previewVolume = (baseVolume * 0.30).clamp(0.0, 0.35);
+      await _flutterTts.setVolume(previewVolume);
+
+      final ttsCompleter = Completer<void>();
+      _flutterTts.setCompletionHandler(() {
+        if (!ttsCompleter.isCompleted) {
+          ttsCompleter.complete();
+        }
+      });
+
+      debugPrint(
+        'Games page: Guess preview volume=$previewVolume for "$text"',
+      );
+      await _flutterTts.speak(text);
+
+      final wordCount = text
+          .split(RegExp(r'\s+'))
+          .where((w) => w.isNotEmpty)
+          .length;
+      final estimatedDurationMs = (wordCount * 700) + 3000;
+      final timeout = Duration(
+        milliseconds: estimatedDurationMs.clamp(5000, 60000),
+      );
+
+      try {
+        await ttsCompleter.future.timeout(timeout);
+      } on TimeoutException {
+        if (!ttsCompleter.isCompleted) {
+          ttsCompleter.complete();
+        }
+      }
+
+      _flutterTts.setCompletionHandler(() {});
+    } catch (e) {
+      debugPrint('Games page: Guess preview failed: $e');
+    }
+  }
+
+  Future<bool> _handleGuessTapPreview(String optionText) async {
+    final previewEligibleOptionType =
+        _currentOptionType.startsWith('guess_') &&
+        _currentOptionType != 'guess_finished';
+
+    if (widget.fromInterface != 'tap' ||
+        !_isGuessGame ||
+        !_isGuessAudioPreviewEnabled ||
+        !previewEligibleOptionType) {
+      debugPrint(
+        'Games page: Guess preview bypassed (fromInterface=${widget.fromInterface}, isGuess=$_isGuessGame, previewEnabled=$_isGuessAudioPreviewEnabled, optionType=$_currentOptionType)',
+      );
+      return true;
+    }
+
+    final optionKey = '$_currentOptionType::$optionText';
+    final isSecondTap = _guessPreviewOptionKey == optionKey;
+    if (isSecondTap) {
+      setState(() {
+        _guessPreviewOptionKey = null;
+      });
+      return true;
+    }
+
+    setState(() {
+      _guessPreviewOptionKey = optionKey;
+      _statusText = 'Previewing "$optionText". Tap it again to select.';
+    });
+
+    _showSpeechBubbleOverlay(optionText);
+    await _announceGuessPreview(optionText);
+    return false;
   }
 
   void _showSpeechBubbleOverlay(String text) {
@@ -2248,7 +2445,58 @@ class _GamesPageState extends State<GamesPage> {
     _storySelectedStoryId = null;
     _storyCurrentTitle = '';
     _storyCurrentText = '';
+    _isStoryReadingActive = false;
+    _storyReadingInterrupted = false;
+    _storyReadingReturnMenu = 'story_post_actions';
     _storyEditMode = false;
+  }
+
+  void _beginStoryReadingSession({required String returnMenu}) {
+    if (!mounted) return;
+    setState(() {
+      _isStoryReadingActive = true;
+      _storyReadingInterrupted = false;
+      _storyReadingReturnMenu = returnMenu;
+    });
+  }
+
+  void _endStoryReadingSession() {
+    if (!mounted) return;
+    setState(() {
+      _isStoryReadingActive = false;
+    });
+  }
+
+  Future<void> _stopStoryReadingAndReturnToMenu() async {
+    _storyReadingInterrupted = true;
+
+    // Stop main announcement pipeline audio (the story is read through announceViaBackend).
+    if (widget.stopAnnouncementFunction != null) {
+      try {
+        await widget.stopAnnouncementFunction!();
+      } catch (e) {
+        debugPrint('Games page: Error stopping announcement audio: $e');
+      }
+    }
+
+    // Stop local TTS immediately and close any local bubble state.
+    await _flutterTts.stop();
+    _hideSpeechBubbleOverlay();
+
+    if (!mounted) return;
+    setState(() {
+      _isAnnouncementActive = false;
+      _isStoryReadingActive = false;
+    });
+
+    if (_storyReadingReturnMenu == 'story_read_list') {
+      await _storyShowReadMenu();
+      return;
+    }
+
+    await _storyPresentPostStoryActions(
+      statusMessage: 'Reading stopped. Choose what to do next with your story.',
+    );
   }
 
   void _setStoryOptions({
@@ -2464,12 +2712,23 @@ class _GamesPageState extends State<GamesPage> {
         _statusText = 'Reading "$title"';
       });
 
+      _beginStoryReadingSession(returnMenu: 'story_read_list');
+
       await _speak("Let's read $title");
+      if (_storyReadingInterrupted) {
+        return;
+      }
       if (text.trim().isNotEmpty) {
         await _speak(text);
       } else {
         await _speak('This story is empty.');
       }
+
+      if (_storyReadingInterrupted) {
+        return;
+      }
+
+      _endStoryReadingSession();
 
       await _storyPresentPostStoryActions(
         statusMessage: 'Choose what to do next with your story.',
@@ -2769,11 +3028,18 @@ class _GamesPageState extends State<GamesPage> {
         _storyEditMode = false;
       });
 
+      _beginStoryReadingSession(returnMenu: 'story_post_actions');
+
       await _speak(
         _storyCurrentText.isNotEmpty
             ? _storyCurrentText
             : 'Your story is ready.',
       );
+      if (_storyReadingInterrupted) {
+        return;
+      }
+
+      _endStoryReadingSession();
       await _storyPresentPostStoryActions(
         statusMessage: 'Story complete. Choose what to do next.',
       );
@@ -2861,9 +3127,16 @@ class _GamesPageState extends State<GamesPage> {
         _storyEditMode = false;
       });
 
+      _beginStoryReadingSession(returnMenu: 'story_post_actions');
+
       await _speak(
         _storyCurrentText.isNotEmpty ? _storyCurrentText : 'Story updated.',
       );
+      if (_storyReadingInterrupted) {
+        return;
+      }
+
+      _endStoryReadingSession();
       await _storyPresentPostStoryActions(
         statusMessage: 'Story updated. Choose what to do next.',
       );
@@ -2952,6 +3225,7 @@ class _GamesPageState extends State<GamesPage> {
 
     if (!_storyVerifiedAdminPin) {
       _storyPinController.clear();
+      _suspendPageFocusRequests = true;
       final pin = await showDialog<String>(
         context: context,
         builder: (dialogContext) {
@@ -2960,6 +3234,10 @@ class _GamesPageState extends State<GamesPage> {
             content: TextField(
               controller: _storyPinController,
               autofocus: true,
+              keyboardType: TextInputType.number,
+              textInputAction: TextInputAction.done,
+              enableSuggestions: false,
+              autocorrect: false,
               obscureText: true,
               decoration: const InputDecoration(hintText: 'PIN'),
             ),
@@ -2978,6 +3256,7 @@ class _GamesPageState extends State<GamesPage> {
           );
         },
       );
+      _suspendPageFocusRequests = false;
 
       if (pin == null) {
         return;
@@ -3179,7 +3458,12 @@ class _GamesPageState extends State<GamesPage> {
     }
     if (selectedAction == 'story_post_read_again') {
       if (_storyCurrentText.trim().isNotEmpty) {
+        _beginStoryReadingSession(returnMenu: 'story_post_actions');
         await _speak(_storyCurrentText);
+        if (_storyReadingInterrupted) {
+          return;
+        }
+        _endStoryReadingSession();
       }
       await _storyPresentPostStoryActions(
         statusMessage: 'Choose what to do next with your story.',
@@ -5125,7 +5409,16 @@ class _GamesPageState extends State<GamesPage> {
       String idToken = widget.idToken;
       if (user != null) {
         try {
-          final refreshedToken = await user.getIdToken(true);
+          String? refreshedToken;
+          try {
+            refreshedToken = await user
+                .getIdToken(true)
+                .timeout(const Duration(seconds: 6));
+          } catch (_) {
+            refreshedToken = await user
+                .getIdToken()
+                .timeout(const Duration(seconds: 4));
+          }
           if (refreshedToken != null && refreshedToken.isNotEmpty) {
             idToken = refreshedToken;
           }
@@ -5255,7 +5548,16 @@ class _GamesPageState extends State<GamesPage> {
       String idToken = widget.idToken;
       if (user != null) {
         try {
-          final refreshedToken = await user.getIdToken(true);
+          String? refreshedToken;
+          try {
+            refreshedToken = await user
+                .getIdToken(true)
+                .timeout(const Duration(seconds: 6));
+          } catch (_) {
+            refreshedToken = await user
+                .getIdToken()
+                .timeout(const Duration(seconds: 4));
+          }
           if (refreshedToken != null && refreshedToken.isNotEmpty) {
             idToken = refreshedToken;
           }
@@ -5455,7 +5757,16 @@ class _GamesPageState extends State<GamesPage> {
       String idToken = widget.idToken;
       if (user != null) {
         try {
-          final refreshedToken = await user.getIdToken(true);
+          String? refreshedToken;
+          try {
+            refreshedToken = await user
+                .getIdToken(true)
+                .timeout(const Duration(seconds: 6));
+          } catch (_) {
+            refreshedToken = await user
+                .getIdToken()
+                .timeout(const Duration(seconds: 4));
+          }
           if (refreshedToken != null && refreshedToken.isNotEmpty) {
             idToken = refreshedToken;
           }
@@ -5821,7 +6132,16 @@ class _GamesPageState extends State<GamesPage> {
       String idToken = widget.idToken;
       if (user != null) {
         try {
-          final refreshedToken = await user.getIdToken(true);
+          String? refreshedToken;
+          try {
+            refreshedToken = await user
+                .getIdToken(true)
+                .timeout(const Duration(seconds: 6));
+          } catch (_) {
+            refreshedToken = await user
+                .getIdToken()
+                .timeout(const Duration(seconds: 4));
+          }
           if (refreshedToken != null && refreshedToken.isNotEmpty) {
             idToken = refreshedToken;
           }
@@ -6660,10 +6980,15 @@ class _GamesPageState extends State<GamesPage> {
     // Use Denver Broncos colors from main.dart
     final Color darkColor = Color(0xFF002244); // Navy blue
     final Color lightColor = Color(0xFFFB4F14); // Orange
+    final bool showStoryFullWindow =
+      _selectedGame == 'story_builder' &&
+      _storyCurrentText.trim().isNotEmpty &&
+      !_isLoading &&
+      _isStoryReadingActive;
 
     // Ensure focus is restored on every build
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (mounted && _focusNode.canRequestFocus) {
+      if (mounted && !_suspendPageFocusRequests && _focusNode.canRequestFocus) {
         _focusNode.requestFocus();
       }
     });
@@ -6766,6 +7091,34 @@ class _GamesPageState extends State<GamesPage> {
                                 },
                                 padding: EdgeInsets.zero,
                                 tooltip: 'Manage Custom Categories',
+                              ),
+                            if (widget.fromInterface == 'tap' && _isGuessGame)
+                              SizedBox(
+                                width: 100,
+                                height: 80,
+                                child: IconButton(
+                                  icon: Icon(
+                                    _isGuessAudioPreviewEnabled
+                                        ? Icons.surround_sound
+                                        : Icons.hearing,
+                                    color: _isGuessAudioPreviewEnabled
+                                        ? Colors.tealAccent
+                                        : lightColor,
+                                    size: 48,
+                                  ),
+                                  onPressed: () {
+                                    setState(() {
+                                      _isGuessAudioPreviewEnabled =
+                                          !_isGuessAudioPreviewEnabled;
+                                      _guessPreviewOptionKey = null;
+                                      _statusText = _isGuessAudioPreviewEnabled
+                                          ? 'Guess preview enabled. Tap once to preview, tap again to select.'
+                                          : 'Guess preview disabled.';
+                                    });
+                                  },
+                                  padding: EdgeInsets.zero,
+                                  tooltip: 'Toggle Guess Preview',
+                                ),
                               ),
                           ],
                         ),
@@ -6895,6 +7248,56 @@ class _GamesPageState extends State<GamesPage> {
                     ),
                   ),
 
+                    // Story text panel: persistent on-page display during Story Builder.
+                    if (!showStoryFullWindow &&
+                      _selectedGame == 'story_builder' &&
+                      _storyCurrentText.trim().isNotEmpty)
+                    Container(
+                      width: double.infinity,
+                      margin: const EdgeInsets.symmetric(
+                        horizontal: 12,
+                        vertical: 4,
+                      ),
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.shade50,
+                        borderRadius: BorderRadius.circular(12),
+                        border: Border.all(
+                          color: Colors.orange.shade200,
+                          width: 1.5,
+                        ),
+                      ),
+                      constraints: const BoxConstraints(maxHeight: 170),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _storyCurrentTitle.trim().isNotEmpty
+                                ? _storyCurrentTitle
+                                : 'Current Story',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                              color: Colors.orange.shade900,
+                            ),
+                          ),
+                          const SizedBox(height: 8),
+                          Expanded(
+                            child: SingleChildScrollView(
+                              child: Text(
+                                _storyCurrentText,
+                                style: const TextStyle(
+                                  fontSize: 16,
+                                  height: 1.35,
+                                  color: Colors.black87,
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
                   // Loading indicator
                   if (_isLoading)
                     Expanded(
@@ -6919,8 +7322,78 @@ class _GamesPageState extends State<GamesPage> {
                       ),
                     ),
 
+                  // Story Builder full-window reading view.
+                  if (showStoryFullWindow)
+                    Expanded(
+                      child: Container(
+                        width: double.infinity,
+                        margin: const EdgeInsets.fromLTRB(12, 6, 12, 10),
+                        padding: const EdgeInsets.all(18),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.shade50,
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: Colors.orange.shade300,
+                            width: 1.5,
+                          ),
+                          boxShadow: [
+                            BoxShadow(
+                              color: Colors.black.withOpacity(0.08),
+                              blurRadius: 6,
+                              offset: const Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              _storyCurrentTitle.trim().isNotEmpty
+                                  ? _storyCurrentTitle
+                                  : 'Current Story',
+                              style: TextStyle(
+                                fontSize: 24,
+                                fontWeight: FontWeight.bold,
+                                color: Colors.orange.shade900,
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            Expanded(
+                              child: SingleChildScrollView(
+                                child: Text(
+                                  _storyCurrentText,
+                                  style: const TextStyle(
+                                    fontSize: 28,
+                                    height: 1.4,
+                                    color: Colors.black87,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(height: 12),
+                            Align(
+                              alignment: Alignment.centerRight,
+                              child: ElevatedButton.icon(
+                                onPressed: _stopStoryReadingAndReturnToMenu,
+                                icon: const Icon(Icons.stop_circle_outlined),
+                                label: const Text('Stop Reading'),
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: Colors.red.shade600,
+                                  foregroundColor: Colors.white,
+                                  padding: const EdgeInsets.symmetric(
+                                    horizontal: 18,
+                                    vertical: 12,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+
                   // Content area
-                  if (!_isLoading)
+                  if (!_isLoading && !showStoryFullWindow)
                     Expanded(
                       child: Padding(
                         padding: const EdgeInsets.symmetric(horizontal: 4.0),
@@ -6929,9 +7402,10 @@ class _GamesPageState extends State<GamesPage> {
                     ),
 
                   // Question / Story History Log
-                  if ((_selectedGame == 'story_builder' &&
+                    if (!showStoryFullWindow &&
+                      ((_selectedGame == 'story_builder' &&
                           _storyTranscript.isNotEmpty) ||
-                      _questionHistory.isNotEmpty)
+                      _questionHistory.isNotEmpty))
                     Container(
                       height: 180,
                       margin: EdgeInsets.all(12),
@@ -7646,6 +8120,7 @@ class _GamesPageState extends State<GamesPage> {
   Widget _buildGameMenuButton({
     required String label,
     required bool isHighlighted,
+    bool isPreviewArmed = false,
     required double fontSize,
     required Color lightColor,
     required VoidCallback onTap,
@@ -7659,9 +8134,15 @@ class _GamesPageState extends State<GamesPage> {
       return TapInterfaceButton(
         label: label,
         onPressed: onTap,
-        backgroundColor: isHighlighted ? lightColor : Colors.white,
-        foregroundColor: isHighlighted ? Colors.white : Colors.black87,
-        borderColor: isHighlighted ? lightColor : Colors.grey.shade300,
+        backgroundColor: isPreviewArmed
+          ? Colors.teal.shade100
+          : (isHighlighted ? lightColor : Colors.white),
+        foregroundColor: isPreviewArmed
+          ? Colors.teal.shade900
+          : (isHighlighted ? Colors.white : Colors.black87),
+        borderColor: isPreviewArmed
+          ? Colors.teal.shade500
+          : (isHighlighted ? lightColor : Colors.grey.shade300),
         fontSize: fontSize,
         enablePictograms:
             true, // Always enable pictograms in Tap Interface mode
@@ -7901,6 +8382,8 @@ class _GamesPageState extends State<GamesPage> {
               itemBuilder: (context, index) {
                 final option = allOptions[index];
                 final isHighlighted = _isScanning && _currentScanIndex == index;
+                final isPreviewArmed = _guessPreviewOptionKey ==
+                    '$_currentOptionType::$option';
 
                 return Padding(
                   padding: const EdgeInsets.all(2.0),
@@ -7910,6 +8393,7 @@ class _GamesPageState extends State<GamesPage> {
                     child: _buildGameMenuButton(
                       label: option,
                       isHighlighted: isHighlighted,
+                      isPreviewArmed: isPreviewArmed,
                       fontSize: fontSize,
                       lightColor: lightColor,
                       onTap: () => _handleOptionSelection(option),
@@ -8753,7 +9237,12 @@ class _GamesPageState extends State<GamesPage> {
     }
   }
 
-  void _handleOptionSelection(String option) {
+  Future<void> _handleOptionSelection(String option) async {
+    final proceedWithSelection = await _handleGuessTapPreview(option);
+    if (!proceedWithSelection) {
+      return;
+    }
+
     if (_currentOptionType == 'guess_finished') {
       _handleGuessFinishedClick(option);
     } else if (_currentOptionType == 'guess_response') {

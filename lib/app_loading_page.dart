@@ -30,13 +30,15 @@ class _AppLoadingPageState extends State<AppLoadingPage>
   double _progress = 0.0;
   bool _hasError = false;
   String _errorMessage = '';
+  String _cacheStatsText = '';
 
   // Animation controller for the spinning speech bubble
   late AnimationController _animationController;
   late Animation<double> _rotationAnimation;
 
   // Preloaded data for tap interface (if needed)
-  dynamic _tapConfig;
+  TapInterfaceConfig? _tapConfig;
+  TapBoardsResponse? _tapBoardsResponse;
   List<String> _wordOptions = [];
   List<Map<String, String>> _phraseOptions = [];
 
@@ -109,15 +111,12 @@ class _AppLoadingPageState extends State<AppLoadingPage>
       
       await PictogramService().loadCacheFromPrefs();
       
-      // Step 2: Preload common images for mood selection and interface
+      // Step 2: Prepare image preload phase
       setState(() {
         _currentTask = 'Preloading interface images...';
         _progress = 0.3;
       });
-      
-      // SKIP image preloading during splash screen to prevent unwanted API calls and missing_images logging
-      // Images will be loaded naturally/lazily when the user navigates to different pages
-      // This prevents the "preload logging bug" where image searches during splash trigger false missing_images entries
+
       setState(() {
         _currentTask = 'Finalizing initialization...';
         _progress = 0.68;
@@ -126,32 +125,37 @@ class _AppLoadingPageState extends State<AppLoadingPage>
       // Brief delay to allow UI to update
       await Future.delayed(const Duration(milliseconds: 100));
       
-      debugPrint('⏭️ Skipping image preload during splash screen (images will load on demand)');
+      debugPrint('🚀 Running profile image warmup during splash...');
       
-      // Step 3: Load tap interface data if needed
+      // Step 3: Prepare tap data and warm profile image cache for ALL flows.
+      // This ensures mood-selection flow still warms Tap images before user enters Tap page.
+      setState(() {
+        _currentTask = 'Preparing communication interface...';
+        _progress = 0.7;
+      });
+
+      final tapService = TapInterfaceService(userSettingsProvider: userSettings);
+
+      // Always fetch config/boards so warmup has deterministic source data.
+      _tapConfig = await tapService.fetchTapInterfaceConfig();
+      _tapBoardsResponse = await tapService.fetchTapBoards();
+
       if (widget.useTapInterface) {
-        setState(() {
-          _currentTask = 'Preparing communication interface...';
-          _progress = 0.7;
-        });
-        
-        final tapService = TapInterfaceService(userSettingsProvider: userSettings);
-        
-        // Load config
-        _tapConfig = await tapService.fetchTapInterfaceConfig();
-        
-        // Load initial options based on current mood
-        final currentMood = userSettings.settings?.currentMood ?? 'No Mood Selected';
-        
+        // Load initial options used by Tap first render only when launching Tap directly.
+        final currentMood =
+            userSettings.settings?.currentMood ?? 'No Mood Selected';
+
         String wordContext = 'general communication topics';
-        String phraseContext = 'general conversation starters and common phrases';
-        
+        String phraseContext =
+            'general conversation starters and common phrases';
+
         if (currentMood != 'No Mood Selected' && currentMood.isNotEmpty) {
-          wordContext = 'general communication topics appropriate for someone feeling $currentMood';
-          phraseContext = 'general conversation starters and common phrases appropriate for someone feeling $currentMood';
+          wordContext =
+              'general communication topics appropriate for someone feeling $currentMood';
+          phraseContext =
+              'general conversation starters and common phrases appropriate for someone feeling $currentMood';
         }
-        
-        // Load word and phrase options in parallel
+
         final futures = await Future.wait([
           tapService.generateFreestyleOptions(
             context: wordContext,
@@ -164,10 +168,62 @@ class _AppLoadingPageState extends State<AppLoadingPage>
             maxOptions: 25,
           ),
         ]);
-        
+
         _wordOptions = futures[0] as List<String>;
         _phraseOptions = futures[1] as List<Map<String, String>>;
       }
+
+      setState(() {
+        _currentTask = 'Caching images for this profile...';
+        _progress = 0.82;
+        _cacheStatsText = 'Starting cache warmup...';
+      });
+
+      final assignedImageUrls = _collectTapAssignedImageUrls();
+      final pictogramService = PictogramService();
+      pictogramService.setUserContext(
+        userId: widget.aacUserId,
+        idToken: widget.idToken,
+      );
+      pictogramService.enablePictograms = true;
+
+      final warmupStopwatch = Stopwatch()..start();
+
+      // Safe mode: warm files from known URLs only.
+      // Avoid running term-based matching at login, which can degrade quality
+      // by caching weak/incorrect term matches before user-visible lookup.
+      final existingCachedWarmedCount = await pictogramService
+          .warmDiskCacheForExistingCachedUrls(
+            maxItems: 500,
+            maxConcurrent: 10,
+          )
+          .timeout(const Duration(seconds: 20), onTimeout: () {
+            debugPrint(
+              '⏱️ AppLoadingPage: existing-cache disk warmup timed out; continuing startup',
+            );
+            return 0;
+          });
+
+      final assignedWarmedCount = await pictogramService
+          .warmDiskCacheForImageUrls(
+            imageUrls: assignedImageUrls,
+            maxItems: 350,
+            maxConcurrent: 10,
+          )
+          .timeout(const Duration(seconds: 20), onTimeout: () {
+            debugPrint(
+              '⏱️ AppLoadingPage: assigned-image disk warmup timed out; continuing startup',
+            );
+            return 0;
+          });
+
+      final elapsedMs = warmupStopwatch.elapsedMilliseconds;
+      final stats =
+          'knownCacheWarmed=$existingCachedWarmedCount, assignedUrls=${assignedImageUrls.length}, assignedWarmed=$assignedWarmedCount, elapsed=${(elapsedMs / 1000).toStringAsFixed(1)}s';
+      setState(() {
+        _cacheStatsText = stats;
+      });
+      debugPrint('✅ AppLoadingPage cache warmup complete: $stats');
       
       // Step 4: Final preparation and verification
       setState(() {
@@ -223,6 +279,45 @@ class _AppLoadingPageState extends State<AppLoadingPage>
         _currentTask = 'Loading error occurred';
       });
     }
+  }
+
+  List<String> _collectTapAssignedImageUrls() {
+    final urls = <String>[];
+    final seen = <String>{};
+
+    void addUrl(String? raw) {
+      final normalized = (raw ?? '').trim();
+      if (!normalized.startsWith('http')) return;
+      if (seen.contains(normalized)) return;
+      seen.add(normalized);
+      urls.add(normalized);
+    }
+
+    void collectCategoryUrls(TapInterfaceCategory category) {
+      if (category.hidden) return;
+      addUrl(category.imageUrl);
+      for (final boardWord in category.boardWordOptions) {
+        if (boardWord.hidden) continue;
+        addUrl(boardWord.imageUrl);
+      }
+      for (final child in category.children) {
+        collectCategoryUrls(child);
+      }
+    }
+
+    for (final category in _tapConfig?.buttons ?? const <TapInterfaceCategory>[]) {
+      collectCategoryUrls(category);
+    }
+
+    for (final board in _tapBoardsResponse?.boards ?? const <TapBoard>[]) {
+      addUrl(board.imageUrl);
+      for (final button in board.buttons) {
+        if (button.hidden) continue;
+        addUrl(button.imageUrl);
+      }
+    }
+
+    return urls;
   }
 
   @override
@@ -306,6 +401,21 @@ class _AppLoadingPageState extends State<AppLoadingPage>
                 ),
                 
                 const SizedBox(height: 15),
+
+                if (_cacheStatsText.isNotEmpty)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 16),
+                    child: Text(
+                      _cacheStatsText,
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.white.withOpacity(0.72),
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+
+                if (_cacheStatsText.isNotEmpty) const SizedBox(height: 8),
                 
                 Text(
                   '${(_progress * 100).toInt()}%',

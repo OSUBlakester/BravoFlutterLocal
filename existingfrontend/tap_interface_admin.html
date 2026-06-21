@@ -4,6 +4,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Tap Interface Admin</title>
+    <script>
+        window.location.replace(`tap_board_builder.html${window.location.search}${window.location.hash}`);
+    </script>
+    <noscript>
+        <meta http-equiv="refresh" content="0; url=tap_board_builder.html">
+    </noscript>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <style>
@@ -100,6 +106,35 @@
             word-wrap: break-word;
             min-height: 60px;
             margin-left: var(--depth, 0px);
+        }
+
+        .drag-handle {
+            width: 28px;
+            min-width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            border: 1px solid #d6dce2;
+            background: #ffffff;
+            color: #6c7a89;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 0.6rem;
+            cursor: grab;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none;
+        }
+
+        .drag-handle:hover {
+            color: #2f3d4a;
+            border-color: #b8c3ce;
+            background: #f7f9fb;
+        }
+
+        .drag-handle:active {
+            cursor: grabbing;
+            background: #eef3f7;
         }
 
         .tree-button:hover {
@@ -328,12 +363,16 @@
             border-radius: 4px;
             text-align: center;
             color: #999;
-            display: none;
             transition: all 0.2s;
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
         }
 
         .root-drop-zone.show {
-            display: block;
+            opacity: 1;
+            visibility: visible;
+            pointer-events: auto;
         }
 
         .root-drop-zone.drag-over {
@@ -352,6 +391,9 @@
             <h1 id="dynamic-page-title" class="ml-2 text-xl font-semibold">Tap Interface Administration</h1>
         </div>
         <div class="admin-toolbar flex items-center gap-2">
+            <button class="h-10 px-4 flex items-center justify-center text-white bg-indigo-600 rounded-full transition-colors duration-200 text-sm hover:bg-indigo-700" onclick="window.location.href='tap_boards_menu_admin.html'" title="Boards Menu Admin">
+                <i class="fas fa-table-cells-large mr-1"></i>Boards Menu
+            </button>
             <div class="changes-indicator" id="changesIndicator" style="display: none; padding: 0.5rem 1rem; background-color: #f39c12; color: white; border-radius: 0.375rem; font-size: 0.875rem; margin-right: 0.5rem;">
                 ⚠️ Unsaved Changes
             </div>
@@ -398,6 +440,7 @@
                     <p>Select a button from the navigation tree on the left to start editing, or add a new button to get started.</p>
                     <p><strong>Drag & Drop:</strong></p>
                     <ul style="text-align: left; max-width: 500px; margin: 0 auto;">
+                        <li>Use the <strong>drag handle</strong> (<i class="fas fa-grip-vertical"></i>) on each button to move it</li>
                         <li>Drag button onto another button to <strong>reorder</strong> (shows orange "↕️ Reorder")</li>
                         <li>Hold <strong>Shift</strong> while dragging to make it a <strong>child button</strong> (shows green "➕ Add Child")</li>
                         <li>Drop on root zone to move button to <strong>top level</strong></li>
@@ -462,8 +505,9 @@
                             <select id="specialFunction" name="specialFunction" style="width: 100%; padding: 0.75rem; border: 2px solid #e9ecef; border-radius: 4px; font-size: 0.9rem; background-color: white;">
                                 <option value="">None</option>
                                 <option value="spell">Spell</option>
+                                <option value="games">Games</option>
                             </select>
-                            <small class="form-text text-muted">Assign a special function to this button (e.g., open Spelling interface).</small>
+                            <small class="form-text text-muted">Assign a special function to this button (e.g., open Spelling interface or Games).</small>
                         </div>
 
                         <div class="form-group">
@@ -1455,9 +1499,12 @@
             
             buttonDiv.innerHTML = `
                 <div class="tree-button ${isSelected ? 'selected' : ''}" 
-                     draggable="true" 
+                     draggable="false" 
                      data-path='${JSON.stringify(path)}'
                      style="${button.hidden ? 'opacity: 0.6; border-style: dashed;' : ''}">
+                    <span class="drag-handle" title="Drag to move" aria-label="Drag handle" draggable="true">
+                        <i class="fas fa-grip-vertical"></i>
+                    </span>
                     <div class="button-content">
                         <div class="button-label">
                             ${button.label || 'Untitled Button'}
@@ -1502,35 +1549,53 @@
         // Setup drag and drop functionality
         function setupDragAndDrop() {
             let draggedPath = null;
+            const rootDropZone = document.getElementById('rootDropZone');
+
+            function cleanupDragState() {
+                document.querySelectorAll('.tree-button.drag-over').forEach(el => {
+                    el.classList.remove('drag-over', 'child-mode', 'sibling-mode');
+                });
+                rootDropZone.classList.remove('show', 'drag-over');
+                document.querySelectorAll('.tree-button.dragging').forEach(el => {
+                    el.classList.remove('dragging');
+                });
+                draggedPath = null;
+            }
+
+            document.addEventListener('click', (e) => {
+                if (e.target.closest('.drag-handle')) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                }
+            }, true);
 
             // Handle drag start
             document.addEventListener('dragstart', (e) => {
                 console.log('🚀 Drag start on:', e.target);
-                if (e.target.closest('.tree-button')) {
-                    const path = JSON.parse(e.target.closest('.tree-button').dataset.path);
+                const fromHandle = e.target.closest('.drag-handle');
+                const treeButton = fromHandle ? fromHandle.closest('.tree-button') : null;
+
+                if (!treeButton || !fromHandle) {
+                    e.preventDefault();
+                    return;
+                }
+
+                if (treeButton) {
+                    const path = JSON.parse(treeButton.dataset.path);
                     draggedPath = path;
                     console.log('✅ Starting drag for path:', path);
-                    e.target.closest('.tree-button').classList.add('dragging');
+                    treeButton.classList.add('dragging');
                     e.dataTransfer.setData('text/plain', JSON.stringify(path));
+                    e.dataTransfer.effectAllowed = 'move';
                     
                     // Show root drop zone
-                    document.getElementById('rootDropZone').classList.add('show');
+                    rootDropZone.classList.add('show');
                 }
             });
 
             // Handle drag end
-            document.addEventListener('dragend', (e) => {
-                if (e.target.closest('.tree-button')) {
-                    e.target.closest('.tree-button').classList.remove('dragging');
-                    document.getElementById('rootDropZone').classList.remove('show');
-                    
-                    // Remove all drag-over highlighting
-                    document.querySelectorAll('.tree-button.drag-over').forEach(el => {
-                        el.classList.remove('drag-over', 'child-mode', 'sibling-mode');
-                    });
-                    
-                    draggedPath = null;
-                }
+            document.addEventListener('dragend', () => {
+                cleanupDragState();
             });
 
             // Handle drag over for buttons and root zone
@@ -1560,7 +1625,7 @@
                             treeButton.classList.add('sibling-mode');
                         }
                     } else if (rootDropZone) {
-                        e.target.classList.add('drag-over');
+                        rootDropZone.classList.add('drag-over');
                     }
                 }
             });
@@ -1573,26 +1638,21 @@
                 if (treeButton) {
                     treeButton.classList.remove('drag-over', 'child-mode', 'sibling-mode');
                 } else if (rootDropZone) {
-                    e.target.classList.remove('drag-over');
+                    document.getElementById('rootDropZone').classList.remove('drag-over');
                 }
             });
 
             // Handle drop
             document.addEventListener('drop', (e) => {
                 e.preventDefault();
-                
-                // Remove all drag-over highlighting
-                document.querySelectorAll('.tree-button.drag-over').forEach(el => {
-                    el.classList.remove('drag-over', 'child-mode', 'sibling-mode');
-                });
-                document.getElementById('rootDropZone').classList.remove('drag-over');
-
                 if (!draggedPath) return;
+
+                const sourcePath = [...draggedPath];
 
                 try {
                     // Handle root drop zone
                     if (e.target.id === 'rootDropZone') {
-                        handleRootDrop(draggedPath);
+                        handleRootDrop(sourcePath);
                         return;
                     }
 
@@ -1603,15 +1663,17 @@
                         
                         // Check if holding shift key to force child relationship
                         if (e.shiftKey) {
-                            handleDropAsChild(draggedPath, targetPath);
+                            handleDropAsChild(sourcePath, targetPath);
                         } else {
                             // Default: reorder (insert after)
-                            handleDropForReorder(draggedPath, targetPath);
+                            handleDropForReorder(sourcePath, targetPath);
                         }
                     }
                 } catch (error) {
                     console.error('Drop error:', error);
                     showError('Failed to move button: ' + error.message);
+                } finally {
+                    cleanupDragState();
                 }
             });
         }

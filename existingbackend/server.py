@@ -160,6 +160,17 @@ oauth2_scheme = HTTPBearer()
 # Mood update tracking to prevent race conditions
 mood_update_timestamps = {}  # Format: {account_id/aac_user_id: timestamp}
 
+# Short-lived in-memory cache for repeated /llm option requests.
+# This smooths interactive UX when users trigger the same button/prompt repeatedly.
+LLM_QUICK_RESPONSE_CACHE_TTL_SECONDS = 180
+llm_quick_response_cache: Dict[str, Dict[str, Any]] = {}
+llm_inflight_requests: Dict[str, asyncio.Future] = {}
+llm_inflight_requests_lock = asyncio.Lock()
+
+# Short-lived in-memory cache for repeated category-words requests.
+CATEGORY_WORDS_QUICK_RESPONSE_CACHE_TTL_SECONDS = 180
+category_words_quick_response_cache: Dict[str, Dict[str, Any]] = {}
+
 # Redis cache client (initialized in lifespan)
 redis_client = None
 
@@ -300,6 +311,7 @@ template_user_data_paths = {
         "ScanningOff": False,
         "scanMode": "auto",
         "waitForSwitchToScan": False,
+        "playWaitForSwitchChime": False,
         "SummaryOff": False,
         "selected_tts_voice_name": "en-US-Neural2-A",
         "gridColumns": 10,
@@ -492,8 +504,10 @@ async def get_current_account_and_user_ids(
             has_access = False
             if is_admin and target_account_data.get("allow_admin_access", True):
                 has_access = True
-            elif is_therapist and target_account_data.get("therapist_email") == user_email:
-                has_access = True
+            elif is_therapist:
+                # Therapists can access their own account or client accounts where they're listed as therapist_email
+                if x_admin_target_account == account_id or target_account_data.get("therapist_email") == user_email:
+                    has_access = True
             
             if not has_access:
                 logging.warning(f"Access denied to account {x_admin_target_account} for user {user_email}")
@@ -614,8 +628,11 @@ async def get_target_account_id(
             # Check access permissions
             if is_admin and target_account_data.get("allow_admin_access", True):
                 pass  # Admin access allowed
-            elif is_therapist and target_account_data.get("therapist_email") == user_email:
-                pass  # Therapist access to their assigned account
+            elif is_therapist:
+                # Therapists can access their own account or client accounts where they're listed as therapist_email
+                if not (x_admin_target_account == account_id or target_account_data.get("therapist_email") == user_email):
+                    logging.warning(f"Access denied to account {x_admin_target_account} for user {user_email}")
+                    raise HTTPException(status_code=403, detail="Access denied to target account")
             else:
                 logging.warning(f"Access denied to account {x_admin_target_account} for user {user_email}")
                 raise HTTPException(status_code=403, detail="Access denied to target account")
@@ -980,6 +997,7 @@ class UserCurrentState(BaseModel):
     focusChapters: Optional[str] = ""
     focusPlotPoints: Optional[str] = ""
     topicSummary: Optional[str] = ""
+    locationLanguageOverride: Optional[str] = None
     mood: Optional[str] = None  # Current mood - saved to info/user_narrative
     loaded_at: Optional[str] = None  # NEW: ISO timestamp when favorite was loaded
     favorite_name: Optional[str] = None  # NEW: Name of the favorite that was loaded
@@ -1000,6 +1018,7 @@ class UserCurrentFavorite(BaseModel):
     focusChapters: Optional[str] = ""
     focusPlotPoints: Optional[str] = ""
     topicSummary: Optional[str] = ""
+    locationLanguageOverride: Optional[str] = None
     loaded_at: Optional[str] = None  # NEW: ISO timestamp when favorite was loaded
     schedule: Optional[FavoriteSchedule] = None # NEW: Schedule for this favorite
 
@@ -1015,6 +1034,7 @@ class FavoriteRequest(BaseModel):
     focusChapters: Optional[str] = ""
     focusPlotPoints: Optional[str] = ""
     topicSummary: Optional[str] = ""
+    locationLanguageOverride: Optional[str] = None
     schedule: Optional[FavoriteSchedule] = None # NEW: Schedule for this favorite
 
 class ManageFavoriteRequest(BaseModel):
@@ -1045,6 +1065,8 @@ async def get_user_current_endpoint(current_ids: Annotated[Dict[str, str], Depen
         )
         current_mood = user_info.get("currentMood")
         
+        normalized_location_override = _normalize_locale_tag(user_current_content_dict.get("locationLanguageOverride"))
+
         # Return the full state including favorite tracking fields and mood
         return JSONResponse(content={
             "location": user_current_content_dict.get("location", ""),
@@ -1054,6 +1076,7 @@ async def get_user_current_endpoint(current_ids: Annotated[Dict[str, str], Depen
             "focusChapters": user_current_content_dict.get("focusChapters", ""),
             "focusPlotPoints": user_current_content_dict.get("focusPlotPoints", ""),
             "topicSummary": user_current_content_dict.get("topicSummary", ""),
+            "locationLanguageOverride": normalized_location_override,
             "mood": current_mood,  # Include mood from user_narrative
             "loaded_at": user_current_content_dict.get("loaded_at"),
             "favorite_name": user_current_content_dict.get("favorite_name"),
@@ -1074,6 +1097,7 @@ async def update_user_current_endpoint(payload: UserCurrentState, current_ids: A
     focus_chapters = payload.focusChapters or ""
     focus_plot_points = payload.focusPlotPoints or ""
     topic_summary = payload.topicSummary or ""
+    location_language_override = _normalize_locale_tag(payload.locationLanguageOverride)
     discussion_narrative = (topic_summary or focus_plot_points or "").strip()
     mood = payload.mood  # Current mood
     loaded_at = payload.loaded_at  # Timestamp when favorite was loaded
@@ -1112,6 +1136,7 @@ async def update_user_current_endpoint(payload: UserCurrentState, current_ids: A
         "focusChapters": focus_chapters,
         "focusPlotPoints": focus_plot_points,
         "topicSummary": discussion_narrative,
+        "locationLanguageOverride": location_language_override,
         "saved_at": saved_at  # Always update saved_at when manually saving
     }
     
@@ -1187,7 +1212,19 @@ async def get_user_current_favorites(current_ids: Annotated[Dict[str, str], Depe
             doc_subpath="info/current_favorites",
             default_data={"favorites": []}
         )
-        return UserCurrentFavoritesData(**favorites_data)
+
+        raw_favorites = favorites_data.get("favorites", []) if isinstance(favorites_data, dict) else []
+        normalized_favorites = []
+        for favorite in raw_favorites:
+            if not isinstance(favorite, dict):
+                continue
+            normalized_favorite = favorite.copy()
+            normalized_favorite["locationLanguageOverride"] = _normalize_locale_tag(
+                normalized_favorite.get("locationLanguageOverride")
+            )
+            normalized_favorites.append(normalized_favorite)
+
+        return UserCurrentFavoritesData(favorites=normalized_favorites)
     except Exception as e:
         logging.error(f"Error loading user current favorites: {e}")
         return UserCurrentFavoritesData(favorites=[])
@@ -1223,6 +1260,7 @@ async def save_user_current_favorite(payload: FavoriteRequest, current_ids: Anno
             "focusChapters": payload.focusChapters or "",
             "focusPlotPoints": payload.focusPlotPoints or "",
             "topicSummary": payload.topicSummary or "",
+            "locationLanguageOverride": _normalize_locale_tag(payload.locationLanguageOverride),
             "schedule": payload.schedule.model_dump() if payload.schedule else None
         }
         favorites_list.append(new_favorite)
@@ -1279,6 +1317,7 @@ async def manage_user_current_favorite(payload: ManageFavoriteRequest, current_i
                         "focusChapters": payload.favorite.focusChapters or "",
                         "focusPlotPoints": payload.favorite.focusPlotPoints or "",
                         "topicSummary": payload.favorite.topicSummary or "",
+                        "locationLanguageOverride": _normalize_locale_tag(payload.favorite.locationLanguageOverride),
                         "schedule": payload.favorite.schedule.model_dump() if payload.favorite.schedule else None
                     }
                     break
@@ -1319,6 +1358,7 @@ class FreestyleWordOptionsRequest(BaseModel):
     originating_button_text: Optional[str] = Field(None, description="Text of the button that originated the freestyle navigation")
     current_mood: Optional[str] = Field(None, description="Current user mood to influence word generation")
     max_options: Optional[int] = Field(None, description="Override the user's FreestyleOptions setting for this request", ge=1, le=50)
+    target_locale: Optional[str] = Field(None, description="Optional locale override for generated words (e.g., es-US)")
 
 @app.post("/api/generate-llm-prompt")
 async def generate_llm_prompt(payload: GeneratePromptRequest, current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]):
@@ -1559,8 +1599,17 @@ SENTENCE_TRANSFORMER_MODEL = "all-MiniLM-L6-v2" # Model for generating embedding
 
 # LLM Model Configuration - Environment Variables
 # Gemini Models
-GEMINI_PRIMARY_MODEL = os.environ.get("GEMINI_PRIMARY_MODEL", "gemini-1.5-flash-latest")
-GEMINI_FALLBACK_MODEL = os.environ.get("GEMINI_FALLBACK_MODEL", "gemini-1.5-flash-latest")
+GEMINI_PRIMARY_MODEL = (os.environ.get("GEMINI_PRIMARY_MODEL") or "").strip()
+if not GEMINI_PRIMARY_MODEL:
+    raise RuntimeError("Missing required environment variable: GEMINI_PRIMARY_MODEL")
+
+GEMINI_FALLBACK_MODEL = (os.environ.get("GEMINI_FALLBACK_MODEL") or "").strip()
+if not GEMINI_FALLBACK_MODEL:
+    raise RuntimeError("Missing required environment variable: GEMINI_FALLBACK_MODEL")
+
+# Fast lightweight model for low-latency word list generation (category-words endpoint).
+# Defaults to the configured primary model if not explicitly provided.
+GEMINI_FAST_WORDS_MODEL = (os.environ.get("GEMINI_FAST_WORDS_MODEL") or GEMINI_PRIMARY_MODEL).strip()
 
 # ChatGPT Models - GPT-5 requires: max_completion_tokens, temperature=1.0 (default only)
 # GPT-4o/4o-mini use: max_tokens, adjustable temperature
@@ -1643,6 +1692,7 @@ DEFAULT_USER_CURRENT = {
     "focusChapters": "",
     "focusPlotPoints": "",
     "topicSummary": "",
+    "locationLanguageOverride": None,
     "loaded_at": None,
     "favorite_name": None,
     "saved_at": None
@@ -1650,6 +1700,8 @@ DEFAULT_USER_CURRENT = {
 DEFAULT_COLUMNS = 10 # Default number of columns in the grid
 DEFAULT_LIGHT_COLOR = 4294659860 # Default light color
 DEFAULT_DARK_COLOR = 4278198852 # Default dark color
+DEFAULT_USER_LANGUAGE = "en-US"
+DEFAULT_PARTNER_LANGUAGE = "en-US"
 
 # --- Updated Defaults to include wake word parts ---
 DEFAULT_SETTINGS = {
@@ -1664,8 +1716,14 @@ DEFAULT_SETTINGS = {
     "ScanningOff": False, # Default scanning off
     "scanMode": "auto", # Scanning mode: "auto" timer scanning or "step" switch-driven scanning
     "waitForSwitchToScan": False, # Default wait for switch to start scanning
+    "playWaitForSwitchChime": False, # Default page-ready chime off while waiting for switch
     "SummaryOff": False, # Default summary off
     "selected_tts_voice_name": DEFAULT_TTS_VOICE, # Default TTS voice
+    "userLanguage": DEFAULT_USER_LANGUAGE,
+    "defaultPartnerLanguage": DEFAULT_PARTNER_LANGUAGE,
+    "defaultPartnerVoice": DEFAULT_TTS_VOICE,
+    "locationOverrideLanguages": [],
+    "locationOverrideVoices": {},
     "gridColumns": DEFAULT_COLUMNS, # Default grid columns
     "lightColorValue": DEFAULT_LIGHT_COLOR, # Default light color
     "darkColorValue": DEFAULT_DARK_COLOR, # Default dark color
@@ -1682,8 +1740,118 @@ DEFAULT_SETTINGS = {
     "useTapInterface": False,  # Default to gridpage interface
     "applicationVolume": 8,  # Default application volume (80%)
     "spellLetterOrder": "alphabetical",  # Default spell page letter order
-    "vocabularyLevel": "functional"  # Default vocabulary level: emergent|functional|developing|proficient
+    "vocabularyLevel": "functional",  # Default vocabulary level: emergent|functional|developing|proficient
+    "specialPageTranslations": {}
 }
+
+
+def _normalize_locale_tag(value: Optional[str]) -> Optional[str]:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip().replace("_", "-")
+    if not cleaned:
+        return None
+
+    label_to_locale = {
+        "english (us)": "en-US",
+        "spanish (us)": "es-US",
+        "french (france)": "fr-FR",
+        "german (germany)": "de-DE",
+        "italian (italy)": "it-IT",
+        "portuguese (brazil)": "pt-BR",
+        "arabic": "ar-XA",
+    }
+
+    mapped = label_to_locale.get(cleaned.lower())
+    if mapped:
+        return mapped
+
+    parts = cleaned.split("-")
+    if len(parts) == 1:
+        lang = parts[0].lower()
+        if len(lang) != 2:
+            return None
+        return lang
+    lang = parts[0].lower()
+    region = parts[1].upper()
+    if len(lang) != 2 or len(region) < 2:
+        return None
+    return f"{lang}-{region}"
+
+def _sanitize_translated_text(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r'^[\s"“”‘’`]+', '', text)
+    text = re.sub(r'[\s"“”‘’`]+$', '', text)
+    text = text.rstrip(",")
+    return text.strip()
+
+def _normalize_language_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
+    merged = DEFAULT_SETTINGS.copy()
+    if isinstance(settings, dict):
+        merged.update(settings)
+
+    user_language = _normalize_locale_tag(merged.get("userLanguage")) or DEFAULT_USER_LANGUAGE
+    partner_language = _normalize_locale_tag(merged.get("defaultPartnerLanguage")) or DEFAULT_PARTNER_LANGUAGE
+
+    partner_voice = (merged.get("defaultPartnerVoice") or "").strip()
+    if not partner_voice:
+        partner_voice = (merged.get("selected_tts_voice_name") or "").strip() or DEFAULT_TTS_VOICE
+
+    location_override_languages_raw = merged.get("locationOverrideLanguages")
+    normalized_override_languages: List[str] = []
+    if isinstance(location_override_languages_raw, list):
+        for item in location_override_languages_raw:
+            normalized = _normalize_locale_tag(item)
+            if normalized and normalized not in normalized_override_languages:
+                normalized_override_languages.append(normalized)
+
+    location_override_voices_raw = merged.get("locationOverrideVoices")
+    normalized_override_voices: Dict[str, str] = {}
+    if isinstance(location_override_voices_raw, dict):
+        for locale_key, voice_name in location_override_voices_raw.items():
+            normalized_locale = _normalize_locale_tag(locale_key)
+            normalized_voice = str(voice_name or "").strip()
+            if normalized_locale and normalized_voice:
+                normalized_override_voices[normalized_locale] = normalized_voice
+
+    merged["userLanguage"] = user_language
+    merged["defaultPartnerLanguage"] = partner_language
+    merged["defaultPartnerVoice"] = partner_voice
+    merged["selected_tts_voice_name"] = partner_voice
+    merged["locationOverrideLanguages"] = normalized_override_languages
+    merged["locationOverrideVoices"] = normalized_override_voices
+
+    special_page_translations_raw = merged.get("specialPageTranslations")
+    normalized_special_page_translations: Dict[str, Dict[str, Dict[str, str]]] = {}
+    if isinstance(special_page_translations_raw, dict):
+        for page_key, locale_map in special_page_translations_raw.items():
+            page_name = str(page_key or "").strip().lower()
+            if not page_name or not isinstance(locale_map, dict):
+                continue
+
+            normalized_locale_map: Dict[str, Dict[str, str]] = {}
+            for locale_key, field_map in locale_map.items():
+                normalized_locale = _normalize_locale_tag(locale_key)
+                if not normalized_locale or not isinstance(field_map, dict):
+                    continue
+
+                normalized_field_map: Dict[str, str] = {}
+                for field_key, field_value in field_map.items():
+                    key_name = str(field_key or "").strip()
+                    value_text = _sanitize_translated_text(field_value)
+                    if key_name and value_text:
+                        normalized_field_map[key_name] = value_text
+
+                if normalized_field_map:
+                    normalized_locale_map[normalized_locale] = normalized_field_map
+
+            if normalized_locale_map:
+                normalized_special_page_translations[page_name] = normalized_locale_map
+
+    merged["specialPageTranslations"] = normalized_special_page_translations
+    return merged
 
 
 # --- Default Birthday Structure ---
@@ -2048,6 +2216,72 @@ def _build_option_search_text(item: Any) -> str:
         parts.extend([str(keyword) for keyword in keywords if isinstance(keyword, (str, int, float))])
 
     return " ".join(parts)
+
+
+def _derive_llm_option_summary(option_text: str, summary: Optional[str] = None) -> str:
+    summary_text = re.sub(r"\s+", " ", str(summary or "").strip())
+    if not summary_text:
+        summary_text = re.sub(r"[.!?]+$", "", option_text.strip())
+
+    words = [word for word in summary_text.split() if word]
+    if len(words) <= 5:
+        return " ".join(words)
+    return " ".join(words[:5])
+
+
+def _derive_llm_option_keywords(
+    option_text: str,
+    summary_text: str,
+    existing_keywords: Optional[Any] = None,
+) -> List[str]:
+    if isinstance(existing_keywords, list):
+        normalized_keywords: List[str] = []
+        seen_keywords: set[str] = set()
+        for keyword in existing_keywords:
+            keyword_text = re.sub(r"\s+", " ", str(keyword or "").strip().lower())
+            if not keyword_text or keyword_text in seen_keywords:
+                continue
+            seen_keywords.add(keyword_text)
+            normalized_keywords.append(keyword_text)
+            if len(normalized_keywords) >= 5:
+                return normalized_keywords
+
+    token_source = f"{summary_text} {option_text}".lower()
+    candidate_tokens = re.findall(r"[a-z0-9']+", token_source)
+    stop_words = {
+        "a", "an", "and", "are", "as", "at", "be", "but", "by", "for", "from", "i", "if",
+        "in", "is", "it", "me", "my", "of", "on", "or", "so", "that", "the", "this", "to",
+        "up", "we", "with", "you", "your"
+    }
+
+    derived_keywords: List[str] = []
+    seen_tokens: set[str] = set()
+    for token in candidate_tokens:
+        if len(token) < 3 or token in stop_words or token in seen_tokens:
+            continue
+        seen_tokens.add(token)
+        derived_keywords.append(token)
+        if len(derived_keywords) >= 5:
+            break
+
+    return derived_keywords
+
+
+def _normalize_llm_option_item(item: Any) -> Optional[Dict[str, Any]]:
+    option_text = re.sub(r"\s+", " ", _extract_option_text(item).strip())
+    if not option_text:
+        return None
+
+    provided_summary = item.get("summary") if isinstance(item, dict) else None
+    provided_keywords = item.get("keywords") if isinstance(item, dict) else None
+    summary_text = _derive_llm_option_summary(option_text, provided_summary)
+    keyword_list = _derive_llm_option_keywords(option_text, summary_text, provided_keywords)
+
+    return {
+        "option": option_text,
+        "summary": summary_text or option_text,
+        "keywords": keyword_list,
+    }
 
 
 def _contains_any_pattern(text: str, patterns: List[str]) -> bool:
@@ -2523,12 +2757,15 @@ class GeminiCacheManager:
         self.db = firestore.Client()
         
         self.ttl_seconds = ttl_hours * 3600
+        self.local_validation_ttl_seconds = 60
+        self._validated_cache_refs: Dict[str, Dict[str, Any]] = {}
         logging.info(f"✅ Cache Manager initialized with Firestore persistence and {ttl_hours}-hour TTL.")
 
     def _get_user_key(self, account_id: str, aac_user_id: str) -> str:
         """Generates a unique key for a user to manage their cache."""
         # Versioned to invalidate stale cached base context after diary context moved to DELTA.
-        return f"v2_{account_id}_{aac_user_id}"
+        # v3: model upgraded from gemini-1.5-flash-latest to gemini-2.0-flash (caches are model-specific)
+        return f"v3_{account_id}_{aac_user_id}"
     
     async def _load_cache_from_firestore(self, user_key: str) -> Optional[Dict]:
         """Load cache info from Firestore."""
@@ -2543,8 +2780,15 @@ class GeminiCacheManager:
             logging.error(f"Error loading cache from Firestore for {user_key}: {e}")
             return None
     
-    async def _save_cache_to_firestore(self, user_key: str, cache_name: str, created_at: float, message_count: int = 0):
-        """Save cache info to Firestore with message count for drift tracking."""
+    async def _save_cache_to_firestore(
+        self,
+        user_key: str,
+        cache_name: str,
+        created_at: float,
+        message_count: int = 0,
+        chat_history_cached: bool = True,
+    ):
+        """Save cache info to Firestore with enough metadata to decide if drift checks apply."""
         try:
             expires_at = created_at + self.ttl_seconds
             doc_ref = self.db.collection(self.CACHE_COLLECTION).document(user_key)
@@ -2557,10 +2801,19 @@ class GeminiCacheManager:
                     "created_at": created_at,
                     "expires_at": expires_at,
                     "ttl_seconds": self.ttl_seconds,
-                    "message_count": message_count  # Track messages in cache for drift detection
+                    "message_count": message_count,
+                    "chat_history_cached": bool(chat_history_cached),
                 }
             )
-            logging.info(f"💾 Saved cache reference to Firestore: {user_key} -> {cache_name} ({message_count} messages)")
+            logging.info(
+                f"💾 Saved cache reference to Firestore: {user_key} -> {cache_name} "
+                f"({message_count} messages, chat_history_cached={bool(chat_history_cached)})"
+            )
+            self._validated_cache_refs[user_key] = {
+                "cache_name": cache_name,
+                "expires_at": expires_at,
+                "validated_at": dt.now().timestamp(),
+            }
         except Exception as e:
             logging.error(f"Error saving cache to Firestore for {user_key}: {e}")
     
@@ -2569,12 +2822,25 @@ class GeminiCacheManager:
         try:
             doc_ref = self.db.collection(self.CACHE_COLLECTION).document(user_key)
             await asyncio.to_thread(doc_ref.delete)
+            self._validated_cache_refs.pop(user_key, None)
             logging.info(f"Deleted cache reference from Firestore: {user_key}")
         except Exception as e:
             logging.error(f"Error deleting cache from Firestore for {user_key}: {e}")
 
     async def _is_cache_valid(self, user_key: str) -> bool:
         """Checks if a user's cache exists in Firestore and is within its TTL."""
+        now_ts = dt.now().timestamp()
+        local_cache_ref = self._validated_cache_refs.get(user_key)
+        if local_cache_ref:
+            if (
+                local_cache_ref.get('cache_name')
+                and local_cache_ref.get('expires_at', 0) > now_ts
+                and (now_ts - local_cache_ref.get('validated_at', 0)) <= self.local_validation_ttl_seconds
+            ):
+                return True
+            if local_cache_ref.get('expires_at', 0) <= now_ts:
+                self._validated_cache_refs.pop(user_key, None)
+
         print(f"DEBUG: _is_cache_valid called for {user_key}", flush=True)
         cache_data = await self._load_cache_from_firestore(user_key)
         print(f"DEBUG: cache_data from Firestore: {cache_data}", flush=True)
@@ -2598,6 +2864,11 @@ class GeminiCacheManager:
             try:
                 # Verify the cache still exists in Gemini API
                 await asyncio.to_thread(caching.CachedContent.get, cache_name)
+                self._validated_cache_refs[user_key] = {
+                    "cache_name": cache_name,
+                    "expires_at": cache_data.get('expires_at', now_ts + self.ttl_seconds),
+                    "validated_at": now_ts,
+                }
                 logging.info(f"Cache for '{user_key}' is valid: {cache_name}")
                 return True
             except Exception as e:
@@ -2752,7 +3023,17 @@ Analyze the provided context to create helpful, personalized suggestions."""
         logging.info(f"✅ BASE context for {account_id}/{aac_user_id} is {len(base_string)} chars (~{len(base_string)//4} tokens) - ready for caching")
         return base_string
     
-    async def _build_delta_context(self, account_id: str, aac_user_id: str, query_hint: str = "", compose_mode: bool = False, compose_body: str = "") -> str:
+    async def _build_delta_context(
+        self,
+        account_id: str,
+        aac_user_id: str,
+        query_hint: str = "",
+        compose_mode: bool = False,
+        compose_body: str = "",
+        prefetched_user_info: Optional[Dict[str, Any]] = None,
+        prefetched_settings: Optional[Dict[str, Any]] = None,
+        include_rich_context: bool = True,
+    ) -> str:
         """
         Builds the DELTA context - dynamic data that changes frequently.
         This is passed as standard input text with each request (NOT cached).
@@ -2766,20 +3047,26 @@ Analyze the provided context to create helpful, personalized suggestions."""
         """
         logging.info(f"⚡ Building DELTA context (dynamic data) for {account_id}/{aac_user_id}...")
         
+        query_hint_lower = str(query_hint or "").lower()
+
         # Fetch dynamic data
         # NOTE: chat_history uses recent messages (CHAT_HISTORY_ACTIVE_DAYS) to match BASE context
         # NOTE: pages moved to BASE cache (they rarely change, but are huge)
         tasks = {
-            "user_info": load_firestore_document(account_id, aac_user_id, "info/user_narrative", DEFAULT_USER_INFO),
             "user_current": load_firestore_document(account_id, aac_user_id, "info/current_state", DEFAULT_USER_CURRENT),
-            "settings": load_settings_from_file(account_id, aac_user_id),
-            "birthdays": load_birthdays_from_file(account_id, aac_user_id),
-            "friends_family": load_friends_family_from_file(account_id, aac_user_id),
-            "diary": load_diary_entries(account_id, aac_user_id),
             "chat_history": load_recent_chat_history(account_id, aac_user_id, days=CHAT_HISTORY_ACTIVE_DAYS),
         }
+        if include_rich_context:
+            tasks["birthdays"] = load_birthdays_from_file(account_id, aac_user_id)
+            tasks["friends_family"] = load_friends_family_from_file(account_id, aac_user_id)
+            tasks["diary"] = load_diary_entries(account_id, aac_user_id)
         results = await asyncio.gather(*tasks.values())
         context_data = dict(zip(tasks.keys(), results))
+        context_data["user_info"] = prefetched_user_info if isinstance(prefetched_user_info, dict) else DEFAULT_USER_INFO
+        context_data["settings"] = prefetched_settings if isinstance(prefetched_settings, dict) else {}
+        context_data.setdefault("birthdays", {})
+        context_data.setdefault("friends_family", {})
+        context_data.setdefault("diary", [])
         
         delta_parts = ["=== DYNAMIC CONTEXT (Current Session Data) ==="]
         
@@ -2853,12 +3140,14 @@ Analyze the provided context to create helpful, personalized suggestions."""
 
                 if topic_title or focus_chapters or discussion_narrative:
                     discussion_lines = [
-                        "📚 BOOK/DISCUSSION CONTEXT (HIGH PRIORITY FOR TOPIC OPTIONS)",
+                        "📚 BOOK/DISCUSSION CONTEXT (SUPPLEMENTAL)",
                         f"Topic Title: {topic_title or 'Not provided'}",
                         f"Focus Chapters: {focus_chapters or 'Not provided'}",
                         f"Discussion Narrative: {discussion_narrative or 'Not provided'}",
-                        "⚠️ Use the discussion narrative as authoritative context for discussion options.",
-                        "⚠️ If chapter range is provided, avoid introducing events beyond that range."
+                        "Use this context at the SAME PRIORITY as Location, People Present, and Activity.",
+                        "Only apply this context when the request is clearly about the current topic/book/discussion.",
+                        "If the request is general, do not force topic-specific options.",
+                        "If chapter range is provided and topic context is used, avoid introducing events beyond that range."
                     ]
                     delta_parts.append("\n" + "\n".join(discussion_lines) + "\n")
             else:
@@ -2889,14 +3178,12 @@ Analyze the provided context to create helpful, personalized suggestions."""
             max_items=20,
         )
 
-        query_hint_lower = str(query_hint or "").lower()
-
         delta_parts.append(
             f"\n--- TODAY'S DATE (CRITICAL FOR DIARY CONTEXT) ---\n{current_date_str}\n"
             "⚠️ IMPORTANT: Use this date to determine if diary entries are recent (past), current (today), or future events.\n"
         )
 
-        if context_data["diary"]:
+        if include_rich_context and context_data["diary"]:
             def parse_diary_date(entry: Dict) -> Optional[date]:
                 if not isinstance(entry, dict):
                     return None
@@ -3023,7 +3310,7 @@ Undated Diary Entries (use cautiously, max 5):
             "greeting", "hello", "hi", "good morning", "good afternoon", "good evening",
             "plan", "plans", "upcoming", "going on", "birthday", "holiday", "celebrate", "celebration"
         ]
-        if any(keyword in query_hint_lower for keyword in celebration_keywords):
+        if include_rich_context and any(keyword in query_hint_lower for keyword in celebration_keywords):
             celebrations_context += (
                 "\n⚠️ HIGH PRIORITY FOR THIS REQUEST: The prompt indicates greetings/plans/celebrations. "
                 "Prefer options that reference relevant upcoming birthdays/holidays naturally and in first person."
@@ -3035,10 +3322,32 @@ Undated Diary Entries (use cautiously, max 5):
 
         delta_parts.append("\n🎉 " + celebrations_context + "\n")
         
-        # CHAT HISTORY: Now ALL recent messages go in DELTA (not cached)
+        # CHAT HISTORY: rich mode keeps full recent history, fast mode keeps a compact tail.
         # This significantly reduces cache size/cost since messages change frequently
         if context_data["chat_history"]:
             recent_messages = context_data["chat_history"]
+
+            if not include_rich_context:
+                compact_messages: List[Dict[str, Any]] = []
+                for msg in recent_messages[-8:]:
+                    if not isinstance(msg, dict):
+                        continue
+                    compact_messages.append({
+                        "question": str(msg.get("question", ""))[:120],
+                        "response": str(msg.get("response", ""))[:180],
+                        "timestamp": msg.get("timestamp"),
+                    })
+                delta_parts.append(
+                    f"\n💬 RECENT CHAT SNAPSHOT (FAST MODE, last {len(compact_messages)} messages):\n"
+                    f"{json.dumps(compact_messages, indent=2)}\n"
+                )
+                delta_string = "\n".join(delta_parts)
+                logging.warning(
+                    f"✅ DELTA context (FAST) for {account_id}/{aac_user_id} is {len(delta_string)} chars "
+                    f"(~{len(delta_string)//4} tokens)"
+                )
+                logging.warning(f"📋 DELTA PREVIEW (first 500 chars): {delta_string[:500]}")
+                return delta_string
             
             # Extract jokes from recent messages for explicit repetition avoidance
             recent_jokes = []
@@ -3117,7 +3426,13 @@ Undated Diary Entries (use cautiously, max 5):
             )
 
             # Save to Firestore (no message count since we don't cache chat anymore)
-            await self._save_cache_to_firestore(user_key, cached_content.name, created_at, message_count=0)
+            await self._save_cache_to_firestore(
+                user_key,
+                cached_content.name,
+                created_at,
+                message_count=0,
+                chat_history_cached=False,
+            )
             logging.warning(f"✅ Successfully warmed up cache for user '{user_key}'. Cache: {cached_content.name} (chat history NOT cached - in DELTA)")
 
         except Exception as e:
@@ -3222,6 +3537,19 @@ Undated Diary Entries (use cautiously, max 5):
             return {"should_rebuild": True, "reason": "no_cache", "drift": 0}
         
         messages_in_cache = cache_data.get('message_count', 0)
+        chat_history_cached = cache_data.get('chat_history_cached')
+
+        # Chat history is no longer part of the cached BASE context. For those caches,
+        # rebuilding on chat drift only destroys the cache benefit without improving relevance.
+        if chat_history_cached is False or messages_in_cache == 0:
+            return {
+                "should_rebuild": False,
+                "reason": "chat_history_not_cached",
+                "drift": 0,
+                "max_drift": max_drift,
+                "messages_in_cache": messages_in_cache,
+                "current_message_count": None,
+            }
         
         # Get current message count
         chat_history = await load_chat_history(account_id, aac_user_id)
@@ -3326,6 +3654,7 @@ chroma_client_global = None # NEW: Keep a global chroma client for static db if 
 sentence_transformer_model = None # DISABLED - not currently used
 primary_llm_model_instance: Optional[genai.GenerativeModel] = None # Global instance
 fallback_llm_model_instance: Optional[genai.GenerativeModel] = None # Global instance
+fast_words_llm_model_instance: Optional[genai.GenerativeModel] = None # Lightweight fast model for category word lists
 openai_client: Optional[openai.OpenAI] = None # OpenAI client instance
 tts_client: Optional[google_tts.TextToSpeechClient] = None # Global instance
 firestore_db: Optional[FirestoreClient] = None
@@ -3376,11 +3705,26 @@ else:
         except Exception as e_fallback:
             logging.error(f"Error initializing fallback Gemini model '{DEFAULT_FALLBACK_LLM_MODEL_NAME}': {e_fallback}", exc_info=True)
             fallback_llm_model_instance = None
+
+        try:
+            fast_words_model_name = GEMINI_FAST_WORDS_MODEL
+            if "2.0-flash-lite" in fast_words_model_name:
+                logging.warning(
+                    f"Configured fast words model '{fast_words_model_name}' is deprecated for many accounts; "
+                    f"using primary model '{GEMINI_PRIMARY_MODEL}' instead."
+                )
+                fast_words_model_name = GEMINI_PRIMARY_MODEL
+            fast_words_llm_model_instance = genai.GenerativeModel(fast_words_model_name)
+            logging.info(f"Fast words Gemini model '{fast_words_llm_model_instance.model_name}' initialized.")
+        except Exception as e_fast:
+            logging.error(f"Error initializing fast words model '{GEMINI_FAST_WORDS_MODEL}': {e_fast}", exc_info=True)
+            fast_words_llm_model_instance = None
     except Exception as e_genai_config: # Catch any error from genai.configure itself
         logging.error(f"Fatal error during Gemini API configuration: {e_genai_config}", exc_info=True)
         # Ensure models are None if configuration fails
         primary_llm_model_instance = None
         fallback_llm_model_instance = None
+        fast_words_llm_model_instance = None
 
 # --- Initialize OpenAI Client ---
 logging.info("Initializing OpenAI client...")
@@ -4354,6 +4698,71 @@ async def _generate_gemini_content_with_fallback(prompt_text: str, generation_co
         raise HTTPException(status_code=500, detail=f"LLM generation failed: {e_other_primary}")
 
 
+async def _generate_fast_category_words_content(prompt_text: str, account_id: str = "unknown", aac_user_id: str = "unknown") -> str:
+    global fast_words_llm_model_instance, primary_llm_model_instance
+
+    if not prompt_text or not prompt_text.strip():
+        logging.error("Empty or whitespace-only prompt provided to fast category-words Gemini path")
+        raise HTTPException(status_code=400, detail="Empty prompt provided to LLM")
+
+    model_instance = fast_words_llm_model_instance or primary_llm_model_instance
+    if not model_instance:
+        logging.warning("Fast category-words model unavailable; falling back to standard Gemini path")
+        return await _generate_gemini_content_with_fallback(prompt_text, None, account_id, aac_user_id)
+
+    generation_config = {
+        "temperature": 0.2,
+        "top_p": 0.8,
+        "top_k": 20,
+        "max_output_tokens": 220,
+    }
+
+    start_time = time.perf_counter()
+    logging.info(
+        f"Attempting fast category-words generation with model: {model_instance.model_name} "
+        f"for {account_id}/{aac_user_id}"
+    )
+    logging.info(f"Fast category-words prompt length: {len(prompt_text)} characters")
+
+    try:
+        response = await _execute_gemini_call_with_retry(
+            lambda: model_instance.generate_content(prompt_text, generation_config=generation_config),
+            operation_label=f"gemini_fast_category_words:{model_instance.model_name}",
+            account_id=account_id,
+            aac_user_id=aac_user_id,
+            max_attempts=3,
+            base_delay_seconds=0.25,
+            max_delay_seconds=2.0,
+        )
+
+        response_text = ""
+        if hasattr(response, 'text') and response.text:
+            response_text = response.text.strip()
+        elif hasattr(response, 'parts') and isinstance(response.parts, list) and response.parts:
+            response_text = "".join(part.text for part in response.parts if hasattr(part, 'text')).strip()
+
+        elapsed_ms = round((time.perf_counter() - start_time) * 1000)
+        logging.info(
+            f"Fast category-words Gemini completed in {elapsed_ms}ms using {model_instance.model_name} "
+            f"for {account_id}/{aac_user_id}"
+        )
+
+        if hasattr(response, 'usage_metadata'):
+            log_token_usage(response, "FAST_CATEGORY_WORDS", account_id, aac_user_id)
+
+        if response_text:
+            return response_text
+
+        logging.warning("Fast category-words Gemini returned empty response; falling back to standard Gemini path")
+        return await _generate_gemini_content_with_fallback(prompt_text, generation_config, account_id, aac_user_id)
+    except Exception as fast_error:
+        logging.warning(
+            f"Fast category-words Gemini path failed for {account_id}/{aac_user_id}: {fast_error}. "
+            f"Falling back to standard Gemini path."
+        )
+        return await _generate_gemini_content_with_fallback(prompt_text, generation_config, account_id, aac_user_id)
+
+
 @app.options("/llm")
 async def options_llm(request: Request):
     print("OPTIONS /llm HEADERS:", dict(request.headers))
@@ -4390,7 +4799,16 @@ async def refresh_user_cache(current_ids: Annotated[Dict[str, str], Depends(get_
     return JSONResponse(content={"message": f"Cache invalidated for user {aac_user_id}."})
 
 
-async def build_full_prompt_for_non_cached_llm(account_id: str, aac_user_id: str, user_query: str, compose_mode: bool = False, compose_body: str = "") -> str:
+async def build_full_prompt_for_non_cached_llm(
+    account_id: str,
+    aac_user_id: str,
+    user_query: str,
+    compose_mode: bool = False,
+    compose_body: str = "",
+    prefetched_user_info: Optional[Dict[str, Any]] = None,
+    prefetched_settings: Optional[Dict[str, Any]] = None,
+    include_rich_delta_context: bool = True,
+) -> str:
     """
     Builds the complete LLM prompt from scratch by fetching all context data.
     This is used as a fallback when a cache is not available.
@@ -4404,7 +4822,16 @@ async def build_full_prompt_for_non_cached_llm(account_id: str, aac_user_id: str
         base_context = await cache_manager._build_base_context(account_id, aac_user_id)
         logging.info(f"✅ Base context built: {len(base_context)} chars")
         
-        delta_context = await cache_manager._build_delta_context(account_id, aac_user_id, user_query, compose_mode=compose_mode, compose_body=compose_body)
+        delta_context = await cache_manager._build_delta_context(
+            account_id,
+            aac_user_id,
+            user_query,
+            compose_mode=compose_mode,
+            compose_body=compose_body,
+            prefetched_user_info=prefetched_user_info,
+            prefetched_settings=prefetched_settings,
+            include_rich_context=include_rich_delta_context,
+        )
         logging.info(f"✅ Delta context built: {len(delta_context)} chars")
         
         # Combine base + delta (same as cached requests do)
@@ -4497,8 +4924,13 @@ def log_token_usage(response, request_type: str, account_id: str, aac_user_id: s
 
 class LLMRequest(BaseModel):
     prompt: str
+    count: Optional[int] = None          # Override max options returned (e.g., for bulk board builder)
     compose_mode: bool = False          # True when the user is in an active compose session
     compose_body: str = ""               # Current composition text (sent for context when compose_mode is True)
+    request_id: Optional[str] = None     # Client-provided request correlation id for log tracing
+    button_text: Optional[str] = None    # Source button label from UI when available
+    page_name: Optional[str] = None      # Source page name from UI when available
+    click_timestamp: Optional[str] = None  # UI click timestamp for correlation
 
 # --- Vocabulary Level Helper Function ---
 def get_vocabulary_level_instruction(level: str) -> str:
@@ -4558,9 +4990,35 @@ async def get_llm_response_endpoint(
     current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
 ):
     global cache_manager
+    global llm_quick_response_cache
+    global llm_inflight_requests
+    global llm_inflight_requests_lock
+    global fast_words_llm_model_instance
+    global primary_llm_model_instance
     account_id = current_ids["account_id"]
     aac_user_id = current_ids["aac_user_id"]
     user_prompt_content = request_data.prompt
+    request_start_time = time.perf_counter()
+
+    def _infer_button_label_from_prompt(prompt: str) -> Optional[str]:
+        prompt_lower = (prompt or "").lower()
+        explicit_prefixes = ["what", "who", "where", "when", "why", "how"]
+        for prefix in explicit_prefixes:
+            if f"begin with {prefix}" in prompt_lower:
+                return prefix.capitalize()
+        return None
+
+    request_correlation_id = (request_data.request_id or str(uuid.uuid4()))[:64]
+    button_label = (
+        (request_data.button_text or "").strip()
+        or _infer_button_label_from_prompt(user_prompt_content)
+        or "unknown"
+    )[:40]
+    page_label = ((request_data.page_name or "").strip() or "unknown")[:40]
+    log_context = (
+        f"request_id={request_correlation_id} button={button_label} "
+        f"page={page_label} account={account_id}/{aac_user_id}"
+    )
 
     # Get user's settings to determine LLM provider and options
     user_settings = await load_settings_from_file(account_id, aac_user_id)
@@ -4571,10 +5029,12 @@ async def get_llm_response_endpoint(
         default_data=DEFAULT_USER_INFO.copy()
     )
     ai_option_overrides = normalize_ai_option_overrides(user_info_doc.get("aiOptionOverrides", {}))
-    logging.info(f"Loaded AI option overrides for /llm {account_id}/{aac_user_id}: {ai_option_overrides}")
+    logging.info(f"Loaded AI option overrides for /llm [{log_context}]: {ai_option_overrides}")
     llm_provider = user_settings.get("llm_provider", "gemini").lower()
     llm_options_value = user_settings.get("LLMOptions", DEFAULT_LLM_OPTIONS)
     vocabulary_level = user_settings.get("vocabularyLevel", "functional")
+    prep_elapsed_ms = (time.perf_counter() - request_start_time) * 1000
+    logging.info(f"⏱️ /llm prep stage: {prep_elapsed_ms:.1f}ms [{log_context}]")
 
     # Check if mood was recently updated and add small delay to prevent race conditions
     global mood_update_timestamps
@@ -4626,17 +5086,48 @@ CREATIVITY BOOSTERS:
 """
         user_prompt_content = randomization_prompt + user_prompt_content
 
-    # Define generation config and add JSON formatting instructions  
-    generation_config = {
-        "response_mime_type": "application/json", 
-        "temperature": 0.9,  # Increased temperature for more creativity
-        "max_output_tokens": 4096  # Ensure enough space for complete JSON responses
-    }
-    
+    requested_options_count = request_data.count if request_data.count and request_data.count > 0 else int(llm_options_value)
+
     # Get vocabulary level instruction
     vocab_instruction = get_vocabulary_level_instruction(vocabulary_level)
-    
-    json_format_instructions = f"""
+
+    high_context_keywords = [
+        "diary", "journal", "memory", "remember", "yesterday", "tomorrow", "schedule",
+        "calendar", "birthday", "holiday", "celebrate", "celebration", "anniversary",
+        "what happened", "what did", "plan", "plans", "upcoming", "event",
+    ]
+    include_rich_delta_context = any(keyword in user_prompt_content.lower() for keyword in high_context_keywords)
+    if request_data.compose_mode:
+        include_rich_delta_context = False
+    use_fast_generation_profile = not include_rich_delta_context and not request_data.compose_mode
+    is_starter_question_prompt = (
+        "all options must begin with" in user_prompt_content.lower()
+        and "generic, basic questions" in user_prompt_content.lower()
+    )
+
+    if use_fast_generation_profile:
+        estimated_max_output_tokens = min(768, max(320, requested_options_count * 28 + 120))
+        temperature_value = 0.75
+
+        if is_starter_question_prompt:
+            # Starter question prompts (What/Who/Where/When/Why/How) should be short and stable.
+            # Lowering output budget and temperature reduces long-tail generation latency variance.
+            estimated_max_output_tokens = min(estimated_max_output_tokens, max(240, requested_options_count * 14 + 60))
+            temperature_value = 0.45
+
+        json_format_instructions = f"""
+{vocab_instruction}
+
+CRITICAL FORMAT: Return ONLY a valid JSON array of strings with exactly {requested_options_count} items. Nothing else.
+Each string element must be a complete, natural-sounding spoken option (e.g., "Hello, how are you?", "I'm having a great day!").
+For jokes, include the punchline in the same string (e.g., "Why did the chicken cross the road? To get to the other side!").
+Do NOT return objects, do NOT include keys like "option", "summary", or "keywords" - the server will handle those automatically.
+No markdown, no code blocks, no commentary. Return ONLY the JSON array.
+Example: ["hello everyone", "good to see you", "what's going on"]"""
+    else:
+        estimated_max_output_tokens = max(768, min(2048, int(llm_options_value) * 140))
+        temperature_value = 0.9
+        json_format_instructions = f"""
 {vocab_instruction}
 
 CRITICAL: Format your response as a JSON list where each item has "option", "summary", and "keywords" keys.
@@ -4654,19 +5145,174 @@ IMPORTANT FOR JOKES: If generating jokes, ALWAYS include both the question AND p
 - Do not forget commas between array elements
 
 Return ONLY valid JSON - no other text before or after the JSON array."""
+
+    generation_config = {
+        "response_mime_type": "application/json",
+        "temperature": temperature_value,
+        "max_output_tokens": estimated_max_output_tokens,
+    }
+
     ai_override_prompt_block = build_ai_option_overrides_prompt_block(ai_option_overrides)
-    final_user_query = f"{user_prompt_content}\n\n{ai_override_prompt_block}\n\n{json_format_instructions}"
+    llm_user_language = _normalize_locale_tag(str(user_settings.get("userLanguage", "en-US") or "en-US").strip()) or "en-US"
+    llm_language_suffix = (
+        f"\n\n⚠️ FINAL LANGUAGE OVERRIDE: Every string you generate MUST be in the language with locale tag '{llm_user_language}'. "
+        f"The English-language examples in the formatting instructions above are structural examples only — they do NOT determine the output language. "
+        f"Generate ALL output in '{llm_user_language}'. Do NOT use English."
+        if not llm_user_language.lower().startswith("en")
+        else ""
+    )
+    final_user_query = f"{user_prompt_content}\n\n{ai_override_prompt_block}\n\n{json_format_instructions}{llm_language_suffix}"
+
+    compose_body_hash = hashlib.sha1((request_data.compose_body or "").encode("utf-8")).hexdigest()[:10]
+    prompt_hash = hashlib.sha1(user_prompt_content.encode("utf-8")).hexdigest()[:16]
+    quick_cache_key = (
+        f"{account_id}|{aac_user_id}|{llm_provider}|{requested_options_count}|"
+        f"{int(include_rich_delta_context)}|{int(request_data.compose_mode)}|{prompt_hash}|{compose_body_hash}"
+    )
+
+    now_ts = time.time()
+    if len(llm_quick_response_cache) > 600:
+        llm_quick_response_cache = {
+            key: value
+            for key, value in llm_quick_response_cache.items()
+            if (now_ts - float(value.get("created_at", 0))) < LLM_QUICK_RESPONSE_CACHE_TTL_SECONDS
+        }
+
+    cached_response_entry = llm_quick_response_cache.get(quick_cache_key)
+    if cached_response_entry and (now_ts - float(cached_response_entry.get("created_at", 0))) < LLM_QUICK_RESPONSE_CACHE_TTL_SECONDS:
+        cached_options = copy.deepcopy(cached_response_entry.get("response", []))
+        total_elapsed_ms = (time.perf_counter() - request_start_time) * 1000
+        logging.info(
+            f"⚡ /llm quick-cache HIT [{log_context}] key={quick_cache_key[-24:]} "
+            f"in {total_elapsed_ms:.1f}ms"
+        )
+        return JSONResponse(
+            content=cached_options,
+            headers={
+                "X-LLM-Cache": "quick-hit",
+                "X-LLM-Timing": f"prep={prep_elapsed_ms:.1f};generate=0.0;total={total_elapsed_ms:.1f}",
+                "X-LLM-Profile": "FAST" if use_fast_generation_profile else "RICH",
+                "X-LLM-Request-Id": request_correlation_id,
+                "X-LLM-Button": button_label,
+            },
+        )
+
+    is_inflight_owner = False
+    inflight_future: Optional[asyncio.Future] = None
+
+    async with llm_inflight_requests_lock:
+        existing_future = llm_inflight_requests.get(quick_cache_key)
+        if existing_future and not existing_future.done():
+            inflight_future = existing_future
+        else:
+            inflight_future = asyncio.get_running_loop().create_future()
+            llm_inflight_requests[quick_cache_key] = inflight_future
+            is_inflight_owner = True
+
+    if not is_inflight_owner:
+        try:
+            coalesced_options = await inflight_future
+        except Exception as coalesced_error:
+            logging.error(
+                f"⚠️ /llm coalesced wait failed [{log_context}] key={quick_cache_key[-24:]}: {coalesced_error}",
+                exc_info=True,
+            )
+            raise HTTPException(status_code=500, detail="Coalesced /llm request failed")
+
+        total_elapsed_ms = (time.perf_counter() - request_start_time) * 1000
+        logging.info(
+            f"🤝 /llm in-flight coalesced HIT [{log_context}] key={quick_cache_key[-24:]} "
+            f"in {total_elapsed_ms:.1f}ms"
+        )
+        return JSONResponse(
+            content=copy.deepcopy(coalesced_options),
+            headers={
+                "X-LLM-Cache": "inflight-hit",
+                "X-LLM-Timing": f"prep={prep_elapsed_ms:.1f};generate=0.0;total={total_elapsed_ms:.1f}",
+                "X-LLM-Profile": "FAST" if use_fast_generation_profile else "RICH",
+                "X-LLM-Request-Id": request_correlation_id,
+                "X-LLM-Button": button_label,
+            },
+        )
+
+    logging.info(
+        f"🧠 DELTA CONTEXT PROFILE: {'RICH' if include_rich_delta_context else 'FAST'} "
+        f"[{log_context}]"
+    )
+    logging.info(
+        f"⚙️ GENERATION PROFILE: {'FAST' if use_fast_generation_profile else 'RICH'} "
+        f"(max_output_tokens={estimated_max_output_tokens}, temperature={temperature_value}, requested_options={requested_options_count}) [{log_context}]"
+    )
 
     llm_response_json_str = ""
+    llm_generate_start_time = time.perf_counter()
 
     # --- Route to appropriate LLM ---
-    if llm_provider == "chatgpt":
-        logging.info(f"Using OpenAI for {account_id}/{aac_user_id}. Building full prompt manually.")
-        full_prompt_for_openai = await build_full_prompt_for_non_cached_llm(account_id, aac_user_id, final_user_query, compose_mode=request_data.compose_mode, compose_body=request_data.compose_body)
+    if llm_provider != "chatgpt" and is_starter_question_prompt:
+        # Starter question prompts are dynamic and short-lived. Avoid cache warm-up/drift checks and
+        # generate directly to reduce latency variance caused by cache bookkeeping/fallback paths.
+        logging.info(f"⚡ Starter-question fast path (cache bypass) [{log_context}]")
+        fast_model = fast_words_llm_model_instance or primary_llm_model_instance
+
+        if not fast_model:
+            logging.warning(f"Starter-question fast model unavailable; using standard fallback path [{log_context}]")
+            llm_response_json_str = await _generate_gemini_content_with_fallback(
+                final_user_query,
+                generation_config,
+                account_id,
+                aac_user_id,
+            )
+        else:
+            try:
+                response = await _execute_gemini_call_with_retry(
+                    lambda: fast_model.generate_content(final_user_query, generation_config=generation_config),
+                    operation_label=f"gemini_starter_questions_fast:{fast_model.model_name}",
+                    account_id=account_id,
+                    aac_user_id=aac_user_id,
+                    max_attempts=3,
+                    base_delay_seconds=0.2,
+                    max_delay_seconds=1.5,
+                )
+
+                llm_response_json_str = (response.text or "").strip()
+                if not llm_response_json_str:
+                    logging.warning(f"Starter-question fast path returned empty response; using standard fallback [{log_context}]")
+                    llm_response_json_str = await _generate_gemini_content_with_fallback(
+                        final_user_query,
+                        generation_config,
+                        account_id,
+                        aac_user_id,
+                    )
+                else:
+                    log_token_usage(response, "STARTER_FAST", account_id, aac_user_id)
+            except Exception as starter_fast_error:
+                logging.warning(
+                    f"Starter-question fast path failed [{log_context}]: {starter_fast_error}. "
+                    f"Using standard fallback path."
+                )
+                llm_response_json_str = await _generate_gemini_content_with_fallback(
+                    final_user_query,
+                    generation_config,
+                    account_id,
+                    aac_user_id,
+                )
+
+    elif llm_provider == "chatgpt":
+        logging.info(f"Using OpenAI [{log_context}]. Building full prompt manually.")
+        full_prompt_for_openai = await build_full_prompt_for_non_cached_llm(
+            account_id,
+            aac_user_id,
+            final_user_query,
+            compose_mode=request_data.compose_mode,
+            compose_body=request_data.compose_body,
+            prefetched_user_info=user_info_doc,
+            prefetched_settings=user_settings,
+            include_rich_delta_context=include_rich_delta_context,
+        )
         llm_response_json_str = await _generate_openai_content_with_fallback(full_prompt_for_openai)
     else:
         # --- Gemini Cache-First Approach with Base + Delta Architecture + Lazy Invalidation ---
-        logging.info(f"🚀 Using Gemini with Base+Delta caching for {account_id}/{aac_user_id}.")
+        logging.info(f"🚀 Using Gemini with Base+Delta caching [{log_context}].")
         
         # SMART DRIFT DETECTION: Check if cache needs rebuilding
         drift_check = await cache_manager.check_cache_drift(account_id, aac_user_id, max_drift=20)
@@ -4693,13 +5339,22 @@ Return ONLY valid JSON - no other text before or after the JSON array."""
         if cached_content_ref:
             try:
                 # Build delta context (dynamic data not in cache)
-                delta_context = await cache_manager._build_delta_context(account_id, aac_user_id, user_prompt_content, compose_mode=request_data.compose_mode, compose_body=request_data.compose_body)
+                delta_context = await cache_manager._build_delta_context(
+                    account_id,
+                    aac_user_id,
+                    user_prompt_content,
+                    compose_mode=request_data.compose_mode,
+                    compose_body=request_data.compose_body,
+                    prefetched_user_info=user_info_doc,
+                    prefetched_settings=user_settings,
+                    include_rich_context=include_rich_delta_context,
+                )
                 
                 # Combine delta + user query
                 combined_prompt = f"{delta_context}\n\n=== USER QUERY ===\n{final_user_query}"
                 
                 logging.info(f"🔍 COMBINED PROMPT PREVIEW (first 800 chars):\n{combined_prompt[:800]}")
-                logging.info(f"📊 USER QUERY that triggered LLM: {user_prompt_content[:500]}")
+                logging.info(f"📊 USER QUERY that triggered LLM [{log_context}]: {user_prompt_content[:500]}")
                 logging.info(f"⚙️ Generation config: {generation_config}")
                 
                 # Use cached base context + pass delta as standard input
@@ -4731,13 +5386,22 @@ Return ONLY valid JSON - no other text before or after the JSON array."""
                 # Log detailed token usage for cached requests
                 log_token_usage(response, "CACHED+DELTA", account_id, aac_user_id)
                 
-                logging.info(f"✅ Successfully generated content using BASE cache + DELTA context for {account_id}/{aac_user_id}.")
+                logging.info(f"✅ Successfully generated content using BASE cache + DELTA context [{log_context}].")
             except Exception as e:
-                logging.error(f"Error using cached content for {account_id}/{aac_user_id}: {e}. Falling back.")
-                full_prompt = await build_full_prompt_for_non_cached_llm(account_id, aac_user_id, final_user_query, compose_mode=request_data.compose_mode, compose_body=request_data.compose_body)
+                logging.error(f"Error using cached content [{log_context}]: {e}. Falling back.")
+                full_prompt = await build_full_prompt_for_non_cached_llm(
+                    account_id,
+                    aac_user_id,
+                    final_user_query,
+                    compose_mode=request_data.compose_mode,
+                    compose_body=request_data.compose_body,
+                    prefetched_user_info=user_info_doc,
+                    prefetched_settings=user_settings,
+                    include_rich_delta_context=include_rich_delta_context,
+                )
                 llm_response_json_str = await _generate_gemini_content_with_fallback(full_prompt, generation_config, account_id, aac_user_id)
         else:
-            logging.warning(f"No valid cache found for {account_id}/{aac_user_id}. Attempting to warm up cache...")
+            logging.warning(f"No valid cache found [{log_context}]. Attempting to warm up cache...")
             
             # Try to warm up cache before falling back to full prompt
             try:
@@ -4748,11 +5412,20 @@ Return ONLY valid JSON - no other text before or after the JSON array."""
                 
                 if cached_content_ref:
                     # Cache was successfully created, use it with delta context
-                    delta_context = await cache_manager._build_delta_context(account_id, aac_user_id, user_prompt_content, compose_mode=request_data.compose_mode, compose_body=request_data.compose_body)
+                    delta_context = await cache_manager._build_delta_context(
+                        account_id,
+                        aac_user_id,
+                        user_prompt_content,
+                        compose_mode=request_data.compose_mode,
+                        compose_body=request_data.compose_body,
+                        prefetched_user_info=user_info_doc,
+                        prefetched_settings=user_settings,
+                        include_rich_context=include_rich_delta_context,
+                    )
                     combined_prompt = f"{delta_context}\n\n=== USER QUERY ===\n{final_user_query}"
                     
                     logging.info(f"🔍 NEW_CACHE COMBINED PROMPT PREVIEW (first 800 chars):\n{combined_prompt[:800]}")
-                    logging.info(f"📊 USER QUERY that triggered LLM (new cache path): {user_prompt_content[:500]}")
+                    logging.info(f"📊 USER QUERY that triggered LLM (new cache path) [{log_context}]: {user_prompt_content[:500]}")
                     logging.info(f"⚙️ Generation config: {generation_config}")
                     
                     model = genai.GenerativeModel.from_cached_content(cached_content_ref)
@@ -4783,19 +5456,40 @@ Return ONLY valid JSON - no other text before or after the JSON array."""
                     # Log detailed token usage for newly cached requests
                     log_token_usage(response, "NEW_CACHE+DELTA", account_id, aac_user_id)
                     
-                    logging.info(f"✅ Successfully generated content using newly created BASE cache + DELTA for {account_id}/{aac_user_id}.")
+                    logging.info(f"✅ Successfully generated content using newly created BASE cache + DELTA [{log_context}].")
                 else:
                     # Cache creation failed, use full prompt fallback
-                    logging.warning(f"Cache creation failed for {account_id}/{aac_user_id}. Using full prompt fallback.")
-                    full_prompt = await build_full_prompt_for_non_cached_llm(account_id, aac_user_id, final_user_query, compose_mode=request_data.compose_mode, compose_body=request_data.compose_body)
+                    logging.warning(f"Cache creation failed [{log_context}]. Using full prompt fallback.")
+                    full_prompt = await build_full_prompt_for_non_cached_llm(
+                        account_id,
+                        aac_user_id,
+                        final_user_query,
+                        compose_mode=request_data.compose_mode,
+                        compose_body=request_data.compose_body,
+                        prefetched_user_info=user_info_doc,
+                        prefetched_settings=user_settings,
+                        include_rich_delta_context=include_rich_delta_context,
+                    )
                     llm_response_json_str = await _generate_gemini_content_with_fallback(full_prompt, generation_config, account_id, aac_user_id)
                     
             except Exception as warmup_error:
-                logging.error(f"Cache warmup failed for {account_id}/{aac_user_id}: {warmup_error}. Using full prompt fallback.")
-                full_prompt = await build_full_prompt_for_non_cached_llm(account_id, aac_user_id, final_user_query, compose_mode=request_data.compose_mode, compose_body=request_data.compose_body)
+                logging.error(f"Cache warmup failed [{log_context}]: {warmup_error}. Using full prompt fallback.")
+                full_prompt = await build_full_prompt_for_non_cached_llm(
+                    account_id,
+                    aac_user_id,
+                    final_user_query,
+                    compose_mode=request_data.compose_mode,
+                    compose_body=request_data.compose_body,
+                    prefetched_user_info=user_info_doc,
+                    prefetched_settings=user_settings,
+                    include_rich_delta_context=include_rich_delta_context,
+                )
                 llm_response_json_str = await _generate_gemini_content_with_fallback(full_prompt, generation_config, account_id, aac_user_id)
+
+    llm_generate_elapsed_ms = (time.perf_counter() - llm_generate_start_time) * 1000
+    logging.info(f"⏱️ /llm generation stage: {llm_generate_elapsed_ms:.1f}ms [{log_context}]")
     
-    logging.info(f"--- LLM Final JSON Response Text for account {account_id} and user {aac_user_id} (Length: {len(llm_response_json_str)}) ---")
+    logging.info(f"--- LLM Final JSON Response Text [{log_context}] (Length: {len(llm_response_json_str)}) ---")
 
     def extract_json_from_response(response_text: str) -> str:
         """Extract JSON from LLM response, handling markdown code blocks and conversational text"""
@@ -4901,6 +5595,84 @@ Return ONLY valid JSON - no other text before or after the JSON array."""
         
         return json_str
 
+    def salvage_llm_output(*candidate_strings: str) -> Optional[Any]:
+        import ast
+        import re
+
+        for candidate in candidate_strings:
+            if not candidate or not str(candidate).strip():
+                continue
+
+            text = str(candidate).strip()
+            try:
+                parsed_literal = ast.literal_eval(text)
+                if isinstance(parsed_literal, (list, dict)):
+                    logging.warning("Recovered LLM response using ast.literal_eval fallback")
+                    return parsed_literal
+            except Exception:
+                pass
+
+            object_matches = re.finditer(r'\{[^{}]*\}', text, re.DOTALL)
+            recovered_objects: List[Dict[str, Any]] = []
+            for match in object_matches:
+                object_text = match.group(0)
+                option_match = re.search(r'("option"|\'option\')\s*:\s*("(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\')', object_text, re.DOTALL)
+                if not option_match:
+                    continue
+
+                try:
+                    option_text = ast.literal_eval(option_match.group(2))
+                except Exception:
+                    continue
+
+                summary_match = re.search(r'("summary"|\'summary\')\s*:\s*("(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\')', object_text, re.DOTALL)
+                keywords_match = re.search(r'("keywords"|\'keywords\')\s*:\s*(\[[^\]]*\])', object_text, re.DOTALL)
+                summary_text = None
+                keyword_values = None
+
+                if summary_match:
+                    try:
+                        summary_text = ast.literal_eval(summary_match.group(2))
+                    except Exception:
+                        summary_text = None
+
+                if keywords_match:
+                    try:
+                        parsed_keywords = ast.literal_eval(keywords_match.group(2))
+                        if isinstance(parsed_keywords, list):
+                            keyword_values = parsed_keywords
+                    except Exception:
+                        keyword_values = None
+
+                recovered_objects.append({
+                    "option": option_text,
+                    "summary": summary_text,
+                    "keywords": keyword_values,
+                })
+
+            if recovered_objects:
+                logging.warning(f"Recovered {len(recovered_objects)} LLM option objects via regex salvage")
+                return recovered_objects
+
+            string_matches = re.finditer(r'("(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\')', text, re.DOTALL)
+            recovered_strings: List[str] = []
+            for match in string_matches:
+                token = match.group(0)
+                try:
+                    parsed_token = ast.literal_eval(token)
+                except Exception:
+                    continue
+                if isinstance(parsed_token, str):
+                    cleaned_token = re.sub(r"\s+", " ", parsed_token).strip()
+                    if cleaned_token and cleaned_token not in {"option", "summary", "keywords"}:
+                        recovered_strings.append(cleaned_token)
+
+            if len(recovered_strings) >= 3:
+                logging.warning(f"Recovered {len(recovered_strings)} LLM option strings via regex salvage")
+                return recovered_strings
+
+        return None
+
     try:
         parsed_llm_output = json.loads(clean_json_str)
     except json.JSONDecodeError as first_error:
@@ -4913,19 +5685,24 @@ Return ONLY valid JSON - no other text before or after the JSON array."""
             parsed_llm_output = json.loads(repaired_json_str)
             logging.info("✅ JSON repair successful!")
         except json.JSONDecodeError as second_error:
-            # Repair failed, log details and re-raise
-            logging.error(f"JSON repair failed: {second_error}")
-            logging.error(f"Failed to parse LLM response as JSON. Clean Raw (first 1000 chars): {clean_json_str[:1000]}")
-            logging.error(f"Repaired JSON (first 2000 chars): {repaired_json_str[:2000]}")
-            logging.error(f"FULL RAW LLM RESPONSE (first 2000 chars): {llm_response_json_str[:2000]}")
-            
-            # Log the specific problematic area around the error
-            if hasattr(second_error, 'pos'):
-                start = max(0, second_error.pos - 200)
-                end = min(len(repaired_json_str), second_error.pos + 200)
-                logging.error(f"Problem area (±200 chars around error): {repaired_json_str[start:end]}")
-            
-            raise HTTPException(status_code=500, detail=f"LLM returned invalid JSON: {str(first_error)}")
+            salvaged_llm_output = salvage_llm_output(repaired_json_str, clean_json_str, llm_response_json_str)
+            if salvaged_llm_output is not None:
+                parsed_llm_output = salvaged_llm_output
+                logging.warning("Recovered malformed LLM output using salvage fallback after JSON repair failure")
+            else:
+                # Repair failed, log details and re-raise
+                logging.error(f"JSON repair failed: {second_error}")
+                logging.error(f"Failed to parse LLM response as JSON. Clean Raw (first 1000 chars): {clean_json_str[:1000]}")
+                logging.error(f"Repaired JSON (first 2000 chars): {repaired_json_str[:2000]}")
+                logging.error(f"FULL RAW LLM RESPONSE (first 2000 chars): {llm_response_json_str[:2000]}")
+                
+                # Log the specific problematic area around the error
+                if hasattr(second_error, 'pos'):
+                    start = max(0, second_error.pos - 200)
+                    end = min(len(repaired_json_str), second_error.pos + 200)
+                    logging.error(f"Problem area (±200 chars around error): {repaired_json_str[start:end]}")
+                
+                raise HTTPException(status_code=500, detail=f"LLM returned invalid JSON: {str(first_error)}")
     
     # Continue with processing the parsed output
     try:
@@ -4949,25 +5726,81 @@ Return ONLY valid JSON - no other text before or after the JSON array."""
             logging.error(f"Logic Error: After processing, extracted LLM options were not a list: {type(extracted_options_list)} - Content: {llm_response_json_str}")
             raise HTTPException(status_code=500, detail="Internal server error: Failed to extract LLM options as a list.")
 
-        enforced_options = enforce_ai_option_overrides(extracted_options_list, ai_option_overrides, llm_options_value)
+        normalized_options = []
+        for raw_item in extracted_options_list:
+            normalized_item = _normalize_llm_option_item(raw_item)
+            if normalized_item:
+                normalized_options.append(normalized_item)
+
+        if not normalized_options:
+            logging.error(f"LLM returned no usable option items after normalization: {parsed_llm_output}")
+            raise HTTPException(status_code=500, detail="LLM response did not contain any usable options.")
+
+        logging.info(f"📊 1. Extracted options count: {len(extracted_options_list)}")
+        logging.info(f"📊 1b. Normalized options count: {len(normalized_options)}")
+        effective_max_options = request_data.count if request_data.count and request_data.count > 0 else llm_options_value
+        logging.info(f"📊 Using max_options={effective_max_options} (request.count={request_data.count}, llm_options_value={llm_options_value})")
+        enforced_options = enforce_ai_option_overrides(normalized_options, ai_option_overrides, effective_max_options)
+        logging.info(f"📊 2. After enforce_ai_option_overrides: {len(enforced_options)}")
+        
         sentiment_aligned_options = apply_prompt_sentiment_alignment(
             enforced_options,
             user_prompt_content,
-            llm_options_value
+            effective_max_options
         )
+        logging.info(f"📊 3. After apply_prompt_sentiment_alignment: {len(sentiment_aligned_options)}")
+        
         biased_options = apply_inclusion_preference_bias(
             sentiment_aligned_options,
             ai_option_overrides,
             user_prompt_content,
-            llm_options_value
+            effective_max_options
         )
-        return JSONResponse(content=biased_options)
+        logging.info(f"📊 4. After apply_inclusion_preference_bias: {len(biased_options)}")
+        logging.info(f"📊 5. FINAL OPTIONS BEING RETURNED: {biased_options[:2] if biased_options else 'empty'}")
+
+        llm_quick_response_cache[quick_cache_key] = {
+            "created_at": time.time(),
+            "response": copy.deepcopy(biased_options),
+        }
+
+        if inflight_future and not inflight_future.done():
+            inflight_future.set_result(copy.deepcopy(biased_options))
+        async with llm_inflight_requests_lock:
+            llm_inflight_requests.pop(quick_cache_key, None)
+
+        total_elapsed_ms = (time.perf_counter() - request_start_time) * 1000
+        logging.info(
+            f"⏱️ /llm total: {total_elapsed_ms:.1f}ms "
+            f"(prep={prep_elapsed_ms:.1f}ms, generate={llm_generate_elapsed_ms:.1f}ms) "
+            f"[{log_context}]"
+        )
+        return JSONResponse(
+            content=biased_options,
+            headers={
+                "X-LLM-Cache": "quick-miss",
+                "X-LLM-Timing": f"prep={prep_elapsed_ms:.1f};generate={llm_generate_elapsed_ms:.1f};total={total_elapsed_ms:.1f}",
+                "X-LLM-Profile": "FAST" if use_fast_generation_profile else "RICH",
+                "X-LLM-Request-Id": request_correlation_id,
+                "X-LLM-Button": button_label,
+            },
+        )
 
     except HTTPException:
+        if is_inflight_owner and inflight_future and not inflight_future.done():
+            inflight_future.set_exception(HTTPException(status_code=500, detail="Owner /llm request failed"))
+        if is_inflight_owner:
+            async with llm_inflight_requests_lock:
+                llm_inflight_requests.pop(quick_cache_key, None)
         # Re-raise HTTP exceptions as-is
         raise
     except Exception as e:
-        logging.error(f"Error processing LLM response for account {account_id} and user {aac_user_id}: {e}", exc_info=True)
+        if is_inflight_owner and inflight_future and not inflight_future.done():
+            inflight_future.set_exception(e)
+        if is_inflight_owner:
+            async with llm_inflight_requests_lock:
+                llm_inflight_requests.pop(quick_cache_key, None)
+        logging.error(f"Error processing LLM response [{log_context}]: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error processing LLM response: {str(e)}")
 
 
@@ -5130,6 +5963,25 @@ def initialize_backend_services():
 
 
 # --- Firestore Helper Functions ---
+
+# Short-lived in-memory cache for frequently-read per-user documents (settings,
+# user_narrative, current_state).  Documents that users rarely change mid-session
+# (e.g. app_settings) are safe to cache for 60 s; high-churn paths (config/pages_list)
+# are deliberately excluded below.
+_FIRESTORE_DOC_CACHE: dict = {}
+_FIRESTORE_DOC_CACHE_TTL = 60  # seconds
+
+# Paths that must always be read fresh (mutable mid-session data).
+_FIRESTORE_DOC_CACHE_SKIP = {
+    "config/pages_list",
+    "config/tap_config",
+}
+
+def _invalidate_firestore_doc_cache(account_id: str, aac_user_id: str, doc_subpath: str) -> None:
+    """Call this whenever a document is written so the cache stays coherent."""
+    key = f"{account_id}/{aac_user_id}/{doc_subpath}"
+    _FIRESTORE_DOC_CACHE.pop(key, None)
+
 async def load_firestore_document(account_id: str, aac_user_id: str, doc_subpath: str, default_data: Any) -> Any:
     """
     Loads a document from Firestore for a specific AAC user under an account,
@@ -5142,6 +5994,14 @@ async def load_firestore_document(account_id: str, aac_user_id: str, doc_subpath
         return default_data.copy() if isinstance(default_data, (dict, list)) else default_data
 
     full_path = f"{FIRESTORE_ACCOUNTS_COLLECTION}/{account_id}/{FIRESTORE_ACCOUNT_USERS_SUBCOLLECTION}/{aac_user_id}/{doc_subpath}"
+
+    # Serve from short-TTL cache for high-frequency, low-churn documents.
+    if doc_subpath not in _FIRESTORE_DOC_CACHE_SKIP:
+        _cache_key = f"{account_id}/{aac_user_id}/{doc_subpath}"
+        _cached = _FIRESTORE_DOC_CACHE.get(_cache_key)
+        if _cached and (time.time() - _cached[1]) < _FIRESTORE_DOC_CACHE_TTL:
+            return copy.deepcopy(_cached[0])
+
     doc_ref = firestore_db.document(full_path)
     try:
         doc = await asyncio.to_thread(doc_ref.get)
@@ -5163,12 +6023,22 @@ async def load_firestore_document(account_id: str, aac_user_id: str, doc_subpath
             if isinstance(default_data, dict) and isinstance(data_from_db, dict):
                 merged_data = default_data.copy()
                 merged_data.update(data_from_db) # Merge with defaults
-                return merged_data
+                result = merged_data
             elif isinstance(default_data, list) and isinstance(data_from_db, list):
-                return data_from_db # Return the list as is
+                result = data_from_db
             else:
                 logging.warning(f"Type mismatch for Firestore document at {full_path} for AAC user {aac_user_id}. Expected {type(default_data)}, got {type(data_from_db)}. Returning default.")
                 return default_data.copy() if isinstance(default_data, (dict, list)) else default_data
+
+            # Store result in cache (skip high-churn paths)
+            if doc_subpath not in _FIRESTORE_DOC_CACHE_SKIP:
+                _FIRESTORE_DOC_CACHE[_cache_key] = (copy.deepcopy(result), time.time())
+                # Evict oldest entries if cache grows too large
+                if len(_FIRESTORE_DOC_CACHE) > 1000:
+                    oldest = sorted(_FIRESTORE_DOC_CACHE.items(), key=lambda x: x[1][1])[:200]
+                    for k, _ in oldest:
+                        del _FIRESTORE_DOC_CACHE[k]
+            return result
         else:
             logging.warning(f"Firestore document at {full_path} not found for AAC user {aac_user_id}. Using and saving defaults.")
             await save_firestore_document(account_id, aac_user_id, doc_subpath, default_data)
@@ -5201,6 +6071,9 @@ async def save_firestore_document(account_id: str, aac_user_id: str, doc_subpath
     Saves data to a Firestore document for a specific AAC user under an account.
     doc_subpath example: "settings/app_settings", "info/birthdays"
     """
+    # Invalidate the read cache so the next load reflects the new write.
+    _invalidate_firestore_doc_cache(account_id, aac_user_id, doc_subpath)
+
     global firestore_db
     if not firestore_db:
         logging.error(f"Firestore DB client not initialized. Cannot save document for AAC user {aac_user_id}.")
@@ -6673,6 +7546,7 @@ class PlayAudioRequest(BaseModel):
     text: str
     routing_target: Optional[RoutingTarget] = "default"
     voice_name_override: Optional[str] = None
+    language_code_override: Optional[str] = None
     use_system_voice: bool = False
     speech_rate_override: Optional[int] = Field(None, gt=49, lt=401)
 
@@ -6696,15 +7570,17 @@ async def play_audio(request: PlayAudioRequest, current_ids: Annotated[Dict[str,
         elif request.use_system_voice:
             voice_to_use = DEFAULT_TTS_VOICE
         else:
-            voice_to_use = user_settings.get("selected_tts_voice_name", DEFAULT_TTS_VOICE)
+            voice_to_use = user_settings.get("defaultPartnerVoice") or user_settings.get("selected_tts_voice_name", DEFAULT_TTS_VOICE)
         rate_to_use = request.speech_rate_override or user_settings.get("speech_rate", DEFAULT_SPEECH_RATE)
+        language_code_to_use = _normalize_locale_tag(request.language_code_override)
 
         logging.info(f"Synthesizing speech for account {account_id} user {aac_user_id} with text: '{request.text[:50]}...' for routing target: {request.routing_target}")
 
         audio_bytes, sample_rate = await synthesize_speech_to_bytes(
             text=request.text,
             voice_name=voice_to_use, # Pass the value from settings
-            wpm_rate=rate_to_use      # Pass the value from settings
+            wpm_rate=rate_to_use,      # Pass the value from settings
+            language_code=language_code_to_use,
         )
         import base64
         encoded_audio = base64.b64encode(audio_bytes).decode('utf-8')
@@ -6743,7 +7619,18 @@ async def play_audio(request: PlayAudioRequest, current_ids: Annotated[Dict[str,
 
 # Ensure this function (synthesize_speech_to_bytes) is in your server.py file,
 # unindented at the global scope, and has this full body.
-async def synthesize_speech_to_bytes(text: str, voice_name: str, wpm_rate: int) -> tuple[bytes, int]:
+def _infer_language_code_from_voice(voice_name: str, fallback_locale: str = "en-US") -> str:
+    if not voice_name:
+        return fallback_locale
+    match = re.match(r"^([a-z]{2})[-_]([A-Za-z]{2,4})", voice_name)
+    if not match:
+        return fallback_locale
+    lang = match.group(1).lower()
+    region = match.group(2).upper()
+    return f"{lang}-{region}"
+
+
+async def synthesize_speech_to_bytes(text: str, voice_name: str, wpm_rate: int, language_code: Optional[str] = None) -> tuple[bytes, int]:
     """
     Synthesizes speech using the provided parameters. No DB lookups.
     """
@@ -6772,7 +7659,8 @@ async def synthesize_speech_to_bytes(text: str, voice_name: str, wpm_rate: int) 
         else:
             synthesis_input = google_tts.SynthesisInput(text=segment_text)
 
-        voice_params = google_tts.VoiceSelectionParams(language_code="en-US", name=voice_name)
+        effective_language_code = _normalize_locale_tag(language_code) or _infer_language_code_from_voice(voice_name)
+        voice_params = google_tts.VoiceSelectionParams(language_code=effective_language_code, name=voice_name)
 
         sample_rate_hertz = 24000
         if "Standard" in voice_name:
@@ -7566,14 +8454,20 @@ class SettingsModel(BaseModel):
     wakeWordName: Optional[str] = Field(None, description="The name part of the wake word (e.g., 'Brady').", min_length=1, max_length=50)
     CountryCode: Optional[str] = Field(None, description="Country code for holiday lookups (e.g., US, CA).", min_length=2, max_length=2)
     speech_rate: Optional[int] = Field(None, description="Speech rate in WPM (e.g., 100-300).", gt=49, lt=401) # Added speech_rate
-    LLMOptions: Optional[int] = Field(None, description="Number of options returned by LLM (e.g., 1-50)", ge=1, le=50) 
+    LLMOptions: Optional[int] = Field(None, description="Number of options returned by LLM (e.g., 0-50)", ge=0, le=50) 
     FreestyleOptions: Optional[int] = Field(20, description="Number of word options returned for freestyle communication (e.g., 1-50)", ge=1, le=50)
     llm_provider: Optional[str] = Field(None, description="LLM provider choice: 'gemini' or 'chatgpt'.", min_length=3)
     ScanningOff: Optional[bool] = Field(None, description="Enable/disable scanning of off-screen elements.") # Added ScanningOff
     scanMode: Optional[str] = Field(None, description="Scanning mode: 'auto' or 'step'")
     waitForSwitchToScan: Optional[bool] = Field(None, description="Enable/disable waiting for switch press before starting scanning on initial page load.") # Added waitForSwitchToScan
+    playWaitForSwitchChime: Optional[bool] = Field(None, description="Play a chime after page load when waiting for the switch to begin scanning.")
     SummaryOff: Optional[bool] = Field(None, description="Enable/disable summary generation.") # Added SummaryOff    
     selected_tts_voice_name: Optional[str] = None
+    userLanguage: Optional[str] = Field(None, description="Primary user language locale (e.g., es-ES).")
+    defaultPartnerLanguage: Optional[str] = Field(None, description="Default partner language locale (e.g., en-US).")
+    defaultPartnerVoice: Optional[str] = Field(None, description="Default partner language TTS voice name.")
+    locationOverrideLanguages: Optional[List[str]] = Field(None, description="Admin-defined location override language locales.")
+    locationOverrideVoices: Optional[Dict[str, str]] = Field(None, description="Voice mapping for each location override language locale.")
     gridColumns: Optional[int] = Field(None, description="Number of columns displayed in grid", ge=2, le=18)
     lightColorValue: Optional[int] = Field(None, description="Color value for light theme (e.g., 4294779156).", gt=0)
     darkColorValue: Optional[int] = Field(None, description="Color value for dark theme (e.g., 4294901764).", gt=0)
@@ -7591,6 +8485,7 @@ class SettingsModel(BaseModel):
     applicationVolume: Optional[int] = Field(None, description="Application volume level 0-10", ge=0, le=10)
     spellLetterOrder: Optional[str] = Field(None, description="Letter order for spell page: 'alphabetical', 'qwerty', or 'frequency'")
     vocabularyLevel: Optional[str] = Field(None, description="Vocabulary complexity level for LLM outputs: 'emergent', 'functional', 'developing', or 'proficient'")
+    specialPageTranslations: Optional[Dict[str, Dict[str, Dict[str, str]]]] = Field(None, description="Pretranslated static UI strings for special pages by page and locale.")
 
 
     @field_validator('wakeWordInterjection', 'wakeWordName', 'CountryCode', mode='before')
@@ -7640,6 +8535,48 @@ class SettingsModel(BaseModel):
             if normalized in ['auto', 'step']:
                 return normalized
         raise ValueError("Invalid scanMode value. Must be 'auto' or 'step'")
+
+    @field_validator('userLanguage', 'defaultPartnerLanguage', mode='before')
+    @classmethod
+    def validate_language_locale(cls, value: Any) -> Optional[str]:
+        if value is None:
+            return None
+        normalized = _normalize_locale_tag(value)
+        if not normalized:
+            raise ValueError("Invalid locale format. Use BCP-47 style like en-US or es-MX")
+        return normalized
+
+    @field_validator('locationOverrideLanguages', mode='before')
+    @classmethod
+    def validate_location_override_languages(cls, value: Any) -> Optional[List[str]]:
+        if value is None:
+            return None
+        if not isinstance(value, list):
+            raise ValueError("locationOverrideLanguages must be a list of locale strings")
+        normalized: List[str] = []
+        for item in value:
+            locale = _normalize_locale_tag(item)
+            if not locale:
+                raise ValueError("locationOverrideLanguages contains an invalid locale")
+            if locale not in normalized:
+                normalized.append(locale)
+        return normalized
+
+    @field_validator('locationOverrideVoices', mode='before')
+    @classmethod
+    def validate_location_override_voices(cls, value: Any) -> Optional[Dict[str, str]]:
+        if value is None:
+            return None
+        if not isinstance(value, dict):
+            raise ValueError("locationOverrideVoices must be a locale-to-voice map")
+        normalized: Dict[str, str] = {}
+        for locale_key, voice_name in value.items():
+            locale = _normalize_locale_tag(locale_key)
+            voice = str(voice_name or "").strip()
+            if not locale or not voice:
+                raise ValueError("locationOverrideVoices contains invalid locale or empty voice")
+            normalized[locale] = voice
+        return normalized
     
 
 class VoiceDetail(BaseModel):
@@ -7659,12 +8596,13 @@ async def load_settings_from_file(account_id: str, aac_user_id: str) -> Dict:
     """
     Loads settings from Firestore for a specific user, returning defaults if error/missing.
     """
-    return await load_firestore_document(
+    loaded = await load_firestore_document(
         account_id=account_id,
         aac_user_id=aac_user_id,
         doc_subpath="settings/app_settings",
         default_data=DEFAULT_SETTINGS.copy()
     )
+    return _normalize_language_settings(loaded)
 
 
 @app.get("/api/interface-preference")
@@ -7728,6 +8666,7 @@ async def save_settings_to_file(account_id: str, aac_user_id: str, settings_data
     
     # Merge (update existing defaults with new sanitized data)
     current_settings.update(sanitized_data_to_save)
+    current_settings = _normalize_language_settings(current_settings)
     
     # DEBUG: Log FreestyleOptions in final merged settings
     logging.warning(f"DEBUG save_settings_to_file - FreestyleOptions in final merged settings: {current_settings.get('FreestyleOptions', 'NOT_FOUND')}")
@@ -7762,6 +8701,21 @@ async def save_settings_endpoint(settings_update: SettingsModel, current_ids: An
 
     update_data = settings_update.model_dump(exclude_unset=True)
     logging.info(f"POST /api/settings request received for account {account_id} and user {aac_user_id} with update data: {update_data}")
+
+    current_settings_snapshot = await load_settings_from_file(account_id, aac_user_id)
+    merged_preview = _normalize_language_settings({**current_settings_snapshot, **update_data})
+    default_partner_voice = str(merged_preview.get("defaultPartnerVoice") or "").strip()
+    if not default_partner_voice:
+        raise HTTPException(status_code=400, detail="Default partner voice is required when partner language is configured")
+
+    override_languages = merged_preview.get("locationOverrideLanguages") or []
+    override_voices = merged_preview.get("locationOverrideVoices") or {}
+    missing_voice_locales = [locale for locale in override_languages if not str(override_voices.get(locale) or "").strip()]
+    if missing_voice_locales:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Missing voice selection for location override language(s): {', '.join(missing_voice_locales)}"
+        )
     
     # DEBUG: Log FreestyleOptions specifically
     if 'FreestyleOptions' in update_data:
@@ -7773,6 +8727,7 @@ async def save_settings_endpoint(settings_update: SettingsModel, current_ids: An
         # Return the requested settings as if they were saved (temporary session behavior)
         current_settings = await load_settings_from_file(account_id, aac_user_id)
         current_settings.update(update_data)  # Apply changes temporarily
+        current_settings = _normalize_language_settings(current_settings)
         return JSONResponse(content=SettingsModel(**current_settings).model_dump())
     
     # Regular mode: save settings normally
@@ -7827,6 +8782,395 @@ async def update_toolbar_pin(
     except Exception as e:
         logging.error(f"Error updating toolbar PIN: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Failed to update toolbar PIN: {str(e)}")
+
+
+PROFILE_SETTINGS_EXPORT_TYPE = "bravo_profile_settings"
+PROFILE_SETTINGS_SCHEMA_VERSION = 1
+PROFILE_SETTINGS_CUSTOM_CATEGORY_FIELDS = (
+    "guess_who_categories",
+    "guess_where_categories",
+    "guess_what_categories",
+    "hangman_categories",
+)
+
+
+async def _load_profile_settings_bundle(account_id: str, aac_user_id: str) -> Dict[str, Any]:
+    """Load a transferable bundle of profile settings/configuration data."""
+    settings = await load_settings_from_file(account_id, aac_user_id)
+    birthdays = await load_birthdays_from_file(account_id, aac_user_id)
+    user_narrative = await load_firestore_document(
+        account_id=account_id,
+        aac_user_id=aac_user_id,
+        doc_subpath="info/user_narrative",
+        default_data=DEFAULT_USER_INFO.copy(),
+    )
+    current_state = await load_firestore_document(
+        account_id=account_id,
+        aac_user_id=aac_user_id,
+        doc_subpath="info/current_state",
+        default_data=DEFAULT_USER_CURRENT.copy(),
+    )
+    scraping_config = await load_firestore_document(
+        account_id=account_id,
+        aac_user_id=aac_user_id,
+        doc_subpath="config/scraping_config",
+        default_data={"news_sources": [], "sports_sources": [], "entertainment_sources": []},
+    )
+    favorites_config = await load_firestore_document(
+        account_id=account_id,
+        aac_user_id=aac_user_id,
+        doc_subpath="config/favorites_config",
+        default_data=DEFAULT_FAVORITES_CONFIG.copy(),
+    )
+    audio_config = await load_firestore_document(
+        account_id=account_id,
+        aac_user_id=aac_user_id,
+        doc_subpath="config/audio_config",
+        default_data={"personal_device": None, "system_device": None},
+    )
+    pages = await load_pages_from_file(account_id, aac_user_id)
+    tap_interface_config = await load_tap_nav_config(account_id, aac_user_id)
+
+    tap_interface_boards: List[Dict[str, Any]] = []
+    tap_interface_boards_menu: List[Dict[str, Any]] = []
+    tap_interface_board_settings: Dict[str, Any] = {}
+    if isinstance(tap_interface_config, dict):
+        tap_interface_config, _ = normalize_compose_tap_config(tap_interface_config)
+        tap_interface_config, _ = ensure_tap_boards_structure(tap_interface_config)
+        tap_interface_boards = [
+            dict(b) for b in tap_interface_config.get("boards", [])
+            if isinstance(b, dict)
+        ]
+        tap_interface_boards_menu = dedupe_boards_menu_tree(
+            tap_interface_config.get("boards_menu") if isinstance(tap_interface_config.get("boards_menu"), list) else []
+        )
+        tap_interface_board_settings = (
+            dict(tap_interface_config.get("board_settings"))
+            if isinstance(tap_interface_config.get("board_settings"), dict)
+            else {}
+        )
+
+    display_name = None
+    custom_categories: Dict[str, List[str]] = {}
+    try:
+        user_doc_ref = firestore_db.collection(FIRESTORE_ACCOUNTS_COLLECTION).document(
+            account_id
+        ).collection(FIRESTORE_ACCOUNT_USERS_SUBCOLLECTION).document(aac_user_id)
+        user_doc = await asyncio.to_thread(user_doc_ref.get)
+        if user_doc.exists:
+            user_data = user_doc.to_dict() or {}
+            display_name = user_data.get("display_name")
+            for field_name in PROFILE_SETTINGS_CUSTOM_CATEGORY_FIELDS:
+                field_value = user_data.get(field_name)
+                if isinstance(field_value, list):
+                    custom_categories[field_name] = field_value
+    except Exception as e:
+        logging.warning(
+            f"Could not load profile metadata/custom categories for {account_id}/{aac_user_id}: {e}"
+        )
+
+    return {
+        "display_name": display_name,
+        "settings": settings,
+        "birthdays": birthdays,
+        "user_narrative": user_narrative,
+        "current_state": current_state,
+        "scraping_config": scraping_config,
+        "favorites_config": favorites_config,
+        "audio_config": audio_config,
+        "pages": pages,
+        # Preferred transfer format: split tap boards/menu/settings sections.
+        "tap_interface_boards": tap_interface_boards,
+        "tap_interface_boards_menu": tap_interface_boards_menu,
+        "tap_interface_board_settings": tap_interface_board_settings,
+        # Legacy full object retained for backward compatibility with older imports.
+        "tap_interface_config": tap_interface_config,
+        "custom_categories": custom_categories,
+    }
+
+
+async def _apply_profile_settings_bundle(account_id: str, aac_user_id: str, bundle: Dict[str, Any]) -> List[str]:
+    """Apply a transferred profile settings bundle to target account/user."""
+    imported_sections: List[str] = []
+
+    if "settings" in bundle:
+        settings_data = bundle["settings"]
+        if not isinstance(settings_data, dict):
+            raise HTTPException(status_code=400, detail="Invalid settings payload format.")
+        if not await save_settings_to_file(account_id, aac_user_id, settings_data):
+            raise HTTPException(status_code=500, detail="Failed to import settings.")
+        imported_sections.append("settings")
+
+    if "birthdays" in bundle:
+        birthdays_data = bundle["birthdays"]
+        if not isinstance(birthdays_data, dict):
+            raise HTTPException(status_code=400, detail="Invalid birthdays payload format.")
+        if not await save_birthdays_to_file(account_id, aac_user_id, birthdays_data):
+            raise HTTPException(status_code=500, detail="Failed to import birthdays.")
+        imported_sections.append("birthdays")
+
+    if "user_narrative" in bundle:
+        user_narrative_data = bundle["user_narrative"]
+        if not isinstance(user_narrative_data, dict):
+            raise HTTPException(status_code=400, detail="Invalid user_narrative payload format.")
+        if not await save_firestore_document(
+            account_id=account_id,
+            aac_user_id=aac_user_id,
+            doc_subpath="info/user_narrative",
+            data_to_save=user_narrative_data,
+        ):
+            raise HTTPException(status_code=500, detail="Failed to import user narrative.")
+        imported_sections.append("user_narrative")
+
+    if "current_state" in bundle:
+        current_state_data = bundle["current_state"]
+        if not isinstance(current_state_data, dict):
+            raise HTTPException(status_code=400, detail="Invalid current_state payload format.")
+        if not await save_firestore_document(
+            account_id=account_id,
+            aac_user_id=aac_user_id,
+            doc_subpath="info/current_state",
+            data_to_save=current_state_data,
+        ):
+            raise HTTPException(status_code=500, detail="Failed to import current state.")
+        imported_sections.append("current_state")
+
+    if "scraping_config" in bundle:
+        scraping_config_data = bundle["scraping_config"]
+        if not isinstance(scraping_config_data, dict):
+            raise HTTPException(status_code=400, detail="Invalid scraping_config payload format.")
+        if not await save_firestore_document(
+            account_id=account_id,
+            aac_user_id=aac_user_id,
+            doc_subpath="config/scraping_config",
+            data_to_save=scraping_config_data,
+        ):
+            raise HTTPException(status_code=500, detail="Failed to import scraping config.")
+        imported_sections.append("scraping_config")
+
+    if "favorites_config" in bundle:
+        favorites_config_data = bundle["favorites_config"]
+        if not isinstance(favorites_config_data, dict):
+            raise HTTPException(status_code=400, detail="Invalid favorites_config payload format.")
+        if not await save_firestore_document(
+            account_id=account_id,
+            aac_user_id=aac_user_id,
+            doc_subpath="config/favorites_config",
+            data_to_save=favorites_config_data,
+        ):
+            raise HTTPException(status_code=500, detail="Failed to import favorites config.")
+        imported_sections.append("favorites_config")
+
+    if "audio_config" in bundle:
+        audio_config_data = bundle["audio_config"]
+        if not isinstance(audio_config_data, dict):
+            raise HTTPException(status_code=400, detail="Invalid audio_config payload format.")
+        if not await save_firestore_document(
+            account_id=account_id,
+            aac_user_id=aac_user_id,
+            doc_subpath="config/audio_config",
+            data_to_save=audio_config_data,
+        ):
+            raise HTTPException(status_code=500, detail="Failed to import audio config.")
+        imported_sections.append("audio_config")
+
+    if "pages" in bundle:
+        pages_data = bundle["pages"]
+        if not isinstance(pages_data, list):
+            raise HTTPException(status_code=400, detail="Invalid pages payload format.")
+        if not await save_pages_to_file(account_id, aac_user_id, pages_data):
+            raise HTTPException(status_code=500, detail="Failed to import pages config.")
+        imported_sections.append("pages")
+
+    tap_sections_present = any(
+        key in bundle
+        for key in (
+            "tap_interface_boards",
+            "tap_interface_boards_menu",
+            "tap_interface_board_settings",
+            "tap_interface_config",
+        )
+    )
+    if tap_sections_present:
+        existing_tap_config = await load_tap_nav_config(account_id, aac_user_id)
+        if not isinstance(existing_tap_config, dict):
+            existing_tap_config = create_default_tap_config(account_id, aac_user_id)
+
+        existing_tap_config, _ = normalize_compose_tap_config(existing_tap_config)
+        existing_tap_config, _ = ensure_tap_boards_structure(existing_tap_config)
+
+        # Backward compatibility: accept either split sections or legacy full object.
+        legacy_tap_payload = bundle.get("tap_interface_config")
+        if legacy_tap_payload is not None and not isinstance(legacy_tap_payload, dict):
+            raise HTTPException(status_code=400, detail="Invalid tap_interface_config payload format.")
+
+        incoming_boards = bundle.get("tap_interface_boards")
+        incoming_menu = bundle.get("tap_interface_boards_menu")
+        incoming_settings = bundle.get("tap_interface_board_settings")
+
+        if incoming_boards is None and isinstance(legacy_tap_payload, dict):
+            incoming_boards = legacy_tap_payload.get("boards")
+        if incoming_menu is None and isinstance(legacy_tap_payload, dict):
+            incoming_menu = legacy_tap_payload.get("boards_menu")
+        if incoming_settings is None and isinstance(legacy_tap_payload, dict):
+            incoming_settings = legacy_tap_payload.get("board_settings")
+
+        merged_tap_config = dict(existing_tap_config)
+
+        if incoming_boards is not None:
+            if not isinstance(incoming_boards, list):
+                raise HTTPException(status_code=400, detail="Invalid tap_interface_boards payload format.")
+            deduped_boards, _ = dedupe_tap_boards(incoming_boards)
+            merged_tap_config["boards"] = deduped_boards
+
+        board_ids_for_menu = {
+            str(board.get("id")).strip()
+            for board in merged_tap_config.get("boards", [])
+            if isinstance(board, dict) and str(board.get("id") or "").strip()
+        }
+
+        if incoming_menu is not None:
+            if not isinstance(incoming_menu, list):
+                raise HTTPException(status_code=400, detail="Invalid tap_interface_boards_menu payload format.")
+            normalized_menu = normalize_boards_menu_items(incoming_menu, board_ids_for_menu)
+            merged_tap_config["boards_menu"] = normalized_menu
+
+        if incoming_settings is not None:
+            if not isinstance(incoming_settings, dict):
+                raise HTTPException(status_code=400, detail="Invalid tap_interface_board_settings payload format.")
+            merged_tap_config["board_settings"] = incoming_settings
+
+        merged_tap_config["boards_schema_version"] = 1
+        merged_tap_config["updated_at"] = dt.now().isoformat()
+        merged_tap_config, _ = ensure_tap_boards_structure(merged_tap_config, existing_config=existing_tap_config)
+        merged_tap_config["buttons"] = compose_legacy_buttons_from_boards_menu(merged_tap_config)
+
+        if not await save_tap_nav_config(account_id, aac_user_id, merged_tap_config):
+            raise HTTPException(status_code=500, detail="Failed to import tap interface config.")
+        imported_sections.append("tap_interface_config")
+
+    if "custom_categories" in bundle:
+        custom_categories = bundle["custom_categories"]
+        if not isinstance(custom_categories, dict):
+            raise HTTPException(status_code=400, detail="Invalid custom_categories payload format.")
+
+        user_updates = {}
+        for field_name in PROFILE_SETTINGS_CUSTOM_CATEGORY_FIELDS:
+            if field_name not in custom_categories:
+                continue
+
+            field_value = custom_categories[field_name]
+            if field_value is None:
+                user_updates[field_name] = firestore.DELETE_FIELD
+                continue
+
+            if not isinstance(field_value, list):
+                raise HTTPException(status_code=400, detail=f"Invalid custom category field '{field_name}'.")
+
+            normalized_values = []
+            seen = set()
+            for item in field_value:
+                item_text = str(item).strip()
+                if not item_text:
+                    continue
+                item_key = item_text.lower()
+                if item_key in seen:
+                    continue
+                seen.add(item_key)
+                normalized_values.append(item_text)
+            user_updates[field_name] = normalized_values
+
+        if user_updates:
+            user_doc_ref = firestore_db.collection(FIRESTORE_ACCOUNTS_COLLECTION).document(
+                account_id
+            ).collection(FIRESTORE_ACCOUNT_USERS_SUBCOLLECTION).document(aac_user_id)
+            await asyncio.to_thread(user_doc_ref.set, user_updates, merge=True)
+            imported_sections.append("custom_categories")
+
+    return imported_sections
+
+
+@app.get("/api/profile-settings/export")
+async def export_profile_settings(
+    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
+):
+    """Export profile settings/configuration for transfer to another account/profile."""
+    account_id = current_ids["account_id"]
+    aac_user_id = current_ids["aac_user_id"]
+
+    try:
+        bundle = await _load_profile_settings_bundle(account_id, aac_user_id)
+        export_payload = {
+            "export_type": PROFILE_SETTINGS_EXPORT_TYPE,
+            "schema_version": PROFILE_SETTINGS_SCHEMA_VERSION,
+            "exported_at": dt.now(timezone.utc).isoformat(),
+            "profile": {
+                "aac_user_id": aac_user_id,
+                "display_name": bundle.get("display_name"),
+            },
+            "payload": bundle,
+        }
+        return JSONResponse(content=export_payload)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(
+            f"Error exporting profile settings for account {account_id}, user {aac_user_id}: {e}",
+            exc_info=True,
+        )
+        raise HTTPException(status_code=500, detail="Failed to export profile settings.")
+
+
+@app.post("/api/profile-settings/import")
+async def import_profile_settings(
+    request: Request,
+    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)],
+):
+    """Import profile settings/configuration from a previously exported file."""
+    account_id = current_ids["account_id"]
+    aac_user_id = current_ids["aac_user_id"]
+
+    try:
+        incoming = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON payload.")
+
+    if not isinstance(incoming, dict):
+        raise HTTPException(status_code=400, detail="Invalid import payload format.")
+
+    # Accept either a wrapped export file or a direct payload object.
+    if "payload" in incoming:
+        export_type = incoming.get("export_type")
+        schema_version = incoming.get("schema_version")
+
+        if export_type is not None and export_type != PROFILE_SETTINGS_EXPORT_TYPE:
+            raise HTTPException(status_code=400, detail="Unsupported export_type in import file.")
+        if schema_version is not None and schema_version != PROFILE_SETTINGS_SCHEMA_VERSION:
+            raise HTTPException(status_code=400, detail="Unsupported schema_version in import file.")
+
+        bundle = incoming.get("payload")
+    else:
+        bundle = incoming
+
+    if not isinstance(bundle, dict):
+        raise HTTPException(status_code=400, detail="Import payload missing valid 'payload' object.")
+
+    imported_sections = await _apply_profile_settings_bundle(account_id, aac_user_id, bundle)
+
+    # Imported settings affect user context and option generation; clear cache.
+    try:
+        await cache_manager.invalidate_cache(account_id, aac_user_id)
+        logging.info(f"✅ Invalidated cache for {account_id}/{aac_user_id} after profile settings import")
+    except Exception as e:
+        logging.error(f"Failed to invalidate cache after profile settings import: {e}")
+
+    return JSONResponse(
+        content={
+            "success": True,
+            "message": "Profile settings imported successfully.",
+            "imported_sections": imported_sections,
+        }
+    )
 
 # NEW: Model for account update requests
 class UpdateAccountRequest(BaseModel):
@@ -7956,9 +9300,17 @@ async def get_accessible_accounts(current_account: Annotated[Dict[str, str], Dep
                         "account_name": account_data.get("account_name", ""),
                         "email": account_data.get("email", "")
                     })
-            # Therapists can access accounts where they're listed as therapist_email
+            # Therapists can access their own account and accounts where they're listed as therapist_email
             elif is_therapist:
-                if account_data.get("therapist_email") == user_email:
+                # Include therapist's own account
+                if account_doc.id == account_id:
+                    accessible_accounts.append({
+                        "account_id": account_doc.id,
+                        "account_name": account_data.get("account_name", ""),
+                        "email": account_data.get("email", "")
+                    })
+                # Also include accounts where they're listed as therapist_email (client accounts)
+                elif account_data.get("therapist_email") == user_email:
                     accessible_accounts.append({
                         "account_id": account_doc.id,
                         "account_name": account_data.get("account_name", ""),
@@ -8015,8 +9367,10 @@ async def select_account_for_access(
         has_access = False
         if is_admin and target_account_data.get("allow_admin_access", True):
             has_access = True
-        elif is_therapist and target_account_data.get("therapist_email") == user_email:
-            has_access = True
+        elif is_therapist:
+            # Therapists can access their own account or client accounts where they're listed as therapist_email
+            if target_account_id == current_account_id or target_account_data.get("therapist_email") == user_email:
+                has_access = True
         
         if not has_access:
             raise HTTPException(status_code=403, detail="Access denied to this account")
@@ -8076,8 +9430,10 @@ async def get_admin_account_users(
         has_access = False
         if is_admin and target_account_data.get("allow_admin_access", True):
             has_access = True
-        elif is_therapist and target_account_data.get("therapist_email") == user_email:
-            has_access = True
+        elif is_therapist:
+            # Therapists can access their own account or client accounts where they're listed as therapist_email
+            if admin_firebase_uid == account_id or target_account_data.get("therapist_email") == user_email:
+                has_access = True
         
         if not has_access:
             raise HTTPException(status_code=403, detail="Access denied to this account")
@@ -8141,11 +9497,12 @@ async def get_available_llm_models():
 
 
 @app.get("/api/tts-voices", response_model=List[VoiceDetail])
-async def get_tts_voices_endpoint():
+async def get_tts_voices_endpoint(locale: Optional[str] = None):
     if not tts_client:
         raise HTTPException(status_code=503, detail="TTS client not available")
     try:
-        response = tts_client.list_voices(language_code="en-US") # Filter for en-US directly
+        normalized_locale = _normalize_locale_tag(locale) if locale else None
+        response = tts_client.list_voices(language_code=normalized_locale) if normalized_locale else tts_client.list_voices()
         voices = []
         for voice in response.voices:
             voices.append(VoiceDetail(
@@ -8159,6 +9516,892 @@ async def get_tts_voices_endpoint():
     except Exception as e:
         logging.error(f"Error fetching TTS voices: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=f"Error fetching TTS voices: {str(e)}")
+
+
+class TranslateLinesRequest(BaseModel):
+    lines: List[str]
+    source_locale: Optional[str] = None
+    target_locale: str
+
+
+class TranslatePagesRequest(BaseModel):
+    source_locale: Optional[str] = None
+    target_locale: str
+    scope: Literal["current", "all", "tap_boards"] = "current"
+    page_name: Optional[str] = None
+    include_display_name: bool = True
+    include_button_text: bool = True
+    include_speech_phrase: bool = True
+    include_llm_query: bool = False
+
+
+def _extract_translated_lines_from_model_text(response_text: str, expected_count: int) -> List[str]:
+    """Parse translated lines from model output text with tolerant JSON extraction."""
+    raw_text = str(response_text or "").strip()
+    if not raw_text:
+        raise ValueError("Empty translation response text")
+
+
+    candidate_payloads: List[str] = [raw_text]
+
+    # Markdown fenced JSON blocks
+    fence_match = re.search(r"```(?:json)?\s*(.*?)\s*```", raw_text, re.DOTALL | re.IGNORECASE)
+    if fence_match:
+        candidate_payloads.append(fence_match.group(1).strip())
+
+    # First JSON array-like region
+    array_match = re.search(r"\[.*\]", raw_text, re.DOTALL)
+    if array_match:
+        candidate_payloads.append(array_match.group(0).strip())
+
+    for payload_text in candidate_payloads:
+        try:
+            parsed = json.loads(payload_text)
+        except Exception:
+            try:
+                import ast
+
+                parsed = ast.literal_eval(payload_text)
+            except Exception:
+                continue
+
+        # Accept either plain list or wrapped object.
+        if isinstance(parsed, dict):
+            parsed = parsed.get("translated_lines")
+
+        if isinstance(parsed, str) and expected_count == 1:
+            return [_sanitize_translated_text(parsed)]
+
+        if isinstance(parsed, list):
+            translated_lines = [_sanitize_translated_text(item) for item in parsed]
+            if len(translated_lines) == expected_count:
+                return translated_lines
+
+    # Last-resort fallback: accept one translation per line when the model
+    # returns plain text instead of structured JSON.
+    fallback_lines = [
+        _sanitize_translated_text(re.sub(r"^\s*(?:[-*•]|\d+[.)])\s*", "", line))
+        for line in raw_text.splitlines()
+        if line.strip()
+    ]
+    if len(fallback_lines) == expected_count:
+        return fallback_lines
+
+    if len(fallback_lines) > expected_count:
+        return fallback_lines[-expected_count:]
+
+    if expected_count == 1:
+        return [_sanitize_translated_text(raw_text)]
+
+    raise ValueError("Unable to parse translated lines with expected shape")
+
+
+async def _translate_lines_with_models(
+    lines: List[str],
+    source_locale: Optional[str],
+    target_locale: str
+) -> List[str]:
+    if not lines:
+        return []
+
+    locale_label_map = {
+        "en-US": "English (US)",
+        "es-US": "Spanish (US)",
+        "fr-FR": "French (France)",
+        "de-DE": "German (Germany)",
+        "it-IT": "Italian (Italy)",
+        "pt-BR": "Portuguese (Brazil)",
+        "ar-XA": "Arabic"
+    }
+
+    source_instruction = locale_label_map.get(source_locale, source_locale) if source_locale else "auto-detect"
+    target_instruction = locale_label_map.get(target_locale, target_locale)
+    trimmed_lines = [str(line or "").strip() for line in lines]
+
+    if all(not line for line in trimmed_lines):
+        return trimmed_lines
+
+    prompt = (
+        "You are a translation engine for AAC communication. "
+        f"Translate each line from {source_instruction} to {target_instruction}. "
+        "If a line is already in the target language, keep it as-is. "
+        "Do not transliterate unless required by the target language. "
+        "Return ONLY valid JSON as an array of strings with exactly the same number of items and same order. "
+        "Do not add explanations. Preserve punctuation and intent.\n\n"
+        f"LINES_JSON:\n{json.dumps(trimmed_lines, ensure_ascii=False)}"
+    )
+
+    model_candidates: List[genai.GenerativeModel] = []
+    if primary_llm_model_instance:
+        model_candidates.append(primary_llm_model_instance)
+    if fallback_llm_model_instance and fallback_llm_model_instance is not primary_llm_model_instance:
+        model_candidates.append(fallback_llm_model_instance)
+
+    if not model_candidates:
+        raise HTTPException(status_code=503, detail="Translation model unavailable")
+
+    last_error: Optional[Exception] = None
+    for model in model_candidates:
+        try:
+            strict_cfg = genai.GenerationConfig(
+                temperature=0,
+                response_mime_type="application/json"
+            )
+            response = await asyncio.to_thread(
+                model.generate_content,
+                prompt,
+                generation_config=strict_cfg
+            )
+            response_text = (getattr(response, "text", "") or "").strip()
+            logging.info(
+                "TRANSLATION BATCH RAW RESPONSE LENGTH (%s->%s): %s chars",
+                source_locale or "auto",
+                target_locale,
+                len(response_text),
+            )
+            logging.info(
+                "TRANSLATION BATCH RAW RESPONSE PREVIEW (%s->%s): %s",
+                source_locale or "auto",
+                target_locale,
+                response_text[:500] if response_text else "EMPTY",
+            )
+            return _extract_translated_lines_from_model_text(response_text, len(trimmed_lines))
+        except Exception as strict_error:
+            last_error = strict_error
+
+        try:
+            response = await asyncio.to_thread(model.generate_content, prompt)
+            response_text = (getattr(response, "text", "") or "").strip()
+            logging.info(
+                "TRANSLATION BATCH RAW RESPONSE LENGTH (retry %s->%s): %s chars",
+                source_locale or "auto",
+                target_locale,
+                len(response_text),
+            )
+            logging.info(
+                "TRANSLATION BATCH RAW RESPONSE PREVIEW (retry %s->%s): %s",
+                source_locale or "auto",
+                target_locale,
+                response_text[:500] if response_text else "EMPTY",
+            )
+            return _extract_translated_lines_from_model_text(response_text, len(trimmed_lines))
+        except Exception as retry_error:
+            last_error = retry_error
+
+    logging.warning(
+        "Batch translation failed for %s line(s); falling back to per-line translation. Last error: %s",
+        len(trimmed_lines),
+        last_error,
+    )
+
+    fallback_translated_lines: List[str] = []
+    for source_line in trimmed_lines:
+        translated_line = source_line
+        if source_line:
+            single_line_prompt = (
+                "You are a translation engine for AAC communication. "
+                f"Translate this line from {source_instruction} to {target_instruction}. "
+                "If the line is already in the target language, keep it as-is. "
+                "Return ONLY the translated line with no explanation, numbering, or markdown.\n\n"
+                f"LINE:\n{json.dumps(source_line, ensure_ascii=False)}"
+            )
+
+            for model in model_candidates:
+                try:
+                    strict_cfg = genai.GenerationConfig(
+                        temperature=0,
+                        response_mime_type="application/json"
+                    )
+                    response = await asyncio.to_thread(
+                        model.generate_content,
+                        single_line_prompt,
+                        generation_config=strict_cfg
+                    )
+                    response_text = (getattr(response, "text", "") or "").strip()
+                    parsed_line = _extract_translated_lines_from_model_text(response_text, 1)
+                    translated_line = str(parsed_line[0] or "").strip() or source_line
+                    break
+                except Exception:
+                    try:
+                        response = await asyncio.to_thread(model.generate_content, single_line_prompt)
+                        response_text = (getattr(response, "text", "") or "").strip()
+                        parsed_line = _extract_translated_lines_from_model_text(response_text, 1)
+                        translated_line = str(parsed_line[0] or "").strip() or source_line
+                        break
+                    except Exception:
+                        continue
+
+        fallback_translated_lines.append(translated_line)
+
+    if any(line for line in fallback_translated_lines):
+        return fallback_translated_lines
+
+    if last_error:
+        raise last_error
+    raise ValueError("Unknown translation failure")
+
+
+FREESTYLE_UI_TEXT_DEFAULTS: Dict[str, str] = {
+    "baseTitle": "Free Style Communication",
+    "baseTitleShort": "Free Style",
+    "exitFreestyle": "Exit Freestyle",
+    "buildSpace": "Build Space",
+    "buildMessagePlaceholder": "Build your message here...",
+    "speakDisplay": "Speak Display",
+    "backspace": "Backspace",
+    "clearDisplay": "Clear Display",
+    "cleanUp": "Clean Up",
+    "newRow": "New Row",
+    "goBack": "Go Back",
+    "somethingElse": "Something Else",
+    "somethingElseAz": "Something Else A-Z",
+    "suggestedWords": "Suggested Words",
+    "tools": "Tools",
+    "wordCategories": "Word Categories",
+    "spelling": "Spelling",
+    "numbers": "Numbers",
+    "numbersAdd": "Add",
+    "numbersReset": "Reset to",
+    "actionSection": "Action",
+    "chooseWordSection": "Choose Word",
+    "loading": "Loading...",
+    # Audio prompts spoken to the user
+    "promptDisplayEmpty": "Display is empty.",
+    "promptUnableToSpeak": "Unable to speak display right now.",
+    "promptStartedNewRow": "Started new row.",
+    "promptUnableToStartRow": "Unable to start a new row right now.",
+    "promptNoOtherOptions": "I could not find other word options.",
+    "promptNoMoreNumbers": "No more numbers in this range.",
+}
+
+GAMES_UI_TEXT_DEFAULTS: Dict[str, str] = {
+    "gamesHubTitle": "Games",
+    "loadingGames": "Loading Games...",
+    "menuHome": "Home",
+    "menu20Questions": "20 Questions",
+    "menuGuessWho": "Guess Who",
+    "menuGuessWhere": "Guess Where",
+    "menuGuessWhat": "Guess What",
+    "menuHangman": "Hangman",
+    "menuStoryBuilder": "Story Builder",
+    "storyEntryGoBack": "Go Back",
+    "storyEntryCreateNewStory": "Create a New Story",
+    "storyEntryReadExistingStory": "Read an Existing Story",
+    "storyNoSavedStoriesFound": "No saved stories found",
+    "untitledStory": "Untitled Story",
+    "statusChooseHowToPlay": "Choose how you want to play:",
+    "roleAsk": "I ask the questions",
+    "roleAnswer": "They ask the questions",
+    "categoryPerson": "Person",
+    "categoryPlace": "Place",
+    "categoryThing": "Thing",
+    "statusSayReadySelected": "Say \"ready\" when you have selected something for me to guess",
+    "statusWhatTypeThing": "What type of thing are you thinking of?",
+    "statusSayReadySelectedYour": "Say \"ready\" when you have selected your",
+    "statusThinkingQuestions": "Let me think of some questions...",
+    "statusQuestionsRemaining": "Questions remaining:",
+    "statusGuessesRemaining": "Guesses remaining:",
+    "statusChooseYour": "Choose your",
+    "statusReadyWithWakeWord": "I'm ready. To ask a question or make a guess, start with",
+    "statusListeningNext": "Listening for next question or guess...",
+    "statusWhatNext": "What would you like to do next?",
+    "somethingElse": "Something Else",
+    "exitGame": "Exit Game",
+    "isItPrefix": "Is it",
+    "questionsAsked": "Questions Asked:",
+    "listening": "Listening...",
+    "generatingOptions": "Generating options...",
+    "oops": "Oops!",
+    "genericError": "Something went wrong. Please try again.",
+    "askAnotherQuestion": "Ask Another Question",
+    "makeGuess": "Make a Guess",
+    "storyQa": "Story Q&A",
+    "savedStories": "Saved Stories",
+    "readAgain": "Read Again",
+    "exportAudio": "Export Audio",
+    "createIllustration": "Create Illustration",
+    "regenerateIllustration": "Regenerate Illustration",
+    "backToStories": "Back to Stories",
+    "storyDetail": "Story Detail",
+    "storyTitlePlaceholder": "Story title",
+    "storyTextPlaceholder": "Story text",
+    "noIllustrationYet": "No illustration yet.",
+    "readStory": "Read Story",
+    "saveEdits": "Save Edits",
+    "deleteStory": "Delete Story",
+    "backToBuilder": "Back to Builder",
+    "deleteStories": "Delete Stories",
+    "close": "Close",
+    "selectStoriesToDelete": "Select stories to delete.",
+    "cancel": "Cancel",
+    "deleteSelected": "Delete Selected",
+    "storyWakePrompt": "Say the wake word to ask the next question or complete the story.",
+    "noSavedStoriesYet": "No saved stories yet.",
+    "qPrefix": "Q:",
+    "aPrefix": "A:",
+    "failedLoadOptions": "Failed to load options. Please try again.",
+    "failedLoadQuestions": "Failed to load questions. Please try again.",
+    "failedLoadGuesses": "Failed to load guesses. Please try again.",
+    "failedLoadDifferentOptions": "Failed to load different options. Please try again.",
+    "guessGameTitle": "Guess Game",
+    "guessWhoTitle": "Guess Who",
+    "guessWhereTitle": "Guess Where",
+    "guessWhatTitle": "Guess What",
+    "selectCategoryTitle": "Select a Category",
+    "selectCategorySubtitle": "Choose a category for this game",
+    "chooseModeTitle": "Choose a Game Mode",
+    "chooseModeSubtitle": "How do you want to play?",
+    "selectYourItemTitle": "Select Your Person",
+    "selectYourItemSubtitle": "Choose who you want Player 2 to guess",
+    "selectClueTitle": "Select a Clue to Give",
+    "clueTargetPrefix": "Player 2 needs to guess:",
+    "playerGuessTitle": "Player 2's Guess",
+    "isThisCorrect": "Is this correct?",
+    "gameOverTitle": "Game Over!",
+    "cluesGiven": "Clues given:",
+    "guessesLeft": "Guesses left:",
+    "goBack": "Go Back",
+    "iPick": "I pick",
+    "youPick": "You pick",
+    "somethingElse": "Something Else",
+    "makeYourGuess": "Make your guess:",
+    "playerGuessedPrefix": "Player 2 guessed:",
+    "enterAdminPin": "Enter Admin PIN",
+    "pinPlaceholder": "Enter PIN",
+    "invalidPin": "Invalid PIN. Please try again.",
+    "pinLengthError": "PIN must be 3-10 characters.",
+    "cancel": "Cancel",
+    "submit": "Submit",
+    "manageCustomCategories": "Manage Custom Categories",
+    "resetToDefaults": "Reset to Defaults",
+    "saveCategories": "Save Categories",
+    "startTypingPreview": "Start typing to see preview...",
+    "noCategoriesEntered": "No categories entered yet...",
+    "playAgain": "Play Again",
+    "failedLoadCategories": "Failed to load categories. Please try again.",
+    "failedGeneratePeople": "Failed to generate people. Please try again.",
+    "failedGenerateClues": "Failed to generate clues. Please try again.",
+    "failedGenerateGuesses": "Failed to generate guesses. Please try again.",
+    "enterAtLeastOneCategory": "Please enter at least one category.",
+    "saveCategoriesSuccessPrefix": "Successfully saved",
+    "saveCategoriesSuccessSuffix": "custom categories!",
+    "failedSaveCategories": "Failed to save categories. Please try again.",
+    "resetToDefaultsConfirm": "Are you sure you want to reset to default categories? This will remove all custom categories.",
+    "resetToDefaultsSuccess": "Successfully reset to default categories!",
+    "failedResetCategories": "Failed to reset categories. Please try again.",
+    "hangmanTitle": "Hangman",
+    "hangmanLoading": "Loading Hangman...",
+    "hangmanSelectCategory": "Select a Category",
+    "hangmanChooseCategory": "Choose a category for Hangman",
+    "hangmanChooseMode": "Choose a Game Mode",
+    "hangmanWhoIsGuessing": "Who is guessing?",
+    "hangmanPickWord": "Pick a Word",
+    "hangmanPickWordSubtitle": "Choose a word for your partner to guess",
+    "hangmanGuessTheWord": "Guess the word!",
+    "hangmanWrongGuesses": "Wrong guesses:",
+    "hangmanDone": "Done",
+    "hangmanWaitingPartner": "Waiting for your partner",
+    "hangmanSetupSubtitle": "Get ready to play Hangman.",
+    "hangmanGameOver": "Game Over!",
+    "hangmanPlayAgain": "Play Again",
+    "hangmanModeIGuess": "I guess",
+    "hangmanModeYouGuess": "You guess",
+    "hangmanLetterCountReady": "Say \"ready\" when you have your word.",
+    "hangmanListeningReady": "Listening for: \"ready\"",
+    "hangmanListeningLetterCount": "Listening for: letter count",
+    "hangmanGreatHowMany": "Great! How many letters are in your word? Say the number.",
+    "hangmanLetterCountTooSmall": "Please say a number between 1 and 20.",
+    "hangmanGotItKeepGuessing": "Got it. Keep guessing!",
+    "hangmanOutOfGuessesYouWin": "Oh no! I'm out of guesses. You win!",
+    "hangmanWrongGuessesLeft": "wrong guesses left.",
+    "hangmanIsLetterInWord": "Is the letter",
+    "hangmanSayYesNo": "in your word? Say yes or no.",
+    "hangmanGreatTapBlanks": "Great! Tap the blanks where",
+    "hangmanTapDone": "goes, then tap Done.",
+    "hangmanNeedAtLeastOneBlank": "You need to tap at least one blank. Try again.",
+    "hangmanIWinWordIs": "I win! The word is",
+    "hangmanNopeLetterNotInWord": "is not in the word.",
+    "hangmanTooBad": "Too bad!",
+    "hangmanNoWrongGuess": "wrong guess",
+    "hangmanNoWrongGuesses": "wrong guesses",
+    "hangmanBetterLuck": "Better luck next time!",
+    "hangmanYouGotIt": "You got it! The word was",
+    "hangmanWrongAllowed": "wrong guesses allowed.",
+    "hangmanIPickedWord": "I picked my word! It has",
+    "hangmanLetters": "letters. Say",
+    "hangmanThenGuess": "then guess a letter!",
+    "hangmanAlreadyGuessed": "You already guessed",
+    "hangmanTryAnotherLetter": "Try another letter.",
+    "hangmanNoSavedStoriesYet": "No saved stories yet."
+}
+
+
+@app.post("/api/translate-lines")
+async def translate_lines_endpoint(request_data: TranslateLinesRequest, current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]):
+    if not request_data.lines:
+        return JSONResponse(content={"translated_lines": []})
+
+    target_locale = _normalize_locale_tag(request_data.target_locale)
+    if not target_locale:
+        raise HTTPException(status_code=400, detail="Invalid target_locale")
+
+    source_locale = _normalize_locale_tag(request_data.source_locale) if request_data.source_locale else None
+    try:
+        translated_lines = await _translate_lines_with_models(
+            lines=request_data.lines,
+            source_locale=source_locale,
+            target_locale=target_locale
+        )
+        return JSONResponse(content={"translated_lines": translated_lines})
+    except Exception as e:
+        logging.error(f"Error translating lines: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to translate lines")
+
+
+@app.post("/api/admin/translate-pages")
+async def translate_pages_endpoint(
+    request_data: TranslatePagesRequest,
+    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
+):
+    account_id = current_ids["account_id"]
+    aac_user_id = current_ids["aac_user_id"]
+
+    target_locale = _normalize_locale_tag(request_data.target_locale)
+    if not target_locale:
+        raise HTTPException(status_code=400, detail="Invalid target_locale")
+
+    source_locale = _normalize_locale_tag(request_data.source_locale) if request_data.source_locale else None
+
+    if source_locale and source_locale.lower() == target_locale.lower():
+        raise HTTPException(status_code=400, detail="source_locale and target_locale must be different")
+
+    if not any([
+        request_data.include_display_name,
+        request_data.include_button_text,
+        request_data.include_speech_phrase,
+        request_data.include_llm_query
+    ]):
+        raise HTTPException(status_code=400, detail="Select at least one field to translate")
+
+    if request_data.scope == "tap_boards":
+        if not request_data.include_llm_query:
+            raise HTTPException(status_code=400, detail="Tap boards translation requires AI query prompts")
+
+        tap_config_data = await load_tap_nav_config(account_id, aac_user_id)
+        if not isinstance(tap_config_data, dict):
+            raise HTTPException(status_code=404, detail="Tap interface configuration not found")
+
+        tap_config_data, _ = normalize_compose_tap_config(tap_config_data)
+        tap_config_data, _ = ensure_tap_boards_structure(tap_config_data)
+
+        boards = tap_config_data.get("boards") if isinstance(tap_config_data.get("boards"), list) else []
+        prompt_jobs: List[Dict[str, Any]] = []
+        for board in boards:
+            if not isinstance(board, dict):
+                continue
+
+            llm_prompt = str(board.get("llm_prompt") or board.get("llm_query") or "").strip()
+            if llm_prompt:
+                prompt_jobs.append({
+                    "board": board,
+                    "text": llm_prompt,
+                })
+
+        if not prompt_jobs:
+            return JSONResponse(content={
+                "message": "No Tap board prompts found.",
+                "scope": request_data.scope,
+                "pages_processed": 0,
+                "strings_seen": 0,
+                "unique_strings": 0,
+                "strings_changed": 0,
+                "tap_boards_prompts_changed": 0,
+                "special_pages_changed": 0,
+            })
+
+        unique_prompts: List[str] = []
+        prompt_to_index: Dict[str, int] = {}
+        for job in prompt_jobs:
+            key = job["text"]
+            if key not in prompt_to_index:
+                prompt_to_index[key] = len(unique_prompts)
+                unique_prompts.append(key)
+            job["unique_index"] = prompt_to_index[key]
+
+        translated_prompts: List[str] = [""] * len(unique_prompts)
+        batch_size = 60
+        try:
+            for start_idx in range(0, len(unique_prompts), batch_size):
+                batch = unique_prompts[start_idx:start_idx + batch_size]
+                translated_batch = await _translate_lines_with_models(
+                    lines=batch,
+                    source_locale=source_locale,
+                    target_locale=target_locale
+                )
+                if len(translated_batch) != len(batch):
+                    raise ValueError("Tap board prompt translation returned unexpected line count")
+
+                for offset, translated_text in enumerate(translated_batch):
+                    translated_prompts[start_idx + offset] = str(translated_text or "").strip()
+        except HTTPException:
+            raise
+        except Exception as e:
+            logging.error(f"Error translating tap board prompts for account {account_id} and user {aac_user_id}: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail="Failed to translate tap board prompts")
+
+        tap_boards_prompts_changed = 0
+        for job in prompt_jobs:
+            translated_value = _sanitize_translated_text(translated_prompts[job["unique_index"]])
+            if translated_value and translated_value != job["text"]:
+                board = job["board"]
+                board["llm_prompt"] = translated_value
+                if "llm_query" in board:
+                    board["llm_query"] = translated_value
+                tap_boards_prompts_changed += 1
+
+        tap_config_data["updated_at"] = dt.now().isoformat()
+        await save_tap_nav_config(account_id, aac_user_id, tap_config_data)
+
+        return JSONResponse(content={
+            "message": "Tap board prompt translation complete.",
+            "scope": request_data.scope,
+            "pages_processed": 0,
+            "strings_seen": len(prompt_jobs),
+            "unique_strings": len(unique_prompts),
+            "strings_changed": tap_boards_prompts_changed,
+            "tap_boards_prompts_changed": tap_boards_prompts_changed,
+            "special_pages_changed": 0,
+        })
+
+    pages = await load_pages_from_file(account_id, aac_user_id)
+    if not isinstance(pages, list):
+        raise HTTPException(status_code=500, detail="Invalid pages data")
+
+    selected_page_name = None
+    pages_to_process = pages
+    if request_data.scope == "current":
+        selected_page_name = str(request_data.page_name or "").strip().lower()
+        if not selected_page_name:
+            raise HTTPException(status_code=400, detail="page_name is required when scope is current")
+        page_match = next((p for p in pages if str(p.get("name") or "").lower() == selected_page_name), None)
+        if not page_match:
+            raise HTTPException(status_code=404, detail=f"Page '{selected_page_name}' not found")
+        pages_to_process = [page_match]
+
+    has_games_target_in_scope = False
+    for page in pages_to_process:
+        page_name_token = str(page.get("name") or "").strip().lower()
+        if "game" in page_name_token:
+            has_games_target_in_scope = True
+            break
+
+        buttons = page.get("buttons")
+        if not isinstance(buttons, list):
+            continue
+
+        for button in buttons:
+            if not isinstance(button, dict):
+                continue
+            target_raw = str(button.get("targetPage") or "").strip().lower()
+            special_raw = str(button.get("special_function") or "").strip().lower()
+            if (
+                "!games" in target_raw
+                or "games.html" in target_raw
+                or "guess_games" in target_raw
+                or "guess" in target_raw and "game" in target_raw
+                or special_raw in {"games", "guess_games"}
+            ):
+                has_games_target_in_scope = True
+                break
+
+        if has_games_target_in_scope:
+            break
+
+    translation_jobs: List[Dict[str, Any]] = []
+
+    for page in pages_to_process:
+        if request_data.include_display_name:
+            page_display_name = str(page.get("displayName") or "").strip()
+            if page_display_name:
+                translation_jobs.append({
+                    "container": page,
+                    "field": "displayName",
+                    "text": page_display_name
+                })
+
+        buttons = page.get("buttons")
+        if not isinstance(buttons, list):
+            continue
+
+        for button in buttons:
+            if not isinstance(button, dict):
+                continue
+
+            if request_data.include_button_text:
+                button_text = str(button.get("text") or "").strip()
+                if button_text:
+                    translation_jobs.append({
+                        "container": button,
+                        "field": "text",
+                        "text": button_text
+                    })
+
+            if request_data.include_speech_phrase:
+                speech_phrase = str(button.get("speechPhrase") or "").strip()
+                if speech_phrase:
+                    translation_jobs.append({
+                        "container": button,
+                        "field": "speechPhrase",
+                        "text": speech_phrase
+                    })
+
+            if request_data.include_llm_query:
+                llm_query = str(button.get("LLMQuery") or "").strip()
+                if llm_query:
+                    translation_jobs.append({
+                        "container": button,
+                        "field": "LLMQuery",
+                        "text": llm_query
+                    })
+
+    if not translation_jobs:
+        return JSONResponse(content={
+            "message": "No translatable content found.",
+            "scope": request_data.scope,
+            "pages_processed": len(pages_to_process),
+            "strings_seen": 0,
+            "unique_strings": 0,
+            "strings_changed": 0
+        })
+
+    unique_texts: List[str] = []
+    text_to_index: Dict[str, int] = {}
+    for job in translation_jobs:
+        key = job["text"]
+        if key not in text_to_index:
+            text_to_index[key] = len(unique_texts)
+            unique_texts.append(key)
+        job["unique_index"] = text_to_index[key]
+
+    translated_unique: List[str] = [""] * len(unique_texts)
+    batch_size = 60
+
+    try:
+        for start_idx in range(0, len(unique_texts), batch_size):
+            batch = unique_texts[start_idx:start_idx + batch_size]
+            translated_batch = await _translate_lines_with_models(
+                lines=batch,
+                source_locale=source_locale,
+                target_locale=target_locale
+            )
+
+            if len(translated_batch) != len(batch):
+                raise ValueError("Translation batch returned unexpected line count")
+
+            for offset, translated_text in enumerate(translated_batch):
+                translated_unique[start_idx + offset] = str(translated_text or "").strip()
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error translating pages for account {account_id} and user {aac_user_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to translate page content")
+
+    strings_changed = 0
+    for job in translation_jobs:
+        translated_value = _sanitize_translated_text(translated_unique[job["unique_index"]])
+        if translated_value and translated_value != job["text"]:
+            job["container"][job["field"]] = translated_value
+            strings_changed += 1
+
+    await save_pages_to_file(account_id, aac_user_id, pages)
+
+    tap_boards_prompts_changed = 0
+    selected_page_token = str(selected_page_name or "").strip().lower()
+    should_translate_tap_board_prompts = (
+        request_data.include_llm_query and (
+            request_data.scope == "all"
+            or selected_page_token in {"tap", "tap interface", "tap_interface", "tap boards", "tap board"}
+        )
+    )
+    if should_translate_tap_board_prompts:
+        tap_config_data = await load_tap_nav_config(account_id, aac_user_id)
+        if isinstance(tap_config_data, dict):
+            tap_config_data, _ = normalize_compose_tap_config(tap_config_data)
+            tap_config_data, _ = ensure_tap_boards_structure(tap_config_data)
+
+            boards = tap_config_data.get("boards") if isinstance(tap_config_data.get("boards"), list) else []
+            prompt_jobs: List[Dict[str, Any]] = []
+            for board in boards:
+                if not isinstance(board, dict):
+                    continue
+
+                llm_prompt = str(board.get("llm_prompt") or board.get("llm_query") or "").strip()
+                if llm_prompt:
+                    prompt_jobs.append({
+                        "board": board,
+                        "text": llm_prompt,
+                    })
+
+            if prompt_jobs:
+                unique_prompts: List[str] = []
+                prompt_to_index: Dict[str, int] = {}
+                for job in prompt_jobs:
+                    key = job["text"]
+                    if key not in prompt_to_index:
+                        prompt_to_index[key] = len(unique_prompts)
+                        unique_prompts.append(key)
+                    job["unique_index"] = prompt_to_index[key]
+
+                translated_prompts: List[str] = [""] * len(unique_prompts)
+                for start_idx in range(0, len(unique_prompts), batch_size):
+                    batch = unique_prompts[start_idx:start_idx + batch_size]
+                    translated_batch = await _translate_lines_with_models(
+                        lines=batch,
+                        source_locale=source_locale,
+                        target_locale=target_locale
+                    )
+                    if len(translated_batch) != len(batch):
+                        raise ValueError("Tap board prompt translation returned unexpected line count")
+
+                    for offset, translated_text in enumerate(translated_batch):
+                        translated_prompts[start_idx + offset] = str(translated_text or "").strip()
+
+                for job in prompt_jobs:
+                    translated_value = _sanitize_translated_text(translated_prompts[job["unique_index"]])
+                    if not translated_value:
+                        continue
+
+                    board = job["board"]
+                    previous_prompt = str(board.get("llm_prompt") or board.get("llm_query") or "").strip()
+                    if translated_value != previous_prompt:
+                        board["llm_prompt"] = translated_value
+                        if "llm_query" in board:
+                            board["llm_query"] = translated_value
+                        tap_boards_prompts_changed += 1
+
+                if tap_boards_prompts_changed > 0:
+                    tap_config_data["updated_at"] = dt.now().isoformat()
+                    await save_tap_nav_config(account_id, aac_user_id, tap_config_data)
+                    strings_changed += tap_boards_prompts_changed
+
+    special_pages_changed = 0
+    should_translate_freestyle_ui = request_data.scope == "all" or selected_page_name == "freestyle"
+    if should_translate_freestyle_ui:
+        freestyle_keys = list(FREESTYLE_UI_TEXT_DEFAULTS.keys())
+        freestyle_lines = [FREESTYLE_UI_TEXT_DEFAULTS[key] for key in freestyle_keys]
+        freestyle_translated_lines = await _translate_lines_with_models(
+            lines=freestyle_lines,
+            source_locale=source_locale,
+            target_locale=target_locale
+        )
+
+        freestyle_bundle: Dict[str, str] = {}
+        for index, key in enumerate(freestyle_keys):
+            translated_value = _sanitize_translated_text(freestyle_translated_lines[index])
+            fallback_value = FREESTYLE_UI_TEXT_DEFAULTS[key]
+            freestyle_bundle[key] = translated_value or fallback_value
+
+        current_settings = await load_settings_from_file(account_id, aac_user_id)
+        existing_special = current_settings.get("specialPageTranslations")
+        if not isinstance(existing_special, dict):
+            existing_special = {}
+
+        freestyle_locale_map = existing_special.get("freestyle")
+        if not isinstance(freestyle_locale_map, dict):
+            freestyle_locale_map = {}
+
+        previous_bundle = freestyle_locale_map.get(target_locale)
+        if previous_bundle != freestyle_bundle:
+            special_pages_changed = 1
+
+        freestyle_locale_map[target_locale] = freestyle_bundle
+        existing_special["freestyle"] = freestyle_locale_map
+        await save_settings_to_file(account_id, aac_user_id, {
+            "specialPageTranslations": existing_special
+        })
+
+    should_translate_games_ui = (
+        request_data.scope == "all"
+        or selected_page_token in {"games", "guess who", "guess where", "guess what"}
+        or selected_page_token.startswith("guess ")
+        or has_games_target_in_scope
+    )
+    if should_translate_games_ui:
+        games_keys = list(GAMES_UI_TEXT_DEFAULTS.keys())
+        games_lines = [GAMES_UI_TEXT_DEFAULTS[key] for key in games_keys]
+        games_translated_lines = await _translate_lines_with_models(
+            lines=games_lines,
+            source_locale=source_locale,
+            target_locale=target_locale
+        )
+
+        games_bundle: Dict[str, str] = {}
+        for index, key in enumerate(games_keys):
+            translated_value = _sanitize_translated_text(games_translated_lines[index])
+            fallback_value = GAMES_UI_TEXT_DEFAULTS[key]
+            games_bundle[key] = translated_value or fallback_value
+
+        current_settings = await load_settings_from_file(account_id, aac_user_id)
+        existing_special = current_settings.get("specialPageTranslations")
+        if not isinstance(existing_special, dict):
+            existing_special = {}
+
+        games_locale_map = existing_special.get("games")
+        if not isinstance(games_locale_map, dict):
+            games_locale_map = {}
+
+        previous_bundle = games_locale_map.get(target_locale)
+        if previous_bundle != games_bundle:
+            special_pages_changed += 1
+
+        games_locale_map[target_locale] = games_bundle
+        existing_special["games"] = games_locale_map
+
+        games_button_labels_changed = 0
+        localized_games_label = _sanitize_translated_text(games_bundle.get("gamesHubTitle"))
+        if localized_games_label and target_locale.lower() != "en-us":
+            for page in pages_to_process:
+                buttons = page.get("buttons")
+                if not isinstance(buttons, list):
+                    continue
+
+                for button in buttons:
+                    if not isinstance(button, dict):
+                        continue
+
+                    target_raw = str(button.get("targetPage") or "").strip().lower()
+                    is_games_target = (
+                        "!games" in target_raw
+                        or "games.html" in target_raw
+                        or "guess_games" in target_raw
+                    )
+                    if not is_games_target:
+                        continue
+
+                    current_text = str(button.get("text") or "").strip()
+                    if current_text.lower() == "games" and current_text != localized_games_label:
+                        button["text"] = localized_games_label
+                        games_button_labels_changed += 1
+
+        if games_button_labels_changed > 0:
+            strings_changed += games_button_labels_changed
+            await save_pages_to_file(account_id, aac_user_id, pages)
+
+        await save_settings_to_file(account_id, aac_user_id, {
+            "specialPageTranslations": existing_special
+        })
+
+    return JSONResponse(content={
+        "message": "Page translation complete.",
+        "scope": request_data.scope,
+        "page_name": selected_page_name,
+        "pages_processed": len(pages_to_process),
+        "strings_seen": len(translation_jobs),
+        "unique_strings": len(unique_texts),
+        "strings_changed": strings_changed,
+        "tap_boards_prompts_changed": tap_boards_prompts_changed,
+        "special_pages_changed": special_pages_changed
+    })
     
 
 
@@ -9070,7 +11313,10 @@ async def get_user_info_api(current_ids: Annotated[Dict[str, str], Depends(get_c
         "userInfo": user_info_content_dict.get("narrative", ""),
         "currentMood": user_info_content_dict.get("currentMood"),
         "name": user_info_content_dict.get("name", ""),
-        "profileImageUrl": user_info_content_dict.get("profileImageUrl"),
+        "profileImageUrl": _display_image_url(
+            user_info_content_dict.get("profileImageUrl"),
+            user_info_content_dict.get("profileImageStoragePath")
+        ),
         "aiOptionOverrides": normalize_ai_option_overrides(user_info_content_dict.get("aiOptionOverrides", {}))
     }
     
@@ -9234,6 +11480,101 @@ async def save_user_info_api(request: Dict, current_ids: Annotated[Dict[str, str
         raise HTTPException(status_code=500, detail="Failed to save user info.")
 
 
+# ---------------------------------------------------------------------------
+# Custom Images helpers
+# ---------------------------------------------------------------------------
+
+def _gcs_storage_path_from_url(image_url: str) -> str | None:
+    """Extract the GCS object path from a storage.googleapis.com URL."""
+    prefix = f"https://storage.googleapis.com/{AAC_IMAGES_BUCKET_NAME}/"
+    if image_url and image_url.startswith(prefix):
+        return image_url[len(prefix):]
+    return None
+
+
+def _signed_image_url_from_path(storage_path: str) -> str:
+    """Generate a time-limited signed URL for a GCS image object."""
+    if not storage_client or not AAC_IMAGES_BUCKET_NAME:
+        return storage_path
+
+    bucket = storage_client.bucket(AAC_IMAGES_BUCKET_NAME)
+    blob = bucket.blob(storage_path)
+
+    from datetime import timedelta
+    return blob.generate_signed_url(version="v4", expiration=timedelta(hours=6), method="GET")
+
+
+def _display_image_url(image_url: str | None = None, storage_path: str | None = None) -> str | None:
+    """Return a browser-loadable image URL for stored GCS images."""
+    from urllib.parse import quote
+
+    if storage_path:
+        try:
+            return _signed_image_url_from_path(storage_path)
+        except Exception as e:
+            logging.warning(f"Failed to sign image URL for path '{storage_path}': {e}")
+            return f"/api/image-proxy?path={quote(storage_path, safe='')}"
+
+    if not image_url:
+        return image_url
+
+    path = _gcs_storage_path_from_url(image_url)
+    if path is None:
+        return image_url
+
+    try:
+        return _signed_image_url_from_path(path)
+    except Exception as e:
+        logging.warning(f"Failed to sign image URL for '{image_url}': {e}")
+        return f"/api/image-proxy?path={quote(path, safe='')}"
+
+
+@app.get("/api/image-proxy")
+async def proxy_custom_image(
+    path: str
+):
+    """Proxy a custom-image object from GCS so browser image tags can load it."""
+    try:
+        if not storage_client or not AAC_IMAGES_BUCKET_NAME:
+            raise HTTPException(status_code=503, detail="Storage not available")
+
+        # Basic path sanity-check to prevent traversal attacks
+        import posixpath
+        normalised = posixpath.normpath(path).lstrip("/")
+        if ".." in normalised or normalised != path.lstrip("/"):
+            raise HTTPException(status_code=400, detail="Invalid path")
+
+        bucket = storage_client.bucket(AAC_IMAGES_BUCKET_NAME)
+        blob = bucket.blob(normalised)
+
+        if not blob.exists():
+            raise HTTPException(status_code=404, detail="Image not found")
+
+        image_bytes = blob.download_as_bytes()
+
+        # Use stored content-type if available, otherwise guess from extension
+        content_type = blob.content_type or "application/octet-stream"
+        if content_type == "application/octet-stream":
+            ext = normalised.rsplit(".", 1)[-1].lower() if "." in normalised else ""
+            content_type = {
+                "jpg": "image/jpeg", "jpeg": "image/jpeg",
+                "png": "image/png", "gif": "image/gif",
+                "webp": "image/webp"
+            }.get(ext, "application/octet-stream")
+
+        from fastapi.responses import Response
+        return Response(
+            content=image_bytes,
+            media_type=content_type,
+            headers={"Cache-Control": "private, max-age=86400"}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error proxying image '{path}': {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to fetch image")
+
+
 # Custom Images API Endpoints
 @app.post("/api/upload_custom_image")
 async def upload_custom_image(
@@ -9288,10 +11629,10 @@ async def upload_custom_image(
         bucket = storage_client.bucket(AAC_IMAGES_BUCKET_NAME)
         blob = bucket.blob(storage_path)
         
-        # Upload with proper content type
+        # Upload with a usable image MIME type so browser rendering is reliable
         blob.upload_from_string(
             image_data,
-            content_type=image.content_type
+            content_type=image.content_type or "image/png"
         )
         
         # Construct public URL
@@ -9326,6 +11667,9 @@ async def upload_custom_image(
             doc_data["updated_at"] = doc_data["updated_at"].isoformat()
         
         logging.info(f"Custom image uploaded successfully: {doc_ref.id}")
+
+        if doc_data.get("image_url"):
+            doc_data["image_url"] = _display_image_url(doc_data["image_url"], doc_data.get("storage_path"))
         
         return JSONResponse(content={
             "success": True,
@@ -9374,6 +11718,10 @@ async def get_custom_images(
         
         # Sort by created_at in Python (newest first) to avoid needing composite index
         images.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+
+        # Rewrite GCS URLs to go through the authenticated proxy
+        for img in images:
+            img["image_url"] = _display_image_url(img.get("image_url"), img.get("storage_path"))
         
         logging.info(f"Found {len(images)} custom images for user")
         
@@ -9567,10 +11915,10 @@ async def upload_user_profile_image(
         bucket = storage_client.bucket(AAC_IMAGES_BUCKET_NAME)
         blob = bucket.blob(storage_path)
         
-        # Upload with proper content type
+        # Upload with a usable image MIME type so browser rendering is reliable
         blob.upload_from_string(
             image_data,
-            content_type=image.content_type
+            content_type=image.content_type or "image/png"
         )
         
         # Construct public URL
@@ -9635,6 +11983,9 @@ async def upload_user_profile_image(
             "updated_at": datetime.now(timezone.utc)
         }
         profile_doc_ref.set(profile_image_data)
+
+        # Keep the canonical storage path in user info so display URLs can be regenerated later.
+        user_info_dict["profileImageStoragePath"] = storage_path
         
         # Also store in custom_images with hierarchical structure for symbol lookup
         custom_image_ref = firestore_db.collection("accounts").document(account_id)\
@@ -9659,11 +12010,14 @@ async def upload_user_profile_image(
             doc_data["updated_at"] = doc_data["updated_at"].isoformat()
         
         logging.info(f"User profile image uploaded successfully: {custom_image_ref.id} for user {user_name}")
+
+        if doc_data.get("image_url"):
+            doc_data["image_url"] = _display_image_url(doc_data["image_url"], doc_data.get("storage_path"))
         
         return JSONResponse(content={
             "success": True,
             "image_data": doc_data,
-            "profileImageUrl": image_url,
+            "profileImageUrl": _display_image_url(image_url, storage_path),
             "message": f"Profile image uploaded successfully and tagged with '{user_name}' and personal pronouns. Image will now appear when using words like 'I', 'me', 'myself', or '{user_name}'."
         })
         
@@ -9704,6 +12058,12 @@ async def get_profile_image(
             profile_image["created_at"] = profile_image["created_at"].isoformat()
         if "updated_at" in profile_image:
             profile_image["updated_at"] = profile_image["updated_at"].isoformat()
+
+        # Rewrite URL to a browser-loadable signed URL
+        profile_image["image_url"] = _display_image_url(
+            profile_image.get("image_url"),
+            profile_image.get("storage_path")
+        )
         
         return JSONResponse(content={
             "success": True,
@@ -9776,6 +12136,8 @@ async def remove_profile_image(
         
         if "profileImageUrl" in user_info_dict:
             user_info_dict["profileImageUrl"] = None
+        if "profileImageStoragePath" in user_info_dict:
+            user_info_dict["profileImageStoragePath"] = None
             await save_firestore_document(
                 account_id=account_id,
                 aac_user_id=aac_user_id,
@@ -10653,10 +13015,11 @@ async def get_freestyle_word_options(
     logging.warning(f"DEBUG Freestyle API - Received request: context='{request.context}', source_page='{request.source_page}', is_llm_generated={request.is_llm_generated}, originating_button='{request.originating_button_text}', build_space='{request.build_space_text}', max_options='{request.max_options}'")
     
     try:
-        # Load user settings to get FreestyleOptions
+        # Load user settings to get FreestyleOptions and user language
         settings = await load_settings_from_file(account_id, aac_user_id)
         # Use max_options from request if provided, otherwise use user's FreestyleOptions setting
         freestyle_options = request.max_options if request.max_options else settings.get("FreestyleOptions", 20)
+        configured_user_language = _normalize_locale_tag(str(settings.get("userLanguage", "en-US") or "en-US").strip()) or "en-US"
         
         # Load user context
         user_info = await load_firestore_document(
@@ -10671,6 +13034,15 @@ async def get_freestyle_word_options(
             aac_user_id=aac_user_id,
             doc_subpath="info/current_state",
             default_data=DEFAULT_USER_CURRENT.copy()
+        )
+
+        requested_target_locale = _normalize_locale_tag(str(request.target_locale or "").strip())
+        location_override_locale = _normalize_locale_tag(str(user_current.get("locationLanguageOverride") or "").strip())
+        user_language = requested_target_locale or location_override_locale or configured_user_language
+        language_instruction = (
+            f"\n- CRITICAL: You MUST respond ONLY in the language with locale tag '{user_language}'. All words and phrases you return must be in that language. Do not use English unless '{user_language}' is English."
+            if not user_language.lower().startswith("en")
+            else ""
         )
         
         # Create context-aware prompt
@@ -10760,7 +13132,7 @@ Requirements:
 - Make each option distinct and useful for completing communication
 - Consider natural sentence flow and common AAC patterns
 - Treat the live context as a PRIMARY signal for ranking. When the current location, people present, activity, or source page clearly suggest what the user is doing right now, prefer continuations that fit that real situation.
-- If there is meaningful live context, at least half of the options should feel appropriate for that immediate situation unless the existing build space clearly points elsewhere.
+- If there is meaningful live context, at least half of the options should feel appropriate for that immediate situation unless the existing build space clearly points elsewhere.{language_instruction}
 
 CRITICAL: Only provide the NEW words to add, not the full sentence. For example:
 - If build_space_text is "Who is here to play", provide options like "with friends|friendship", "games|games", "outside|outdoors"
@@ -10816,7 +13188,7 @@ Requirements:
 - The keyword should help find relevant images that represent the word
 - If the word itself is the best keyword, use the same word (e.g., "car|car")
 - Make each word distinct and commonly used
-- DO NOT use numbered lists - just provide word|keyword pairs, one per line
+- DO NOT use numbered lists - just provide word|keyword pairs, one per line{language_instruction}
 
 Live context: {live_context_summary}
 Navigation context: {navigation_context_summary}
@@ -10846,7 +13218,7 @@ Requirements:
 - The keyword should help find relevant images that represent the word
 - If the word itself is the best keyword, use the same word (e.g., "car|car")
 - Make each word distinct and commonly used in AAC
-- DO NOT use numbered lists - just provide word|keyword pairs, one per line
+- DO NOT use numbered lists - just provide word|keyword pairs, one per line{language_instruction}
 
 Live context: {live_context_summary}
 Navigation context: {navigation_context_summary}
@@ -10871,7 +13243,7 @@ Requirements:
 - Each option should be useful for starting or building communication
 - Include both basic needs words and descriptive words
 - Make each word distinct and commonly used in AAC
-- DO NOT use numbered lists - just provide word|keyword pairs, one per line
+- DO NOT use numbered lists - just provide word|keyword pairs, one per line{language_instruction}
 
 Live context: {live_context_summary}
 Navigation context: {navigation_context_summary}
@@ -11000,6 +13372,7 @@ Context for word selection: {contextual_info}"""
 
 class FreestyleCleanupRequest(BaseModel):
     text_to_cleanup: str = Field(..., min_length=1, description="Text to clean up and improve")
+    target_locale: Optional[str] = Field(None, description="Optional locale override for cleaned output (e.g., es-US)")
 
 @app.post("/api/freestyle/cleanup-text")
 async def cleanup_freestyle_text(
@@ -11014,6 +13387,26 @@ async def cleanup_freestyle_text(
     account_id = current_ids["account_id"]
     
     try:
+        settings, user_current = await asyncio.gather(
+            load_settings_from_file(account_id, aac_user_id),
+            load_firestore_document(
+                account_id=account_id,
+                aac_user_id=aac_user_id,
+                doc_subpath="info/current_state",
+                default_data=DEFAULT_USER_CURRENT.copy()
+            )
+        )
+
+        configured_user_language = _normalize_locale_tag(str(settings.get("userLanguage", "en-US") or "en-US").strip()) or "en-US"
+        requested_target_locale = _normalize_locale_tag(str(request.target_locale or "").strip())
+        location_override_locale = _normalize_locale_tag(str(user_current.get("locationLanguageOverride") or "").strip())
+        cleanup_locale = requested_target_locale or location_override_locale or configured_user_language
+        language_instruction = (
+            f"\n8. Return the improved text ONLY in locale '{cleanup_locale}'. Do not translate to English unless '{cleanup_locale}' is English."
+            if cleanup_locale
+            else ""
+        )
+
         # Create lightweight user query for the caching function
         user_query_only = f"""Clean up and improve this text while preserving the original meaning and intent. Use my personal context to make the cleanup more personalized and appropriate.
 
@@ -11027,6 +13420,7 @@ Please:
 5. Keep it concise and clear
 6. The phrase should be structured like it is coming from me
 7. Consider my current situation, recent activities, and personal context when cleaning up
+{language_instruction}
 
 For example:
 - "dad beekeeping" → "My dad is a beekeeper"
@@ -14499,6 +16893,114 @@ async def export_story_builder_audio(
         return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
 
 
+@app.post("/api/games/story/{story_id}/export-pdf")
+async def export_story_builder_pdf(
+    story_id: str,
+    request: StoryBuilderExportAudioRequest,
+    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
+):
+    """Export a story to PDF with text and illustration (if available)."""
+    account_id = current_ids["account_id"]
+    aac_user_id = current_ids["aac_user_id"]
+
+    try:
+        from reportlab.lib.pagesizes import letter
+        from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+        from reportlab.lib.units import inch
+        from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image
+        from reportlab.lib.enums import TA_LEFT, TA_CENTER
+        import io
+
+        doc_ref = _story_builder_collection_ref(account_id, aac_user_id).document(story_id)
+        doc = await asyncio.to_thread(doc_ref.get)
+        if not doc.exists:
+            return JSONResponse(content={"success": False, "error": "Story not found"}, status_code=404)
+
+        story_data = doc.to_dict() or {}
+        stored_title = str(story_data.get("title", "Untitled Story")).strip() or "Untitled Story"
+        stored_text = str(story_data.get("story_text", "")).strip()
+        illustration_url = str(story_data.get("illustration_url", "")).strip()
+
+        requested_title = str(request.title or "").strip()
+        safe_title = re.sub(r"\s+", " ", requested_title or stored_title) or "Untitled Story"
+        story_text = str(request.story_text or "").strip() if request.story_text else stored_text
+
+        if not story_text:
+            return JSONResponse(content={"success": False, "error": "Story text is empty"}, status_code=400)
+
+        # Prepare PDF
+        pdf_buffer = io.BytesIO()
+        doc_pdf = SimpleDocTemplate(
+            pdf_buffer,
+            pagesize=letter,
+            leftMargin=0.75*inch,
+            rightMargin=0.75*inch,
+            topMargin=0.75*inch,
+            bottomMargin=0.75*inch
+        )
+
+        story_elements = []
+
+        # Add title
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=24,
+            textColor=(0, 0, 0),
+            spaceAfter=12,
+            alignment=TA_CENTER,
+            fontName='Helvetica-Bold'
+        )
+        story_elements.append(Paragraph(safe_title, title_style))
+        story_elements.append(Spacer(1, 0.2*inch))
+
+        # Fetch and add illustration if available
+        if illustration_url:
+            try:
+                async with aiohttp.ClientSession() as session:
+                    async with session.get(illustration_url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                        if resp.status == 200:
+                            image_data = await resp.read()
+                            image_buffer = io.BytesIO(image_data)
+                            img = Image(image_buffer, width=4.5*inch, height=3*inch)
+                            story_elements.append(img)
+                            story_elements.append(Spacer(1, 0.2*inch))
+            except Exception as img_error:
+                logging.warning(f"Failed to fetch illustration for story {story_id}: {img_error}")
+
+        # Add story text
+        body_style = ParagraphStyle(
+            'CustomBody',
+            parent=styles['BodyText'],
+            fontSize=11,
+            leading=14,
+            alignment=TA_LEFT,
+            spaceAfter=12
+        )
+        # Replace newlines with <br/> for proper paragraph breaks
+        story_text_html = story_text.replace("\n", "<br/><br/>")
+        story_elements.append(Paragraph(story_text_html, body_style))
+
+        # Build PDF
+        await asyncio.to_thread(doc_pdf.build, story_elements)
+
+        safe_filename_base = re.sub(r"[^a-zA-Z0-9_-]+", "_", safe_title).strip("_") or "story"
+        filename = f"{safe_filename_base}.pdf"
+
+        return Response(
+            content=pdf_buffer.getvalue(),
+            media_type="application/pdf",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Cache-Control": "no-store"
+            }
+        )
+    except Exception as e:
+        logging.error(f"Error exporting Story Builder PDF for {story_id}: {e}", exc_info=True)
+        return JSONResponse(content={"success": False, "error": str(e)}, status_code=500)
+
+
 @app.delete("/api/games/story/{story_id}")
 async def delete_story_builder_story(
     story_id: str,
@@ -14823,6 +17325,7 @@ async def cleanup_quotes_endpoint(
 
 class FreestyleCategoryWordsRequest(BaseModel):
     category: str = Field(..., min_length=1, description="Category name for word generation")
+    max_options: Optional[int] = Field(None, description="Override FreestyleOptions for this request", ge=1, le=50)
     build_space_content: Optional[str] = Field("", description="Current build space content for context")
     exclude_words: Optional[List[str]] = Field(default_factory=list, description="Words to exclude from generation")
     current_mood: Optional[str] = Field(None, description="Current user mood to influence word generation")
@@ -14831,6 +17334,46 @@ class FreestyleCategoryWordsRequest(BaseModel):
     source_page: Optional[str] = Field(None, description="Page name the user navigated from")
     is_llm_generated: bool = Field(default=False, description="Whether the source page was LLM-generated")
     originating_button_text: Optional[str] = Field(None, description="Text of the button that originated the freestyle navigation")
+    prefer_generic_fast: bool = Field(default=False, description="When true and no custom prompt is provided, return fast generic category words without LLM generation")
+    target_locale: Optional[str] = Field(None, description="Optional locale override for generated words (e.g., es-US)")
+
+
+def build_category_fallback_word_objects(
+    category: str,
+    desired_count: int,
+    excluded_words: Optional[set[str]] = None,
+    seen_words: Optional[set[str]] = None,
+) -> List[Dict[str, Any]]:
+    """Build category-aware fallback word objects up to the desired count."""
+    target_count = max(1, int(desired_count or 1))
+    excluded = set(excluded_words or set())
+    seen = set(seen_words or set())
+    category_lower = str(category or "").lower()
+
+    supplemental_words = [
+        "I", "you", "we", "me", "my", "your", "our", "this", "that", "here", "there",
+        "want", "need", "like", "help", "go", "come", "see", "look", "talk", "play", "stop",
+        "more", "all", "some", "none", "yes", "no", "please", "okay", "again", "now", "later",
+        "today", "tomorrow", "good", "bad", "happy", "sad", "big", "small", "fast", "slow",
+        "home", "school", "outside", "inside", "friend", "family", "people", "who", "what", "where", "when", "why", "how"
+    ]
+
+    fallback_candidates = list(get_generic_category_words(category))
+    if any(token in category_lower for token in ["home", "general"]):
+        fallback_candidates.extend(supplemental_words)
+
+    result: List[Dict[str, Any]] = []
+    for candidate in fallback_candidates:
+        clean_word = str(candidate or "").strip()
+        clean_lower = clean_word.lower()
+        if not clean_word or clean_lower in excluded or clean_lower in seen:
+            continue
+        seen.add(clean_lower)
+        result.append({"text": clean_word, "keywords": []})
+        if len(result) >= target_count:
+            break
+
+    return result
 
 @app.post("/api/freestyle/category-words")
 async def generate_category_words(
@@ -14840,86 +17383,108 @@ async def generate_category_words(
     """
     Generates word options for a specific category using LLM with user context
     """
-    # TEMPORARY DEBUG: Log the exact category being received
     logging.info(f"CATEGORY_DEBUG: Received category request: '{request.category}'")
-    
-    aac_user_id = current_ids["aac_user_id"]
+
     account_id = current_ids["account_id"]
-    
+    aac_user_id = current_ids["aac_user_id"]
+    request_start_time = time.perf_counter()
+
     try:
-        # Load user settings to get FreestyleOptions and vocabulary level
-        settings = await load_settings_from_file(account_id, aac_user_id)
-        freestyle_options = settings.get("FreestyleOptions", 6)  # Default to 6 if not set
+        settings, user_info, user_current = await asyncio.gather(
+            load_settings_from_file(account_id, aac_user_id),
+            load_firestore_document(
+                account_id=account_id,
+                aac_user_id=aac_user_id,
+                doc_subpath="info/user_narrative",
+                default_data={"narrative": ""}
+            ),
+            load_firestore_document(
+                account_id=account_id,
+                aac_user_id=aac_user_id,
+                doc_subpath="info/current_state",
+                default_data=DEFAULT_USER_CURRENT.copy()
+            )
+        )
+
+        configured_freestyle_options = settings.get("FreestyleOptions", 6)
+        requested_freestyle_options = request.max_options if request.max_options is not None else configured_freestyle_options
+        freestyle_options = max(1, min(50, int(requested_freestyle_options or 6)))
         vocabulary_level = settings.get("vocabularyLevel", "functional")
-        
-        # Detect if this is a NOUN category (objects, animals, places, people)
-        # These categories need specific vocabulary even at emergent level
+        configured_user_language = _normalize_locale_tag(str(settings.get("userLanguage", "en-US") or "en-US").strip()) or "en-US"
+        requested_target_locale = _normalize_locale_tag(str(request.target_locale or "").strip())
+        location_override_locale = _normalize_locale_tag(str(user_current.get("locationLanguageOverride") or "").strip())
+        user_language = requested_target_locale or location_override_locale or configured_user_language
+        language_instruction = (
+            f"\n- CRITICAL: You MUST respond ONLY in the language with locale tag '{user_language}'. All text values must be in that language. Do not use English unless '{user_language}' is English."
+            if not user_language.lower().startswith("en")
+            else ""
+        )
+        prep_elapsed_ms = (time.perf_counter() - request_start_time) * 1000
+
+        excluded_words = {
+            str(word).strip().lower()
+            for word in (request.exclude_words or [])
+            if str(word).strip()
+        }
+
+        if request.prefer_generic_fast and not (request.custom_prompt and str(request.custom_prompt).strip()):
+            generic_words = get_generic_category_words(request.category)
+            final_words: List[Dict[str, Any]] = []
+            seen_words: set[str] = set()
+            for generic_word in generic_words:
+                cleaned_word = str(generic_word).strip()
+                lowered_word = cleaned_word.lower()
+                if not cleaned_word or lowered_word in excluded_words or lowered_word in seen_words:
+                    continue
+                seen_words.add(lowered_word)
+                final_words.append({"text": cleaned_word, "keywords": []})
+                if len(final_words) >= freestyle_options:
+                    break
+
+            total_elapsed_ms = (time.perf_counter() - request_start_time) * 1000
+            logging.info(
+                f"Fast generic category-words response for '{request.category}' with {len(final_words)} words "
+                f"for account {account_id}, user {aac_user_id} in {total_elapsed_ms:.1f}ms"
+            )
+            return JSONResponse(
+                content={"words": final_words},
+                headers={
+                    "X-LLM-Cache": "generic-fast",
+                    "X-LLM-Timing": f"prep={prep_elapsed_ms:.1f};generate=0.0;total={total_elapsed_ms:.1f}",
+                    "X-LLM-Profile": "CATEGORY_WORDS_GENERIC_FAST",
+                },
+            )
+
         category_lower = request.category.lower()
         noun_categories = [
-            'animals', 'pets', 'insects', 'reptiles', 'birds', 'fish', 'wild',
+            'animals', 'pets', 'insects', 'reptiles', 'birds', 'fish', 'wild', 'dinosaur', 'dinosaurs',
             'food', 'drink', 'fruit', 'vegetable', 'snack', 'meal',
             'people', 'family', 'friends', 'person',
             'places', 'location', 'room', 'building',
             'things', 'objects', 'items', 'toys', 'games', 'tools', 'vehicles',
+            'science', 'space', 'planet', 'planets', 'imaginary', 'fantasy', 'mythical',
             'body parts', 'clothes', 'technology', 'furniture', 'school', 'work',
             'outside', 'nature', 'sports', 'hobbies', 'hardware', 'transportation',
             'money', 'shopping', 'entertainment', 'movies', 'tv', 'music', 'books'
         ]
+        adjective_only_categories = [
+            'rating', 'emotions', 'touch', 'sight', 'taste', 'color', 'size',
+            'shape', 'age', 'smell', 'character', 'temperature', 'sound'
+        ]
         is_noun_category = any(noun_cat in category_lower for noun_cat in noun_categories)
-        
-        # Get vocabulary level instruction - use relaxed version for noun categories
-        if is_noun_category:
-            # For noun categories, use lighter vocabulary constraints
-            # Users need specific nouns even at emergent level (e.g., "butterfly" not "pretty bug")
-            vocab_instruction = f"""VOCABULARY GUIDANCE for {vocabulary_level.upper()} level:
-While maintaining a {vocabulary_level} level approach, prioritize SPECIFIC NOUNS over generic descriptions.
-- Generate concrete, specific names rather than descriptive phrases
-- It's better to use a specific noun (e.g., "butterfly", "grasshopper") than a vague description (e.g., "pretty bug", "jumping bug")
-- Images will help users understand specific nouns even if the word is advanced
-- Focus on commonly known items within this category
-"""
-        else:
-            # For non-noun categories (adjectives, actions, etc.), use full vocabulary constraints
-            vocab_instruction = get_vocabulary_level_instruction(vocabulary_level)
-        
-        # Load user context for better word generation
-        user_info = await load_firestore_document(
-            account_id=account_id,
-            aac_user_id=aac_user_id,
-            doc_subpath="info/user_narrative",
-            default_data={"narrative": ""}
-        )
-        
-        user_current = await load_firestore_document(
-            account_id=account_id,
-            aac_user_id=aac_user_id,
-            doc_subpath="info/current_state",
-            default_data=DEFAULT_USER_CURRENT.copy()
-        )
-        
-        # Build exclude words clause
-        exclude_clause = ""
-        if request.exclude_words:
-            exclude_words_str = ", ".join(request.exclude_words)
-            exclude_clause = f" Do not include these words that were already shown: {exclude_words_str}."
-        
-        # Build context clause
-        context_clause = ""
-        if request.build_space_content:
-            context_clause = f" Current message being built: '{request.build_space_content}'."
-        
-        # Get comprehensive user context
+        is_adjective_category = any(adj_cat in category_lower for adj_cat in adjective_only_categories)
+
         user_context_parts = []
         if user_info.get("narrative"):
-            user_context_parts.append(f"User info: {user_info['narrative']}")
+            user_context_parts.append(f"user={user_info['narrative']}")
         if user_current.get("location"):
-            user_context_parts.append(f"Current location: {user_current['location']}")
+            user_context_parts.append(f"location={user_current['location']}")
         if user_current.get("people"):
-            user_context_parts.append(f"People present: {user_current['people']}")
+            user_context_parts.append(f"people={user_current['people']}")
         if user_current.get("activity"):
-            user_context_parts.append(f"Current activity: {user_current['activity']}")
-            
-        user_context = " | ".join(user_context_parts) if user_context_parts else "General conversation"
+            user_context_parts.append(f"activity={user_current['activity']}")
+        user_context = " | ".join(user_context_parts) if user_context_parts else "general"
+
         live_context_summary = ", ".join(
             part for part in [
                 f"location={user_current.get('location')}" if user_current.get('location') else "",
@@ -14932,438 +17497,327 @@ While maintaining a {vocabulary_level} level approach, prioritize SPECIFIC NOUNS
         navigation_context = ""
         if request.context and request.source_page:
             if request.is_llm_generated:
-                navigation_context = f"Coming from LLM-generated page '{request.source_page}' with context: {request.context}"
+                navigation_context = f"page={request.source_page};context={request.context};origin=llm"
             else:
-                navigation_context = f"Coming from page '{request.source_page}' with topic: {request.context}"
+                navigation_context = f"page={request.source_page};topic={request.context}"
         elif request.source_page and request.source_page.lower() not in ('home', 'unknownpage', ''):
-            navigation_context = f"Coming from page '{request.source_page}'"
+            navigation_context = f"page={request.source_page}"
             if request.originating_button_text:
-                navigation_context += f" (via button: {request.originating_button_text})"
+                navigation_context += f";button={request.originating_button_text}"
         elif request.originating_button_text:
-            navigation_context = f"Coming from button: {request.originating_button_text}"
-        
-        # Detect if this is an adjective-only category (descriptive attributes)
-        category_lower = request.category.lower()
-        adjective_only_categories = [
-            'rating', 'emotions', 'touch', 'sight', 'taste', 'color', 'size', 
-            'shape', 'age', 'smell', 'character', 'temperature', 'sound'
-        ]
-        is_adjective_category = any(adj_cat in category_lower for adj_cat in adjective_only_categories)
-        
-        # Build adjective-only constraint if needed
-        adjective_constraint = ""
-        if is_adjective_category:
-            adjective_constraint = """
-CRITICAL CONSTRAINT - ADJECTIVES ONLY:
-- Generate ONLY single adjectives or adjective phrases (1-2 words maximum)
-- Do NOT include nouns in your responses
-- Do NOT include verbs in your responses  
-- Do NOT combine adjectives with nouns (e.g., "good" NOT "good food", "big" NOT "big house")
-- Examples of CORRECT responses: "good", "bad", "happy", "soft", "bright", "hot", "large"
-- Examples of INCORRECT responses: "good time", "bad day", "happy person", "soft pillow"
-"""
-        
-        # Add mood context only if semantically relevant to the category
+            navigation_context = f"button={request.originating_button_text}"
+
         mood_context = ""
         if request.current_mood and request.current_mood != 'none':
-            # Only apply mood context for categories that are inherently about emotions/feelings
-            # Avoid applying mood to descriptive categories (like "positive adjectives" which describe objects, not feelings)
             mood_relevant_categories = [
-                'feeling', 'emotion', 'mood', 'how i feel', 'my feelings', 
+                'feeling', 'emotion', 'mood', 'how i feel', 'my feelings',
                 'emotional', 'mental state', 'how are you'
             ]
-            
-            # Check if this category is actually about the user's emotional state
-            is_mood_relevant = any(mood_keyword in category_lower for mood_keyword in mood_relevant_categories)
-            
-            if is_mood_relevant:
-                mood_context = f" The user is currently feeling {request.current_mood}, so prioritize words that match this emotional state."
-            # For non-mood categories, don't inject mood context as it can interfere with specific category requirements
-        
-        # Create the prompt - use custom prompt if provided, otherwise use general template
-        if request.custom_prompt:
-            logging.info(f"DEBUG: Using custom prompt for category '{request.category}': {request.custom_prompt[:50]}...")
-            # Custom prompt takes priority - use it directly with minimal server additions
-            # IMPORTANT: Do NOT inject mood_context here as it overrides the custom prompt's intent
-            
-            prompt = f"""{vocab_instruction}
+            if any(mood_keyword in category_lower for mood_keyword in mood_relevant_categories):
+                mood_context = f"mood={request.current_mood}"
 
-TASK: Generate words based on the following specific instructions.
-            
-INSTRUCTIONS:
-{request.custom_prompt}
-{adjective_constraint}
+        vocab_instruction = (
+            f"Vocab level: {vocabulary_level}. Use specific nouns only."
+            if is_noun_category
+            else f"Vocab level: {vocabulary_level}. Use common everyday AAC-friendly words."
+        )
+        adjective_constraint = "Adjectives only. No nouns or verbs." if is_adjective_category else ""
+        noun_constraint = "Category members only. No parts, habitats, accessories, or related objects." if is_noun_category else ""
+        instruction_text = str(request.custom_prompt or f"Generate useful AAC words for category '{request.category}'.").strip()
+        build_space_text = str(request.build_space_content or "").strip()
+        exclude_words_text = ", ".join(sorted(excluded_words)) if excluded_words else "none"
 
-AVAILABLE CONTEXT:
-- User context: {user_context}
-{f"- Navigation context: {navigation_context}" if navigation_context else ""}
+        cache_payload = {
+            "category": request.category,
+            "build_space": build_space_text,
+            "exclude": sorted(excluded_words),
+            "target_locale": user_language,
+            "current_mood": request.current_mood or "",
+            "custom_prompt": instruction_text,
+            "context": request.context or "",
+            "source_page": request.source_page or "",
+            "originating_button_text": request.originating_button_text or "",
+            "is_llm_generated": bool(request.is_llm_generated),
+            "freestyle_options": freestyle_options,
+            "vocabulary_level": vocabulary_level,
+            "noun_only": is_noun_category,
+            "adjective_only": is_adjective_category,
+        }
+        quick_cache_key = (
+            f"{account_id}|{aac_user_id}|cw|"
+            f"{hashlib.sha1(json.dumps(cache_payload, sort_keys=True).encode('utf-8')).hexdigest()[:24]}"
+        )
 
-CONSTRAINTS:
-- You MUST follow all "Do not" or "Exclude" instructions in the prompt above.
-- Provide exactly {freestyle_options} words or short phrases (1-3 words each).
-- STRICTLY ADHERE to the user's instructions.
-- PRIORITIZE common, everyday conversational words. Avoid complex, obscure, or overly unique words (e.g., use "loud" instead of "cacophonous").
-- Do NOT include mood or emotion words (like "happy", "sad", "melancholy") unless the instructions specifically ask for feelings. Focus on describing the object, event, or experience itself.
-- Treat current location, people present, activity, and the page/button the user came from as first-class ranking signals when they semantically fit the requested category.
-- If the live context clearly matches the category, bias the list toward words that are useful right now instead of generic category fillers.
-{context_clause}
-{exclude_clause}
+        now_ts = time.time()
+        if len(category_words_quick_response_cache) > 600:
+            expired_keys = [
+                key
+                for key, value in category_words_quick_response_cache.items()
+                if (now_ts - float(value.get("created_at", 0))) >= CATEGORY_WORDS_QUICK_RESPONSE_CACHE_TTL_SECONDS
+            ]
+            for key in expired_keys:
+                category_words_quick_response_cache.pop(key, None)
 
-FORMAT:
-- word|keyword (one per line)
-- No numbering, no headers.
-- If the word itself is the best keyword, use the same word (e.g., "car|car")"""
-        else:
-            # Use general template for categories without specific instructions
-            prompt = f"""{vocab_instruction}
+        cached_response_entry = category_words_quick_response_cache.get(quick_cache_key)
+        if cached_response_entry and (now_ts - float(cached_response_entry.get("created_at", 0))) < CATEGORY_WORDS_QUICK_RESPONSE_CACHE_TTL_SECONDS:
+            cached_words = copy.deepcopy(cached_response_entry.get("response", []))
+            total_elapsed_ms = (time.perf_counter() - request_start_time) * 1000
+            logging.info(
+                f"⚡ /api/freestyle/category-words quick-cache HIT for {account_id}/{aac_user_id} "
+                f"key={quick_cache_key[-24:]} in {total_elapsed_ms:.1f}ms"
+            )
+            return JSONResponse(
+                content={"words": cached_words},
+                headers={
+                    "X-LLM-Cache": "quick-hit",
+                    "X-LLM-Timing": f"prep={prep_elapsed_ms:.1f};generate=0.0;total={total_elapsed_ms:.1f}",
+                    "X-LLM-Profile": "CATEGORY_WORDS_JSON",
+                },
+            )
 
-Generate {freestyle_options} words or short phrases for the category '{request.category}'.{mood_context}{context_clause}{exclude_clause}
+        estimated_max_output_tokens = min(768, max(220, freestyle_options * 28 + 120))
+        temperature_value = 0.35 if is_noun_category else 0.5
+        generation_config = {
+            "response_mime_type": "application/json",
+            "temperature": temperature_value,
+            "max_output_tokens": estimated_max_output_tokens,
+        }
 
-You are helping someone communicate by providing words that fit the category '{request.category}'. Use the user context below to personalize your suggestions, but ONLY when the personal information semantically fits the category type.
+        full_prompt = f"""{vocab_instruction}
+Generate AAC word options.
+Return ONLY a valid JSON array with exactly {freestyle_options} objects.
+Each object must have:
+- text: a 1-3 word AAC-friendly option
+- keywords: an array of 0-3 short image-search hints
 
+Category: {request.category}
+Instruction: {instruction_text}
 User context: {user_context}
-{adjective_constraint}
-
-DECISION FRAMEWORK for using personal context:
-- For SEMANTIC categories (adjectives, emotions, actions, descriptions): Use personal context to choose which appropriate words to prioritize, but don't include personal nouns that don't fit the semantic type
-- For OBJECT categories (animals, food, places, people): Personal preferences can be included as objects (e.g., user's favorite restaurant for "places")
-- For ABSTRACT categories (feelings, activities): Personal context helps choose relevant options from the category
-
-EXAMPLES of appropriate personalization:
-- "Positive adjectives" + user likes Disney → "magical, wonderful, exciting" (Disney-inspired adjectives, not "Disney" itself)
-- "Animals" + user likes dogs → include "puppy, retriever, beagle" (specific dog types)
-- "Food" + user likes Italian → "pizza, pasta, gelato" (actual Italian foods)
-Requirements:
-- Provide exactly {freestyle_options} words or short phrases (1-3 words each)
-- ALL words must semantically belong to the category type '{request.category}'
-- PRIORITIZE common, everyday conversational words. Avoid complex, obscure, or overly unique words.
-- Do NOT include mood or emotion words unless the category is explicitly about feelings.
-- Use current location, people present, activity, and page/button context as first-class ranking signals when they fit the category.
-- If the live context clearly matches the category, bias the list toward words that are useful in the immediate situation instead of generic category members.
-- Use personal context to choose the most relevant and useful words from the category
-- Words should be commonly used and appropriate for AAC communication
-- For each word, provide a related keyword for image searching
-- Format: "word|keyword" (e.g., "butterfly|insect", "snake|reptile", "gecko|lizard")
-- The keyword should be a single word that would help find relevant images
-- If the word itself is the best keyword, use the same word (e.g., "car|car")
-- DO NOT use numbered lists (1., 2., etc.) - just provide the words one per line
-- DO NOT include explanatory text or headers - only the word|keyword pairs
-
 Live context: {live_context_summary}
-Navigation context: {navigation_context if navigation_context else 'none'}
+Navigation context: {navigation_context or 'none'}
+Current message: {build_space_text or 'none'}
+Exclude: {exclude_words_text}
+{mood_context}
+{adjective_constraint}
+{noun_constraint}
 
-Category: {request.category}"""
+Rules:
+- Use common, useful, everyday AAC vocabulary
+- Stay tightly on the requested category
+- No markdown or commentary{language_instruction}
 
-        # Generate words using LLM
-        words_response = await _generate_gemini_content_with_fallback(prompt, None, account_id, aac_user_id)
-        
-        # Debug logging for AI response
-        logging.info(f"DEBUG: Category '{request.category}' - AI response length: {len(words_response) if words_response else 0}")
-        if words_response:
-            logging.info(f"DEBUG: Category '{request.category}' - AI response preview: {words_response[:200]}...")
-            logging.info(f"DEBUG: Category '{request.category}' - Full AI response: {words_response}")
-        else:
-            logging.info(f"DEBUG: Category '{request.category}' - AI response was empty/None")
-        
-        # Parse the response into individual words with keywords
-        words = []
-        if words_response:
-            lines = words_response.strip().split('\n')
-            for line in lines:
-                # Clean the line: remove numbers, bullets, quotes, etc.
-                clean_line = line.strip()
-                # Remove numbered list formatting (1., 2., etc.)
-                import re
-                clean_line = re.sub(r'^\d+\.?\s*', '', clean_line)
-                # Remove bullet points and other formatting
-                clean_line = clean_line.strip('-').strip('*').strip('•').strip().strip('"').strip("'")
-                
-                if '|' in clean_line:
-                    # Parse word|keyword format
-                    parts = clean_line.split('|', 1)
-                    word = parts[0].strip()
-                    keyword = parts[1].strip() if len(parts) > 1 else word
-                    
-                    if word and len(word.split()) <= 3:  # Allow words and short phrases (1-3 words)
-                        words.append({
-                            "text": word,
-                            "keywords": [keyword] if keyword != word else []
-                        })
-                else:
-                    # Fallback for lines without keyword format
-                    word = clean_line
-                    if word and len(word.split()) <= 3:  # Allow words and short phrases (1-3 words)
-                        words.append({
-                            "text": word,
-                            "keywords": []
-                        })
-        
-        # Ensure we have the right number of words
-        if len(words) < freestyle_options:
-            # If we don't have enough, pad with generic words for the category
-            logging.info(f"DEBUG: Category '{request.category}' - Only got {len(words)} words from AI, padding with fallback words")
-            generic_words = get_generic_category_words(request.category)
-            existing_word_texts_lower = [w.get("text", w).lower() if isinstance(w, dict) else w.lower() for w in words]
-            
-            for generic_word in generic_words:
-                # Case-insensitive check to prevent duplicates
-                if (generic_word.lower() not in existing_word_texts_lower and 
-                    generic_word.lower() not in [w.lower() for w in request.exclude_words]):
-                    words.append({
-                        "text": generic_word,
+Example:
+[{{"text":"park","keywords":["outside"]}},{{"text":"school","keywords":["building"]}}]"""
+
+        user_query_only = f"""Category={request.category}
+Instruction={instruction_text}
+Count={freestyle_options}
+Live={live_context_summary}
+Navigation={navigation_context or 'none'}
+Current message={build_space_text or 'none'}
+Exclude={exclude_words_text}
+{mood_context}
+{adjective_constraint}
+{noun_constraint}
+Return only JSON array of objects with text and keywords."""
+
+        llm_generate_start_time = time.perf_counter()
+        words_response = await _generate_gemini_content_with_caching(
+            account_id,
+            aac_user_id,
+            full_prompt,
+            generation_config=generation_config,
+            cache_manager=cache_manager,
+            user_query_only=user_query_only,
+        )
+        llm_generate_elapsed_ms = (time.perf_counter() - llm_generate_start_time) * 1000
+        logging.info(
+            f"⏱️ /api/freestyle/category-words generation stage: {llm_generate_elapsed_ms:.1f}ms "
+            f"for {account_id}/{aac_user_id}"
+        )
+
+        import re
+        clean_json_str = str(words_response or "").strip()
+        if not clean_json_str.startswith('['):
+            json_match = re.search(r'\[.*\]', clean_json_str, re.DOTALL)
+            if json_match:
+                clean_json_str = json_match.group(0)
+
+        try:
+            parsed_output = json.loads(clean_json_str) if clean_json_str else []
+        except json.JSONDecodeError:
+            parsed_output = []
+            # Fallback: tolerate non-JSON model text by parsing line-based word|keyword or plain lines.
+            for raw_line in str(words_response or "").splitlines():
+                clean_line = re.sub(r'^\d+\.?\s*', '', str(raw_line).strip()).strip('-').strip('*').strip('•').strip().strip('"').strip("'")
+                if not clean_line:
+                    continue
+                # Ignore bare JSON syntax fragments that should never be interpreted as options.
+                if clean_line in {'[', ']', '{', '}', ',', '},', '],'}:
+                    continue
+
+                text_field_match = re.search(r'"text"\s*:\s*"([^"]+)"', clean_line)
+                if text_field_match:
+                    parsed_output.append({
+                        "text": text_field_match.group(1).strip(),
                         "keywords": []
                     })
-                    existing_word_texts_lower.append(generic_word.lower())  # Update the tracking set
-                    if len(words) >= freestyle_options:
-                        break
-        
-        # Deduplicate words (case-insensitive) to prevent "Please"/"please" duplicates
-        deduplicated_words = []
-        seen_words = set()
-        for word_obj in words:
-            word_text = word_obj.get("text", "").strip()
+                    continue
+
+                if '|' in clean_line:
+                    word_part, keyword_part = clean_line.split('|', 1)
+                    parsed_output.append({
+                        "text": word_part.strip(),
+                        "keywords": [keyword_part.strip()] if keyword_part.strip() else []
+                    })
+                else:
+                    parsed_output.append({"text": clean_line, "keywords": []})
+        if isinstance(parsed_output, dict):
+            parsed_items = (
+                parsed_output.get("words")
+                or parsed_output.get("options")
+                or parsed_output.get("results")
+                or []
+            )
+        elif isinstance(parsed_output, list):
+            parsed_items = parsed_output
+        else:
+            parsed_items = []
+
+        normalized_words: List[Dict[str, Any]] = []
+        seen_words: set[str] = set()
+        for item in parsed_items:
+            if isinstance(item, dict):
+                word_text = str(item.get("text") or item.get("word") or item.get("option") or item.get("summary") or "").strip()
+                raw_keywords = item.get("keywords") or []
+            else:
+                word_text = str(item or "").strip()
+                raw_keywords = []
+
+            word_text = re.sub(r'^\d+\.?\s*', '', word_text).strip().strip('"').strip("'")
             word_lower = word_text.lower()
-            if word_lower not in seen_words:
-                seen_words.add(word_lower)
-                deduplicated_words.append(word_obj)
-        
-        # Trim to exact number requested
-        final_words = deduplicated_words[:freestyle_options]
-        
-        logging.info(f"Generated {len(words)} words (deduplicated to {len(final_words)}) for category '{request.category}' for account {account_id}, user {aac_user_id}")
-        return JSONResponse(content={"words": final_words})
-        
+            if not word_text or len(word_text.split()) > 3 or word_lower in excluded_words or word_lower in seen_words:
+                continue
+            # Reject non-word JSON fragments (for example "[", "{", "text:").
+            if re.fullmatch(r'[\[\]\{\}:,]+', word_text):
+                continue
+            if not re.search(r'[a-zA-Z0-9]', word_text):
+                continue
+
+            keyword_list = raw_keywords if isinstance(raw_keywords, list) else [raw_keywords]
+            normalized_keywords: List[str] = []
+            seen_keywords: set[str] = set()
+            for keyword in keyword_list:
+                clean_keyword = str(keyword or "").strip()
+                clean_keyword_lower = clean_keyword.lower()
+                if not clean_keyword or clean_keyword_lower == word_lower or clean_keyword_lower in seen_keywords:
+                    continue
+                seen_keywords.add(clean_keyword_lower)
+                normalized_keywords.append(clean_keyword)
+                if len(normalized_keywords) >= 3:
+                    break
+
+            seen_words.add(word_lower)
+            normalized_words.append({
+                "text": word_text,
+                "keywords": normalized_keywords,
+            })
+            if len(normalized_words) >= freestyle_options:
+                break
+
+        if len(normalized_words) < freestyle_options:
+            logging.info(
+                f"DEBUG: Category '{request.category}' - Only got {len(normalized_words)} words from AI, padding with fallback words"
+            )
+            normalized_words.extend(
+                build_category_fallback_word_objects(
+                    request.category,
+                    freestyle_options - len(normalized_words),
+                    excluded_words=excluded_words,
+                    seen_words=seen_words,
+                )
+            )
+
+        final_words = normalized_words[:freestyle_options]
+        category_words_quick_response_cache[quick_cache_key] = {
+            "created_at": time.time(),
+            "response": copy.deepcopy(final_words),
+        }
+
+        total_elapsed_ms = (time.perf_counter() - request_start_time) * 1000
+        logging.info(
+            f"⏱️ /api/freestyle/category-words total: {total_elapsed_ms:.1f}ms "
+            f"(prep={prep_elapsed_ms:.1f}ms, generate={llm_generate_elapsed_ms:.1f}ms) "
+            f"for {account_id}/{aac_user_id}"
+        )
+        return JSONResponse(
+            content={"words": final_words},
+            headers={
+                "X-LLM-Cache": "quick-store",
+                "X-LLM-Timing": f"prep={prep_elapsed_ms:.1f};generate={llm_generate_elapsed_ms:.1f};total={total_elapsed_ms:.1f}",
+                "X-LLM-Profile": "CATEGORY_WORDS_JSON",
+            },
+        )
+
     except Exception as e:
         logging.error(f"Error generating category words for account {account_id}, user {aac_user_id}: {e}", exc_info=True)
-        return JSONResponse(content={"words": []})
+        fallback_target_count = max(1, int(locals().get("freestyle_options", 29) or 29))
+        fallback_words = build_category_fallback_word_objects(request.category, fallback_target_count)
+        return JSONResponse(
+            content={"words": fallback_words},
+            headers={
+                "X-LLM-Cache": "error-fallback",
+                "X-LLM-Timing": "prep=0.0;generate=0.0;total=0.0",
+                "X-LLM-Profile": "CATEGORY_WORDS_ERROR_FALLBACK",
+                "X-LLM-Error": type(e).__name__,
+            },
+        )
+
 
 def get_generic_category_words(category: str) -> List[str]:
-    """Get generic fallback words for a category with flexible matching"""
-    
-    # Log the exact category name for debugging
-    logging.info(f"DEBUG: get_generic_category_words called with category: '{category}'")
-    
-    # Flexible category mapping - check for keywords in category name
-    category_lower = category.lower()
-    
-    # Insect-related categories (most specific first)
-    if any(keyword in category_lower for keyword in ['insect', 'bug', 'beetles', 'butterfly', 'bee']):
-        logging.info(f"DEBUG: Matched insects category for '{category}'")
+    """Get generic fallback words for a category with flexible matching."""
+    category_lower = str(category or "").lower()
+
+    if any(keyword in category_lower for keyword in ['insect', 'bug', 'beetle', 'butterfly', 'bee']):
         return ["butterfly", "bee", "ant", "spider", "ladybug", "grasshopper", "beetle", "moth"]
-    
-    # Reptile-related categories
     if any(keyword in category_lower for keyword in ['reptile', 'snake', 'lizard', 'turtle']):
-        logging.info(f"DEBUG: Matched reptiles category for '{category}'")
         return ["snake", "lizard", "turtle", "gecko", "iguana", "chameleon", "alligator", "crocodile"]
-    
-    # Fish and sea life
     if any(keyword in category_lower for keyword in ['fish', 'sea', 'ocean', 'marine', 'aquatic']):
-        logging.info(f"DEBUG: Matched fish/sea category for '{category}'")
         return ["fish", "shark", "whale", "dolphin", "octopus", "crab", "lobster", "seahorse"]
-    
-    # Birds
-    if any(keyword in category_lower for keyword in ['bird', 'flying', 'wings', 'feather']):
-        logging.info(f"DEBUG: Matched birds category for '{category}'")
-        return ["bird", "eagle", "robin", "owl", "parrot", "penguin", "chicken", "duck"]
-    
-    # Wild animals
-    if any(keyword in category_lower for keyword in ['wild', 'jungle', 'safari', 'zoo']):
-        logging.info(f"DEBUG: Matched wild animals category for '{category}'")
-        return ["lion", "tiger", "elephant", "giraffe", "zebra", "monkey", "bear", "deer"]
-    
-    # Exact match fallback for common categories
-    generic_words = {
-        "People": ["mom", "dad", "friend", "teacher", "doctor", "family"],
-        "Places": ["home", "school", "store", "park", "hospital", "library"],
-        "Animals": ["dog", "cat", "bird", "fish", "horse", "rabbit"],
-        "Insects": ["butterfly", "bee", "ant", "spider", "ladybug", "grasshopper"],
-        "Reptiles": ["snake", "lizard", "turtle", "gecko", "iguana", "chameleon"],
-        "Around the House": ["kitchen", "bedroom", "bathroom", "living", "garage", "yard"],
-        "In the Room": ["chair", "table", "bed", "lamp", "window", "door"],
-        "General things": ["book", "phone", "keys", "bag", "water", "food"],
-        "Actions": ["go", "come", "eat", "drink", "sleep", "play"],
-        "Feelings & Emotions": ["happy", "sad", "angry", "excited", "tired", "scared"],
-        "Questions & Comments": ["what", "where", "when", "how", "why", "please"],
-        "Times and Dates": ["today", "tomorrow", "morning", "night", "week", "month"],
-        "Activities & Hobbies": ["read", "music", "games", "sports", "art", "cooking"],
-        "Medical & Health": ["medicine", "doctor", "hurt", "sick", "better", "hospital"],
-        "Food & Drinks": ["water", "milk", "bread", "apple", "sandwich", "juice"],
-        "Colors & Descriptions": ["red", "blue", "big", "small", "hot", "cold"],
-        "Numbers & Quantities": ["one", "two", "many", "few", "more", "less"],
-        "School & Learning": ["book", "pencil", "teacher", "class", "homework", "test"],
-        "Transportation": ["car", "bus", "train", "bike", "walk", "plane"],
-        "Weather": ["sunny", "rainy", "cold", "hot", "cloudy", "windy"],
-        "Technology": ["computer", "phone", "tablet", "internet", "email", "game"],
-        "Sports & Games": ["ball", "team", "play", "win", "run", "jump"]
-    }
-    
-    # Try exact match first
-    exact_match = generic_words.get(category)
-    if exact_match:
-        logging.info(f"DEBUG: Found exact match for '{category}'")
-        return exact_match
-    
-    # Log when falling back to generic words
-    logging.info(f"DEBUG: No match found for '{category}', using generic fallback")
-    return ["thing", "stuff", "item", "object", "something", "anything"]
+    if any(keyword in category_lower for keyword in ['bird', 'flying', 'wing', 'feather']):
+        return ["bird", "eagle", "duck", "owl", "parrot", "robin", "penguin", "sparrow"]
+    if any(keyword in category_lower for keyword in ['dinosaur', 'dino']):
+        return [
+            "T-rex", "triceratops", "stegosaurus", "brontosaurus", "velociraptor", "spinosaurus", "ankylosaurus", "brachiosaurus",
+            "diplodocus", "allosaurus", "parasaurolophus", "iguanodon", "carnotaurus", "pachycephalosaurus", "oviraptor", "gallimimus",
+            "microraptor", "deinonychus", "utahraptor", "compsognathus", "dilophosaurus", "acrocanthosaurus", "ceratosaurus", "argentinosaurus",
+            "apatosaurus", "megalosaurus", "hadrosaur", "sauropod", "theropod", "herbivore dinosaur", "carnivore dinosaur", "dinosaur egg",
+            "fossil", "fossil bone", "skeleton", "extinct", "prehistoric", "jurassic", "cretaceous", "triassic"
+        ]
+    if any(keyword in category_lower for keyword in ['animal', 'pet', 'wild']):
+        return ["dog", "cat", "horse", "bear", "lion", "tiger", "rabbit", "elephant"]
+    if any(keyword in category_lower for keyword in ['people', 'person', 'family', 'friend']):
+        return ["mom", "dad", "friend", "teacher", "baby", "doctor", "brother", "sister"]
+    if any(keyword in category_lower for keyword in ['place', 'location', 'room', 'building']):
+        return ["home", "school", "park", "store", "restaurant", "hospital", "church", "library"]
+    if any(keyword in category_lower for keyword in ['thing', 'object', 'item']):
+        return ["book", "chair", "phone", "toy", "ball", "computer", "blanket", "backpack"]
+    if any(keyword in category_lower for keyword in ['food', 'meal', 'snack']):
+        return ["pizza", "apple", "sandwich", "pasta", "cookie", "banana", "chicken", "fries"]
+    if any(keyword in category_lower for keyword in ['drink', 'beverage']):
+        return ["water", "juice", "milk", "soda", "coffee", "tea", "smoothie", "lemonade"]
+    if any(keyword in category_lower for keyword in ['action', 'verb']):
+        return ["go", "eat", "play", "help", "want", "need", "stop", "look"]
+    if any(keyword in category_lower for keyword in ['describe', 'adjective', 'color', 'size', 'shape']):
+        return ["big", "small", "red", "blue", "round", "soft", "fast", "hot"]
+    if any(keyword in category_lower for keyword in ['number', 'count']):
+        return ["one", "two", "three", "four", "five", "more", "all", "none"]
+    if any(keyword in category_lower for keyword in ['weather']):
+        return ["sunny", "rain", "cloud", "snow", "windy", "storm", "hot", "cold"]
+    if any(keyword in category_lower for keyword in ['date', 'time', 'calendar']):
+        return ["today", "tomorrow", "morning", "night", "Monday", "birthday", "weekend", "later"]
 
-
-# --- ADMIN ENDPOINTS ---
-
-class CopyProfilesBetweenAccountsRequest(BaseModel):
-    source_email: str
-    target_email: str
-    admin_password: str = "admin123"  # Simple password protection
-
-@app.post("/api/admin/copy-profiles-between-accounts")
-async def copy_profiles_between_accounts(request: CopyProfilesBetweenAccountsRequest):
-    """
-    Admin endpoint to copy all AAC user profiles from one Firebase account to another.
-    This is specifically for setting up the demo readonly account.
-    """
-    
-    # Simple password protection
-    if request.admin_password != "admin123":
-        raise HTTPException(status_code=403, detail="Invalid admin password")
-    
-    try:
-        logging.info(f"Starting profile copy from {request.source_email} to {request.target_email}")
-        
-        # Get account IDs from Firebase Auth
-        source_account_id = None
-        target_account_id = None
-        
-        try:
-            source_user_record = auth.get_user_by_email(request.source_email)
-            source_account_id = source_user_record.uid
-            logging.info(f"Found source account ID: {source_account_id}")
-        except auth.UserNotFoundError:
-            raise HTTPException(status_code=404, detail=f"Source email {request.source_email} not found")
-        
-        try:
-            target_user_record = auth.get_user_by_email(request.target_email)
-            target_account_id = target_user_record.uid
-            logging.info(f"Found target account ID: {target_account_id}")
-        except auth.UserNotFoundError:
-            raise HTTPException(status_code=404, detail=f"Target email {request.target_email} not found")
-        
-        # Get all users from source account
-        source_users_ref = firestore_db.collection(FIRESTORE_ACCOUNTS_COLLECTION).document(source_account_id).collection(FIRESTORE_ACCOUNT_USERS_SUBCOLLECTION)
-        source_users_docs = await asyncio.to_thread(source_users_ref.stream)
-        
-        source_users = []
-        for doc in source_users_docs:
-            user_data = doc.to_dict()
-            user_data['aac_user_id'] = doc.id
-            source_users.append(user_data)
-        
-        if not source_users:
-            raise HTTPException(status_code=404, detail=f"No profiles found in source account {request.source_email}")
-        
-        logging.info(f"Found {len(source_users)} profiles to copy")
-        
-        # Check existing users in target account and clean them up
-        target_users_ref = firestore_db.collection(FIRESTORE_ACCOUNTS_COLLECTION).document(target_account_id).collection(FIRESTORE_ACCOUNT_USERS_SUBCOLLECTION)
-        existing_target_docs = await asyncio.to_thread(target_users_ref.stream)
-        existing_target_users = list(existing_target_docs)
-        existing_count = len(existing_target_users)
-        
-        # Clean up existing profiles in target account to avoid duplicates
-        if existing_count > 0:
-            logging.info(f"Found {existing_count} existing profiles in target account. Cleaning up before copying...")
-            
-            for existing_doc in existing_target_users:
-                try:
-                    # Delete all user data subcollections first
-                    existing_user_id = existing_doc.id
-                    
-                    # Delete user data subcollections
-                    subcollections = ['info', 'settings', 'favorites', 'threads', 'birthdays', 'user_current', 'user_narrative']
-                    for subcoll in subcollections:
-                        subcoll_ref = firestore_db.collection(FIRESTORE_ACCOUNTS_COLLECTION).document(target_account_id).collection(FIRESTORE_ACCOUNT_USERS_SUBCOLLECTION).document(existing_user_id).collection(subcoll)
-                        docs = await asyncio.to_thread(subcoll_ref.stream)
-                        for doc in docs:
-                            await asyncio.to_thread(doc.reference.delete)
-                    
-                    # Delete the user document itself
-                    await asyncio.to_thread(existing_doc.reference.delete)
-                    logging.info(f"Deleted existing profile: {existing_doc.to_dict().get('display_name', existing_user_id)}")
-                    
-                except Exception as e:
-                    logging.error(f"Error deleting existing profile {existing_user_id}: {e}")
-            
-            logging.info(f"Cleanup completed. Removed {existing_count} existing profiles.")
-        else:
-            logging.info("No existing profiles found in target account.")
-        
-        copied_profiles = []
-        failed_profiles = []
-        
-        # Copy each user
-        for user in source_users:
-            display_name = user.get('display_name', 'Unknown')
-            source_user_id = user['aac_user_id']
-            
-            try:
-                logging.info(f"Copying profile: {display_name}")
-                
-                # Generate new user ID for target account
-                new_user_id = str(uuid.uuid4())
-                
-                # Create user document in target account
-                target_user_ref = firestore_db.collection(FIRESTORE_ACCOUNTS_COLLECTION).document(target_account_id).collection(FIRESTORE_ACCOUNT_USERS_SUBCOLLECTION).document(new_user_id)
-                
-                # Prepare user data (remove old aac_user_id)
-                clean_user_data = {k: v for k, v in user.items() if k != 'aac_user_id'}
-                clean_user_data['created_at'] = dt.now().isoformat()
-                clean_user_data['last_updated'] = dt.now().isoformat()
-                
-                # Set the user document
-                await asyncio.to_thread(target_user_ref.set, clean_user_data)
-                
-                # Copy all user data across accounts
-                await _copy_user_data_cross_account(source_account_id, source_user_id, target_account_id, new_user_id)
-                
-                copied_profiles.append({
-                    "display_name": display_name,
-                    "source_id": source_user_id,
-                    "target_id": new_user_id
-                })
-                
-                logging.info(f"Successfully copied profile: {display_name}")
-                
-            except Exception as e:
-                logging.error(f"Failed to copy profile {display_name}: {e}", exc_info=True)
-                failed_profiles.append({
-                    "display_name": display_name,
-                    "error": str(e)
-                })
-        
-        # Update target account user limit
-        new_user_limit = existing_count + len(copied_profiles) + 2  # +2 for buffer
-        target_account_ref = firestore_db.collection(FIRESTORE_ACCOUNTS_COLLECTION).document(target_account_id)
-        await asyncio.to_thread(target_account_ref.update, {
-            "num_users_allowed": new_user_limit,
-            "last_updated": dt.now().isoformat()
-        })
-        
-        logging.info(f"Profile copy complete. Copied {len(copied_profiles)} profiles, failed {len(failed_profiles)}")
-        
-        return JSONResponse(content={
-            "success": True,
-            "message": f"Successfully copied {len(copied_profiles)} out of {len(source_users)} profiles",
-            "source_email": request.source_email,
-            "target_email": request.target_email,
-            "copied_count": len(copied_profiles),
-            "failed_count": len(failed_profiles),
-            "copied_profiles": copied_profiles,
-            "failed_profiles": failed_profiles,
-            "new_user_limit": new_user_limit
-        })
-        
-    except Exception as e:
-        logging.error(f"Error copying profiles between accounts: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to copy profiles: {str(e)}")
+    return ["more", "help", "go", "stop", "want", "like", "here", "there"]
 
 
 class DebugUserInfoRequest(BaseModel):
@@ -16403,19 +18857,43 @@ async def public_bravo_images_search(
 
 # Missing image logging functions
 def normalize_search_term(term: str) -> str:
-    """Normalize search term for deduplication without stemming/singularizing."""
+    """Normalize search term to base form for deduplication (singular form)"""
     if not term or not isinstance(term, str):
         return term
+        
+    term_lower = term.lower().strip()
+    
+    # Remove common plural endings to get base form
+    if term_lower.endswith('ies') and len(term_lower) > 4:
+        # parties → party, stories → story
+        return term[:-3] + 'y'
+    elif term_lower.endswith('es') and len(term_lower) > 3:
+        # Check if it needs 'es' for pluralization
+        stem = term_lower[:-2]
+        if stem.endswith(('ch', 'sh', 'x', 'z', 's', 'ss')):
+            # boxes → box, dishes → dish
+            return term[:-2]
+        else:
+            # jokes → joke
+            return term[:-1]
+    elif term_lower.endswith('s') and len(term_lower) > 2:
+        # Preserve common singular words that naturally end in 's'
+        # (e.g., calculus, genius, status, lens, bass)
+        singular_s_endings = ('us', 'is', 'ss', 'ns')
+        if term_lower.endswith(singular_s_endings):
+            return term
 
-    # Keep the full original word form (e.g., "thanks" stays "thanks").
-    return re.sub(r"\s+", " ", term.lower().strip())
+        # questions → question, foods → food
+        return term[:-1]
+    
+    return term
 
 async def log_missing_image(search_term: str, search_context: dict = None):
     """Log a missing image to Firestore for permanent tracking"""
     try:
         from datetime import datetime
         
-        # Normalize search term for stable deduplication key (no singularization)
+        # Normalize search term to base form (remove common plural endings)
         normalized_term = normalize_search_term(search_term)
         
         # Create document ID from normalized term
@@ -16466,7 +18944,7 @@ async def log_missing_image(search_term: str, search_context: dict = None):
             
     except Exception as e:
         logging.error(f"❌ Error logging missing image '{search_term}': {e}")
-        raise  # Re-raise so the caller can handle it
+        # Do not re-raise - missing image logging is non-critical and must not 500 the caller
 
 # Redis cache helper functions
 async def clear_image_cache(pattern: str = "bravo_images:*"):
@@ -16592,8 +19070,8 @@ async def browse_images_for_admin(
                     continue
         else:
             # No search term, get all matching images up to limit
-            if limit > 5000:  # Cap at reasonable limit for performance
-                limit = 5000
+            if limit > 20000:  # Cap at reasonable limit for performance
+                limit = 20000
             query = base_query.limit(limit)
             all_docs = await asyncio.to_thread(query.get)
         
@@ -16621,8 +19099,11 @@ async def browse_images_for_admin(
                 "concept": data.get("concept", ""),
                 "tags": data.get("tags", []),
                 "keywords": data.get("keywords", []),
-                "created_at": data.get("created_at"),
-                "preview_url": data.get("image_url", "")
+                "created_at": data.get("created_at") or data.get("updated_at"),
+                "preview_url": data.get("image_url", ""),
+                "aliases": data.get("aliases", []),
+                "localized_tags": data.get("localized_tags", {}),
+                "localized_labels": data.get("localized_labels", {}),
             }
             images.append(admin_data)
         
@@ -16690,6 +19171,72 @@ async def api_update_image_tags(
     except Exception as e:
         logging.error(f"Error in update image tags API: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.put("/api/imagecreator/images/{image_id}/multilingual")
+async def api_update_image_multilingual(
+    image_id: str,
+    payload: Dict = Body(...),
+    token_info: Annotated[Dict[str, str], Depends(verify_admin_user)] = None
+):
+    """Update multilingual metadata for an AAC image: localized_tags, localized_labels, aliases"""
+    try:
+        doc_ref = firestore_db.collection("aac_images").document(image_id)
+        doc = await asyncio.to_thread(doc_ref.get)
+
+        if not doc.exists:
+            raise HTTPException(status_code=404, detail="Image not found")
+
+        update_data: Dict[str, Any] = {}
+
+        # aliases: flat list of alternate search terms
+        if "aliases" in payload:
+            raw_aliases = payload["aliases"]
+            if isinstance(raw_aliases, list):
+                update_data["aliases"] = [str(a).strip() for a in raw_aliases if str(a).strip()]
+            else:
+                update_data["aliases"] = []
+
+        # localized_tags: {locale: [tag, ...]}
+        if "localized_tags" in payload:
+            raw_lt = payload["localized_tags"]
+            normalized_lt: Dict[str, List[str]] = {}
+            if isinstance(raw_lt, dict):
+                for locale_key, tag_list in raw_lt.items():
+                    locale = _normalize_locale_tag(str(locale_key))
+                    if not locale:
+                        continue
+                    if isinstance(tag_list, list):
+                        normalized_lt[locale] = [str(t).strip() for t in tag_list if str(t).strip()]
+            update_data["localized_tags"] = normalized_lt
+
+        # localized_labels: {locale: label_string}
+        if "localized_labels" in payload:
+            raw_ll = payload["localized_labels"]
+            normalized_ll: Dict[str, str] = {}
+            if isinstance(raw_ll, dict):
+                for locale_key, label in raw_ll.items():
+                    locale = _normalize_locale_tag(str(locale_key))
+                    if not locale:
+                        continue
+                    label_str = _sanitize_translated_text(label)
+                    if label_str:
+                        normalized_ll[locale] = label_str
+            update_data["localized_labels"] = normalized_ll
+
+        if not update_data:
+            return {"success": True, "message": "No changes provided"}
+
+        await asyncio.to_thread(doc_ref.update, update_data)
+        logging.info(f"Updated multilingual metadata for image {image_id}: {list(update_data.keys())}")
+
+        return {"success": True, "message": "Multilingual metadata updated successfully"}
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error updating multilingual metadata for image {image_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.delete("/api/admin/images/bulk-delete")
 async def api_bulk_delete_images(
@@ -17904,6 +20451,7 @@ async def button_symbol_search(
     current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)],
     q: str = "",
     keywords: str = "",
+    locale: str = "en-US",
     limit: int = 5
 ):
     """
@@ -17921,6 +20469,50 @@ async def button_symbol_search(
             })
         
         query_lower = q.lower().strip()
+        locale_norm = str(locale or "en-US").strip().lower()
+        locale_base = locale_norm.split('-')[0] if '-' in locale_norm else locale_norm
+
+        # Normalize inflected forms (e.g., "quiero" -> "querer") for locale-aware lookup.
+        normalized_query = query_lower
+        if locale_base and locale_base != "en":
+            try:
+                from aac_inflection_utils import normalize_search_term
+                inflection_normalized = str(normalize_search_term(query_lower, locale_base) or "").strip().lower()
+                if inflection_normalized:
+                    normalized_query = inflection_normalized
+            except Exception as inflection_error:
+                logging.debug(f"Inflection normalization skipped for '{query_lower}' ({locale_base}): {inflection_error}")
+
+        def _allowed_locale_keys():
+            keys = {"en", "en-us", locale_norm, locale_base}
+            return {k for k in keys if k}
+
+        allowed_locale_keys = _allowed_locale_keys()
+
+        def _extract_localized_terms_for_locale(localized_tags_raw, localized_labels_raw):
+            localized_terms = []
+
+            if isinstance(localized_tags_raw, dict):
+                for locale_key, locale_tags in localized_tags_raw.items():
+                    locale_key_norm = str(locale_key or "").strip().lower()
+                    if locale_key_norm not in allowed_locale_keys:
+                        continue
+                    if isinstance(locale_tags, list):
+                        localized_terms.extend([
+                            str(tag).strip().lower()
+                            for tag in locale_tags
+                            if str(tag).strip()
+                        ])
+
+            if isinstance(localized_labels_raw, dict):
+                for locale_key, locale_label in localized_labels_raw.items():
+                    locale_key_norm = str(locale_key or "").strip().lower()
+                    if locale_key_norm not in allowed_locale_keys:
+                        continue
+                    if isinstance(locale_label, str) and locale_label.strip():
+                        localized_terms.append(locale_label.strip().lower())
+
+            return localized_terms
         
         # Process keywords if provided (for LLM-generated content)
         keyword_list = []
@@ -17942,7 +20534,7 @@ async def button_symbol_search(
                 except:
                     pass
         
-        logging.info(f"Symbol search: query='{query_lower}', keywords={keyword_list}")
+        logging.info(f"Symbol search: query='{query_lower}', locale='{locale_norm}', keywords={keyword_list}")
         
         # Semantic mapping for common AAC terms
         semantic_mappings = {
@@ -17978,12 +20570,15 @@ async def button_symbol_search(
         search_terms_for_images = []
         if query_lower:
             search_terms_for_images.append(query_lower)
+        if normalized_query and normalized_query != query_lower:
+            search_terms_for_images.append(normalized_query)
         search_terms_for_images.extend(keyword_list[:3])  # Add up to 3 keywords
         search_terms_for_images = list(dict.fromkeys(search_terms_for_images))  # Remove duplicates
         
         for i, term in enumerate(search_terms_for_images[:3]):  # Check up to 3 terms for images
             try:
-                # Search bravo_images in aac_images collection using multiple case variations like the imagecreator endpoint
+                # Search bravo_images in aac_images collection using precomputed search_terms first,
+                # then legacy tags as fallback.
                 term_variations = [
                     term,                    # Original case
                     term.lower(),            # All lowercase  
@@ -18003,17 +20598,54 @@ async def button_symbol_search(
                 image_docs = []
                 for variation in unique_variations:
                     try:
-                        variation_query = images_ref.where("source", "==", "bravo_images").where("tags", "array_contains", variation).limit(max(20, limit * 5))
+                        variation_lower = variation.lower().strip()
+                        if not variation_lower:
+                            continue
+
+                        # Preferred path: language-friendly array field
+                        variation_query = images_ref.where("search_terms", "array_contains", variation_lower).limit(max(30, limit * 8))
                         variation_docs = list(variation_query.stream())
-                        image_docs.extend(variation_docs)
+                        for d in variation_docs:
+                            data = d.to_dict() or {}
+                            if data.get("source") == "bravo_images":
+                                image_docs.append(d)
+
+                        # Locale-aware fallback path for migrated data where localized tags/labels exist
+                        # but search_terms may be incomplete/stale.
+                        if locale_base and locale_base != "en":
+                            localized_tags_field = f"localized_tags.{locale_base}"
+                            localized_labels_field = f"localized_labels.{locale_base}"
+
+                            localized_tag_query = images_ref.where("source", "==", "bravo_images").where(
+                                localized_tags_field, "array_contains", variation_lower
+                            ).limit(max(20, limit * 5))
+                            image_docs.extend(list(localized_tag_query.stream()))
+
+                            for label_candidate in [variation.strip(), variation_lower]:
+                                if not label_candidate:
+                                    continue
+                                localized_label_query = images_ref.where("source", "==", "bravo_images").where(
+                                    localized_labels_field, "==", label_candidate
+                                ).limit(max(10, limit * 3))
+                                image_docs.extend(list(localized_label_query.stream()))
+
+                        # Legacy fallback path
+                        if not variation_docs:
+                            legacy_query = images_ref.where("source", "==", "bravo_images").where("tags", "array_contains", variation).limit(max(20, limit * 5))
+                            legacy_docs = list(legacy_query.stream())
+                            image_docs.extend(legacy_docs)
                         
                         # Don't stop at first match - collect from all variations for better scoring
                     except Exception as e:
                         logging.debug(f"Query failed for variation '{variation}': {e}")
                         continue
-                # Process all collected docs
+                # Process all collected docs (dedupe by document id first)
+                deduped_docs = {}
+                for d in image_docs:
+                    deduped_docs[d.id] = d
+
                 weight = 1.0 if i == 0 else 0.8
-                for doc in image_docs:
+                for doc in deduped_docs.values():
                     image = doc.to_dict()
                     image_id = doc.id
                     
@@ -18057,6 +20689,16 @@ async def button_symbol_search(
                 logging.debug(f"BravoImages search failed for term '{term}': {e}")
         
         logging.info(f"Found {len(matched_symbols)} BravoImages matches")
+
+        # Fast return path for Tap interface (limit=1): avoid expensive fallback phases
+        if limit <= 1 and matched_symbols:
+            matched_symbols.sort(key=lambda x: x.get('match_score', 0), reverse=True)
+            return JSONResponse(content={
+                "symbols": matched_symbols[:1],
+                "total_found": len(matched_symbols),
+                "query": q,
+                "search_type": "bravo_image_fast"
+            })
         
         # Phase -0.5: Search user's custom images (including profile images)
         account_id = current_ids["account_id"]
@@ -18085,6 +20727,14 @@ async def button_symbol_search(
                 tags_lower = [tag.lower() for tag in tags]
                 concept = custom_image.get('concept', '').lower()
                 subconcept = custom_image.get('subconcept', '').lower()
+                aliases = custom_image.get('aliases', [])
+                aliases_lower = [str(alias).strip().lower() for alias in aliases if isinstance(alias, (str, int, float)) and str(alias).strip()]
+
+                localized_tags_raw = custom_image.get('localized_tags')
+                localized_labels_raw = custom_image.get('localized_labels')
+                localized_terms_lower = _extract_localized_terms_for_locale(localized_tags_raw, localized_labels_raw)
+
+                all_search_terms_lower = [term for term in [concept, subconcept, *tags_lower, *aliases_lower, *localized_terms_lower] if term]
                 
                 # Debug logging for each image
                 logging.info(f"Checking custom image {custom_image_id}: concept='{concept}', subconcept='{subconcept}', tags={tags}")
@@ -18116,12 +20766,21 @@ async def button_symbol_search(
                                 tag_position_bonus = 8
                             break
                     match_score = 60 + tag_position_bonus  # Higher than BravoImages
+                elif query_lower in aliases_lower:
+                    matched_term = query_lower
+                    match_score = 58
+                elif query_lower in localized_terms_lower:
+                    matched_term = query_lower
+                    match_score = 56
                 elif query_lower in concept:
                     matched_term = query_lower
                     match_score = 45  # Partial concept match
                 elif query_lower in subconcept:
                     matched_term = query_lower
                     match_score = 40  # Partial subconcept match
+                elif any(query_lower in term for term in all_search_terms_lower):
+                    matched_term = query_lower
+                    match_score = 36
                 
                 # Check keyword list if no primary match
                 if not matched_term:
@@ -18147,6 +20806,14 @@ async def button_symbol_search(
                                     break
                             match_score = 55 + tag_position_bonus
                             break
+                        elif keyword in aliases_lower:
+                            matched_term = keyword
+                            match_score = 52
+                            break
+                        elif keyword in localized_terms_lower:
+                            matched_term = keyword
+                            match_score = 50
+                            break
                         elif keyword in concept:
                             matched_term = keyword
                             match_score = 35
@@ -18154,6 +20821,10 @@ async def button_symbol_search(
                         elif keyword in subconcept:
                             matched_term = keyword
                             match_score = 30
+                            break
+                        elif any(keyword in term for term in all_search_terms_lower):
+                            matched_term = keyword
+                            match_score = 28
                             break
                 
                 if matched_term:
@@ -18299,8 +20970,10 @@ async def button_symbol_search(
             except Exception as e:
                 logging.debug(f"Tag search failed for term '{term}': {e}")
         
-        # Phase 3: If we still don't have results, do comprehensive fallback search
-        if len(matched_symbols) == 0:
+        # Phase 3: If we still don't have results, do comprehensive fallback search.
+        # Skip this expensive path for limit=1 lookups (Tap/Games single-symbol fetches)
+        # to prevent timeout/abort cascades under load.
+        if len(matched_symbols) == 0 and limit > 1:
             logging.info(f"No matches found for '{query_lower}', doing comprehensive search")
             try:
                 # Get a larger sample for thorough matching
@@ -18364,12 +21037,22 @@ async def button_symbol_search(
         
         # Sort by match score and clean up response
         matched_symbols.sort(key=lambda x: x.get('match_score', 0), reverse=True)
-        
-        # Clean datetime objects for JSON serialization
-        for symbol in matched_symbols:
-            for field in ['created_at', 'updated_at', 'last_used']:
-                if field in symbol and symbol[field]:
-                    symbol[field] = symbol[field].isoformat() if hasattr(symbol[field], 'isoformat') else str(symbol[field])
+
+        # Recursively clean non-JSON-native values (e.g., Firestore DatetimeWithNanoseconds)
+        # so rare timestamp fields never crash button search responses.
+        def _json_safe(value):
+            if isinstance(value, dict):
+                return {k: _json_safe(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [_json_safe(v) for v in value]
+            if hasattr(value, 'isoformat'):
+                try:
+                    return value.isoformat()
+                except Exception:
+                    return str(value)
+            return value
+
+        matched_symbols = [_json_safe(symbol) for symbol in matched_symbols]
         
         search_type = "keyword_array_fast" if keyword_list else ("semantic_fast" if query_lower in semantic_mappings else "keyword_fast")
         
@@ -18389,10 +21072,22 @@ async def button_symbol_search(
         
     except Exception as e:
         logging.error(f"Error in fast button symbol search: {e}")
-        return JSONResponse(
-            status_code=500,
-            content={"error": "Button search failed", "details": str(e)}
-        )
+        # Fail soft for UI image lookup calls: return empty results instead of 500
+        # so phrase rendering and announcements are never blocked by symbol search errors.
+        return JSONResponse(content={
+            "symbols": [],
+            "total_found": 0,
+            "query": q,
+            "search_type": "button_search_error_fallback",
+            "error": "Button search failed",
+            "details": str(e)
+        })
+
+
+# Module-level in-memory cache for batch symbol lookups.
+# Key: "{locale_base}:{normalized_term}" → (image_url_or_None, expires_epoch)
+_batch_search_cache: dict = {}
+_BATCH_SEARCH_CACHE_TTL = 300  # seconds (5 minutes)
 
 
 @app.post("/api/symbols/batch-search")
@@ -18408,6 +21103,17 @@ async def batch_symbol_search(
     try:
         data = await request.json()
         terms = data.get('terms', [])
+        locale = str(data.get('locale') or 'en-US').strip().lower()
+        locale_base = locale.split('-')[0] if '-' in locale else locale
+
+        def _normalize_term(v):
+            return str(v or '').strip().lower()
+
+        def _allowed_locale_keys():
+            keys = {"en", "en-us", locale, locale_base}
+            return {k for k in keys if k}
+
+        allowed_locale_keys = _allowed_locale_keys()
         
         logging.info(f"🔍 BATCH SEARCH: Received request with {len(terms) if terms else 0} terms")
         if terms:
@@ -18422,103 +21128,321 @@ async def batch_symbol_search(
         
         aac_user_id = current_ids["aac_user_id"]
         account_id = current_ids["account_id"]
-        
+
         logging.info(f"🔍 BATCH SEARCH: User ID: {aac_user_id}, Account ID: {account_id}")
-        
-        # Function to search for a single term (will be run in parallel)
-        def search_single_term(item):
+
+        normalize_search_term = None
+        if locale_base and locale_base != "en":
+            try:
+                from aac_inflection_utils import normalize_search_term as _normalize_search_term
+                normalize_search_term = _normalize_search_term
+            except Exception as inflection_import_error:
+                logging.debug(f"🔍 BATCH: inflection module unavailable: {inflection_import_error}")
+
+        def _chunked(values, size=10):
+            values_list = list(values)
+            for i in range(0, len(values_list), size):
+                chunk = values_list[i:i + size]
+                if chunk:
+                    yield chunk
+
+        def _expand_terms(text_value, keywords_value):
+            query_lower = _normalize_term(text_value)
+            normalized_query = query_lower
+            if normalize_search_term and query_lower:
+                try:
+                    inflection_normalized = _normalize_term(normalize_search_term(query_lower, locale_base))
+                    if inflection_normalized:
+                        normalized_query = inflection_normalized
+                except Exception as inflection_error:
+                    logging.debug(f"🔍 BATCH: inflection normalization skipped for '{query_lower}': {inflection_error}")
+
+            out = []
+            if query_lower:
+                out.append(query_lower)
+                if normalized_query and normalized_query != query_lower:
+                    out.append(normalized_query)
+                for part in query_lower.split():
+                    part = part.strip().lower()
+                    if len(part) >= 3:
+                        out.append(part)
+
+            for kw in (keywords_value or [])[:3]:
+                kw_norm = _normalize_term(kw)
+                if not kw_norm:
+                    continue
+                out.append(kw_norm)
+                for part in kw_norm.split():
+                    part = part.strip().lower()
+                    if len(part) >= 3:
+                        out.append(part)
+
+            deduped = []
+            seen = set()
+            for term in out:
+                if term and term not in seen:
+                    seen.add(term)
+                    deduped.append(term)
+            return query_lower, normalized_query, deduped[:10]
+
+        request_items = []
+        all_search_terms = set()
+        for item in terms:
             if isinstance(item, dict):
-                text = item.get('text', '').strip()
+                text = str(item.get('text', '')).strip()
                 keywords = item.get('keywords', [])
             else:
                 text = str(item).strip()
                 keywords = []
-            
+
             if not text:
-                logging.debug(f"🔍 BATCH: Empty text, skipping")
-                return (text, None)
-            
-            logging.info(f"🔍 BATCH: Searching for '{text}' with keywords {keywords}")
-                
-            query_lower = text.lower()
-            
-            # Search BravoImages first
-            images_ref = firestore_db.collection("aac_images")
-            term_variations = [
-                text,                    # Original case (might be "tree", "Tree", etc.)
-                text.lower(),            # All lowercase
-                text.capitalize(),       # First letter capitalized
-                text.title()             # Title case (capitalizes each word)
-            ]
-            
-            # Remove duplicates while preserving order
-            seen = set()
-            unique_variations = []
-            for variation in term_variations:
-                if variation not in seen:
-                    seen.add(variation)
-                    unique_variations.append(variation)
-            term_variations = unique_variations
-            
-            logging.info(f"🔍 BATCH: Trying variations for '{text}': {term_variations}")
-            
-            for variation in term_variations:
-                try:
-                    variation_query = images_ref.where("source", "==", "bravo_images").where("tags", "array_contains", variation).limit(1)
-                    variation_docs = list(variation_query.stream())
-                    
-                    if variation_docs:
-                        image = variation_docs[0].to_dict()
-                        image_url = image.get('image_url')  # Use 'image_url' not 'url'
-                        if image_url:
-                            logging.info(f"🔍 BATCH: ✅ Found image for '{text}' (variation '{variation}'): {image_url}")
-                            return (text, image_url)
-                except Exception as e:
-                    logging.error(f"🔍 BATCH: Query failed for variation '{variation}': {e}")
-                    continue
-            
-            logging.info(f"🔍 BATCH: ❌ No image found for '{text}' in BravoImages")
-            
-            # If BravoImages didn't match, try custom images
+                continue
+
+            query_lower, normalized_query, search_terms = _expand_terms(text, keywords)
+            if not search_terms and query_lower:
+                search_terms = [query_lower]
+
+            request_items.append({
+                "text": text,
+                "query_lower": query_lower,
+                "normalized_query": normalized_query,
+                "search_terms": search_terms,
+            })
+            for term in search_terms:
+                if term:
+                    all_search_terms.add(term)
+
+        if not request_items:
+            return JSONResponse(content={"results": {}})
+
+        # --- Serve cached results without hitting Firestore ---
+        now_ts = time.time()
+        cached_results = {}
+        uncached_items = []
+        for item_rec in request_items:
+            cache_key = f"{locale_base}:{item_rec['query_lower']}"
+            cached_entry = _batch_search_cache.get(cache_key)
+            if cached_entry and cached_entry[1] > now_ts:
+                cached_results[item_rec["text"]] = cached_entry[0]
+            else:
+                uncached_items.append(item_rec)
+
+        if not uncached_items:
+            logging.info(f"🔍 BATCH SEARCH: All {len(request_items)} terms served from cache (no Firestore)")
+            return JSONResponse(content={"results": cached_results})
+
+        # Narrow Firestore search to only the terms we don't have cached yet
+        all_search_terms = set()
+        for item_rec in uncached_items:
+            for term in item_rec["search_terms"]:
+                if term:
+                    all_search_terms.add(term)
+
+        images_ref = firestore_db.collection("aac_images")
+        candidate_docs = {}
+
+        # Grouped query path 1: precomputed normalized search terms.
+        for chunk in _chunked(all_search_terms, 10):
             try:
-                custom_ref = firestore_db.collection("accounts").document(account_id).collection("users").document(aac_user_id).collection("custom_images")
-                custom_query = custom_ref.where("status", "==", "active").where("tags", "array_contains", query_lower).limit(1)
-                custom_docs = list(custom_query.stream())
-                
-                if custom_docs:
-                    custom_image = custom_docs[0].to_dict()
-                    image_url = custom_image.get('url')
-                    if image_url:
-                        logging.info(f"🔍 BATCH: ✅ Found custom image for '{text}': {image_url}")
-                        return (text, image_url)
-            except Exception as e:
-                logging.error(f"🔍 BATCH: Custom search failed for '{query_lower}': {e}")
-            
-            logging.info(f"🔍 BATCH: ❌ No custom image found for '{text}'")
-            return (text, None)
-        
-        # Run all searches in parallel using ThreadPoolExecutor
-        from concurrent.futures import ThreadPoolExecutor, as_completed
-        import asyncio
-        
-        results = {}
-        
-        # Use ThreadPoolExecutor to parallelize Firestore queries
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            # Submit all tasks
-            future_to_term = {executor.submit(search_single_term, item): item for item in terms}
-            
-            # Collect results as they complete
-            for future in as_completed(future_to_term):
+                docs = list(images_ref.where("search_terms", "array_contains_any", chunk).limit(300).stream())
+                for doc in docs:
+                    data = doc.to_dict() or {}
+                    if data.get("source") == "bravo_images" and data.get("image_url"):
+                        candidate_docs[doc.id] = data
+            except Exception as chunk_error:
+                logging.debug(f"🔍 BATCH: search_terms chunk query failed ({chunk_error})")
+
+        # Grouped query path 2: localized tags fallback.
+        if locale_base and locale_base != "en":
+            localized_tags_field = f"localized_tags.{locale_base}"
+            for chunk in _chunked(all_search_terms, 10):
                 try:
-                    text, image_url = future.result()
-                    if text:
-                        results[text] = image_url
-                except Exception as e:
-                    logging.error(f"Error in batch search task: {e}")
+                    docs = list(
+                        images_ref.where("source", "==", "bravo_images").where(
+                            localized_tags_field, "array_contains_any", chunk
+                        ).limit(250).stream()
+                    )
+                    for doc in docs:
+                        data = doc.to_dict() or {}
+                        if data.get("image_url"):
+                            candidate_docs[doc.id] = data
+                except Exception as chunk_error:
+                    logging.debug(f"🔍 BATCH: localized_tags chunk query failed ({chunk_error})")
+
+        # Grouped query path 3: legacy tags fallback.
+        for chunk in _chunked(all_search_terms, 10):
+            try:
+                docs = list(
+                    images_ref.where("source", "==", "bravo_images").where(
+                        "tags", "array_contains_any", chunk
+                    ).limit(250).stream()
+                )
+                for doc in docs:
+                    data = doc.to_dict() or {}
+                    if data.get("image_url"):
+                        candidate_docs[doc.id] = data
+            except Exception as chunk_error:
+                logging.debug(f"🔍 BATCH: legacy tags chunk query failed ({chunk_error})")
+
+        def _extract_localized_terms_for_doc(doc_data):
+            localized_terms = []
+            localized_tags_raw = doc_data.get('localized_tags')
+            localized_labels_raw = doc_data.get('localized_labels')
+
+            if isinstance(localized_tags_raw, dict):
+                for locale_key, locale_tags in localized_tags_raw.items():
+                    locale_key_norm = _normalize_term(locale_key)
+                    if locale_key_norm not in allowed_locale_keys:
+                        continue
+                    if isinstance(locale_tags, list):
+                        localized_terms.extend([_normalize_term(tag) for tag in locale_tags if _normalize_term(tag)])
+
+            if isinstance(localized_labels_raw, dict):
+                for locale_key, locale_label in localized_labels_raw.items():
+                    locale_key_norm = _normalize_term(locale_key)
+                    if locale_key_norm not in allowed_locale_keys:
+                        continue
+                    label_norm = _normalize_term(locale_label)
+                    if label_norm:
+                        localized_terms.append(label_norm)
+
+            return localized_terms
+
+        processed_candidates = []
+        term_index = {}
+        for image_id, image in candidate_docs.items():
+            tags = [_normalize_term(t) for t in image.get('tags', []) if _normalize_term(t)]
+            concept = _normalize_term(image.get('concept'))
+            subconcept = _normalize_term(image.get('subconcept'))
+            localized_terms = _extract_localized_terms_for_doc(image)
+            searchable_terms = set([*tags, concept, subconcept, *localized_terms])
+
+            record = {
+                "id": image_id,
+                "url": image.get("image_url"),
+                "tags": tags,
+                "concept": concept,
+                "subconcept": subconcept,
+                "searchable_terms": searchable_terms,
+            }
+            processed_candidates.append(record)
+
+            for term in searchable_terms:
+                if not term:
+                    continue
+                if term not in term_index:
+                    term_index[term] = set()
+                term_index[term].add(image_id)
+
+        candidate_by_id = {c["id"]: c for c in processed_candidates}
+
+        # Load active custom images once, then score in-memory as fallback.
+        custom_candidates = []
+        custom_term_index = {}
+        try:
+            custom_ref = firestore_db.collection("accounts").document(account_id).collection("profiles").document(aac_user_id).collection("custom_images")
+            custom_docs = list(custom_ref.where("active", "==", True).limit(500).stream())
+            for doc in custom_docs:
+                custom_image = doc.to_dict() or {}
+                image_url = custom_image.get('image_url')
+                if not image_url:
+                    continue
+
+                tags = [_normalize_term(t) for t in custom_image.get('tags', []) if _normalize_term(t)]
+                concept = _normalize_term(custom_image.get('concept'))
+                subconcept = _normalize_term(custom_image.get('subconcept'))
+                aliases = [_normalize_term(a) for a in custom_image.get('aliases', []) if _normalize_term(a)]
+                localized_terms = _extract_localized_terms_for_doc(custom_image)
+                searchable_terms = set([*tags, *aliases, concept, subconcept, *localized_terms])
+
+                rec = {
+                    "id": doc.id,
+                    "url": image_url,
+                    "tags": tags,
+                    "concept": concept,
+                    "subconcept": subconcept,
+                    "searchable_terms": searchable_terms,
+                }
+                custom_candidates.append(rec)
+                for term in searchable_terms:
+                    if not term:
+                        continue
+                    if term not in custom_term_index:
+                        custom_term_index[term] = set()
+                    custom_term_index[term].add(doc.id)
+        except Exception as custom_load_error:
+            logging.debug(f"🔍 BATCH: failed to preload custom images ({custom_load_error})")
+
+        custom_by_id = {c["id"]: c for c in custom_candidates}
+
+        def _score_candidate(item_rec, cand):
+            score = 0
+            query_lower = item_rec["query_lower"]
+            normalized_query = item_rec["normalized_query"]
+            search_terms = item_rec["search_terms"]
+
+            if query_lower and query_lower == cand["subconcept"]:
+                score += 45
+            if normalized_query and normalized_query == cand["subconcept"]:
+                score += 45
+            if query_lower and query_lower == cand["concept"]:
+                score += 35
+            if normalized_query and normalized_query == cand["concept"]:
+                score += 35
+
+            for idx, term in enumerate(search_terms):
+                if term in cand["searchable_terms"]:
+                    score += max(12, 30 - (idx * 3))
+                if cand["tags"] and cand["tags"][0] == term:
+                    score += 10
+            return score
+
+        results = {**cached_results}  # start with cache hits
+        expires_at = time.time() + _BATCH_SEARCH_CACHE_TTL
+        for item_rec in uncached_items:
+            text = item_rec["text"]
+
+            candidate_ids = set()
+            for term in item_rec["search_terms"]:
+                candidate_ids.update(term_index.get(term, set()))
+
+            best_url = None
+            best_score = -1
+            for candidate_id in candidate_ids:
+                cand = candidate_by_id.get(candidate_id)
+                if not cand:
+                    continue
+                score = _score_candidate(item_rec, cand)
+                if score > best_score:
+                    best_score = score
+                    best_url = cand["url"]
+
+            # Custom image fallback for unmatched terms.
+            if not best_url and custom_candidates:
+                custom_ids = set()
+                for term in item_rec["search_terms"]:
+                    custom_ids.update(custom_term_index.get(term, set()))
+                for custom_id in custom_ids:
+                    cand = custom_by_id.get(custom_id)
+                    if not cand:
+                        continue
+                    score = _score_candidate(item_rec, cand)
+                    if score > best_score:
+                        best_score = score
+                        best_url = cand["url"]
+
+            results[text] = best_url
+            # Store in TTL cache (None results too, to avoid repeated Firestore misses)
+            _batch_search_cache[f"{locale_base}:{item_rec['query_lower']}"] = (best_url, expires_at)
+
+        # Evict stale entries periodically to prevent unbounded memory growth
+        if len(_batch_search_cache) > 2000:
+            now_ts2 = time.time()
+            stale_keys = [k for k, v in _batch_search_cache.items() if v[1] <= now_ts2]
+            for k in stale_keys:
+                del _batch_search_cache[k]
         
-        logging.info(f"🔍 BATCH SEARCH: Completed - {len(results)} results out of {len(terms)} terms")
+        logging.info(f"🔍 BATCH SEARCH: Completed - {len(results)} results ({len(cached_results)} from cache, {len(uncached_items)} from Firestore)")
         logging.info(f"🔍 BATCH SEARCH: Results summary: {list(results.keys())[:10]}")
         return JSONResponse(content={"results": results})
         
@@ -18546,15 +21470,52 @@ async def download_image_library(
         images_ref = firestore_db.collection('aac_images')
         query = images_ref.where('source', '==', 'bravo_images')
         docs = query.stream()
+
+        def _flatten_search_terms(value):
+            if isinstance(value, (str, int, float)):
+                text = str(value).strip()
+                return [text] if text else []
+            if isinstance(value, list):
+                output = []
+                for item in value:
+                    output.extend(_flatten_search_terms(item))
+                return output
+            if isinstance(value, dict):
+                output = []
+                for item in value.values():
+                    output.extend(_flatten_search_terms(item))
+                return output
+            return []
         
         library = []
         for doc in docs:
             data = doc.to_dict()
+            localized_tags = data.get('localized_tags', {})
+            localized_labels = data.get('localized_labels', {})
+            aliases = data.get('aliases', [])
+
+            search_terms = []
+            search_terms.extend(_flatten_search_terms(data.get('concept')))
+            search_terms.extend(_flatten_search_terms(data.get('subconcept')))
+            search_terms.extend(_flatten_search_terms(data.get('tags', [])))
+            search_terms.extend(_flatten_search_terms(aliases))
+            search_terms.extend(_flatten_search_terms(localized_tags))
+            search_terms.extend(_flatten_search_terms(localized_labels))
+
+            search_terms = [str(term).strip().lower() for term in search_terms if str(term).strip()]
+            search_terms = list(dict.fromkeys(search_terms))
+
             # Only include essential fields to minimize download size
             library.append({
                 'id': doc.id,
                 'image_url': data.get('image_url'),
+                'concept': data.get('concept'),
+                'subconcept': data.get('subconcept'),
                 'tags': data.get('tags', []),
+                'aliases': aliases,
+                'localized_tags': localized_tags,
+                'localized_labels': localized_labels,
+                'search_terms': search_terms,
                 'source': data.get('source'),
                 # Include any other metadata that might be useful for search
                 'category': data.get('category'),
@@ -19137,7 +22098,7 @@ async def export_missing_images(
 # TAP INTERFACE NAVIGATION SYSTEM API
 # =============================================================================
 
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 from pydantic import BaseModel, Field
 
 class TapNavigationButton(BaseModel):
@@ -19160,6 +22121,74 @@ class TapNavigationButton(BaseModel):
     hidden: bool = Field(default=False, description="Whether button is hidden")
     children: List["TapNavigationButton"] = Field(default_factory=list, description="Child buttons for submenus")
 
+
+class TapBoardButton(BaseModel):
+    """Static board button definition for board-oriented AAC mode."""
+    id: str = Field(..., description="Unique button ID")
+    label: str = Field(..., description="Display label")
+    row: int = Field(0, ge=0, description="Zero-based row in board grid")
+    col: int = Field(0, ge=0, description="Zero-based column in board grid")
+    speech_text: Optional[str] = Field(None, description="Speech output text")
+    modifier_trigger_id: Optional[int] = Field(None, description="TouchChat modifier id triggered after tapping this button")
+    modifier_variants: Dict[str, Dict[str, Any]] = Field(default_factory=dict, description="Alternate button states keyed by modifier id")
+    action_type: str = Field("announce", description="announce|navigate|audio|special")
+    after_selection: Optional[str] = Field(None, description="do_nothing|navigate|use_ai")
+    target_board_id: Optional[str] = Field(None, description="Board ID for navigate action")
+    temporary_navigation: bool = Field(False, description="If true, navigate target is temporary and selection should return to previous board")
+    custom_audio_file: Optional[str] = Field(None, description="Audio URL for audio action")
+    special_function: Optional[str] = Field(None, description="Special function for special action")
+    image_url: Optional[str] = Field(None, description="Button image URL")
+    background_color: Optional[str] = Field("#FFFFFF", description="Button background color")
+    text_color: Optional[str] = Field("#000000", description="Button text color")
+    hidden: bool = Field(default=False, description="Whether button is hidden")
+
+
+class TapBoard(BaseModel):
+    """Board definition for tap interface (AI or static)."""
+    id: str = Field(..., description="Unique board ID")
+    label: str = Field(..., description="Board display name")
+    board_type: str = Field("ai", description="ai|static|system")
+    source: str = Field("legacy_category", description="legacy_category|custom")
+    source_button_id: Optional[str] = Field(None, description="Legacy category button ID")
+    owner_scope: str = Field("user", description="global|user")
+    hidden: bool = Field(default=False, description="Whether board is hidden")
+    llm_prompt: Optional[str] = Field(None, description="AI prompt for dynamic options")
+    prompt_category: Optional[str] = Field(None, description="AI prompt category")
+    prompt_topic: Optional[str] = Field(None, description="Custom prompt topic")
+    prompt_examples: Optional[str] = Field(None, description="Custom prompt examples")
+    prompt_exclusions: Optional[str] = Field(None, description="Custom prompt exclusions")
+    static_options: Optional[str] = Field(None, description="Delimited static options")
+    special_function: Optional[str] = Field(None, description="System function for board")
+    default_columns: int = Field(12, description="Board editor columns")
+    max_rows: int = Field(7, description="Board editor max rows")
+    buttons: List[TapBoardButton] = Field(default_factory=list, description="Static board buttons")
+
+
+class TapBoardsMenuItem(BaseModel):
+    """Menu item that places a board into the Boards menu."""
+    id: str = Field(..., description="Unique menu item ID")
+    label: str = Field(..., description="Menu label")
+    board_id: Optional[str] = Field(None, description="Target board ID (None for category-only nodes)")
+    source: str = Field("legacy_category", description="legacy_category|custom")
+    source_button_id: Optional[str] = Field(None, description="Legacy source button ID")
+    sort_order: int = Field(0, description="Display order")
+    hidden: bool = Field(default=False, description="Whether menu item is hidden")
+    image_url: Optional[str] = Field(None, description="Menu image URL")
+    speech_text: Optional[str] = Field(None, description="Speech text when selected")
+    custom_audio_file: Optional[str] = Field(None, description="URL to custom audio file played on activation")
+    background_color: Optional[str] = Field("#FFFFFF", description="Menu tile background")
+    text_color: Optional[str] = Field("#000000", description="Menu tile text color")
+    children: List["TapBoardsMenuItem"] = Field(default_factory=list, description="Nested menu items")
+
+
+class TapBoardSettings(BaseModel):
+    """Shared board system settings."""
+    max_columns: int = Field(12, ge=1, le=24, description="Default board columns")
+    max_rows: int = Field(7, ge=1, le=24, description="Default max rows")
+    allow_user_boards: bool = Field(True, description="Allow per-user custom boards")
+    default_ai_boards_global: bool = Field(True, description="Treat legacy/default AI boards as global")
+    home_board_id: Optional[str] = Field(None, description="Board ID loaded as the default home board")
+
 class TapNavigationConfig(BaseModel):
     """Complete tap interface navigation configuration for a user"""
     id: str = Field(..., description="Configuration ID - always 'user_config'")
@@ -19169,11 +22198,1105 @@ class TapNavigationConfig(BaseModel):
     created_at: str = Field(..., description="ISO timestamp of creation")
     updated_at: str = Field(..., description="ISO timestamp of last update")
     buttons: List[TapNavigationButton] = Field(default_factory=list, description="Top-level navigation buttons")
+    boards_schema_version: Optional[int] = Field(None, description="Parallel board schema version")
+    board_settings: Optional[TapBoardSettings] = Field(None, description="Board system settings")
+    boards_menu: Optional[List[TapBoardsMenuItem]] = Field(None, description="Boards menu configuration")
+    boards: Optional[List[TapBoard]] = Field(None, description="Board definitions")
+
+
+class TapBoardsMenuUpdateRequest(BaseModel):
+    """Payload for updating only the Boards Menu portion of tap configuration."""
+    boards_menu: List[TapBoardsMenuItem] = Field(default_factory=list, description="Ordered menu items")
+    board_settings: Optional[TapBoardSettings] = Field(None, description="Optional board settings update")
+
+
+class TapBoardCreateRequest(BaseModel):
+    """Payload for creating a custom board."""
+    id: Optional[str] = Field(None, description="Optional board ID; autogenerated if omitted")
+    label: str = Field(..., description="Board display name")
+    board_type: str = Field("ai", description="ai|static|system")
+    owner_scope: str = Field("user", description="global|user")
+    hidden: bool = Field(False, description="Whether board is hidden")
+    llm_prompt: Optional[str] = Field(None, description="AI prompt")
+    prompt_category: Optional[str] = Field(None, description="Prompt category")
+    prompt_topic: Optional[str] = Field(None, description="Prompt topic")
+    prompt_examples: Optional[str] = Field(None, description="Prompt examples")
+    prompt_exclusions: Optional[str] = Field(None, description="Prompt exclusions")
+    static_options: Optional[str] = Field(None, description="Static options")
+    special_function: Optional[str] = Field(None, description="Special function")
+    default_columns: int = Field(12, ge=1, le=24, description="Board columns")
+    max_rows: int = Field(7, ge=1, le=24, description="Board max rows")
+    buttons: List[TapBoardButton] = Field(default_factory=list, description="Board buttons")
+    set_as_home: bool = Field(False, description="Whether this board becomes the default home board")
+    created_during_migration: bool = Field(False, description="Board was created during TouchChat migration and has not yet been configured")
+
+
+class TapBoardUpdateRequest(BaseModel):
+    """Payload for updating an existing board."""
+    label: str = Field(..., description="Board display name")
+    board_type: str = Field("ai", description="ai|static|system")
+    owner_scope: str = Field("user", description="global|user")
+    hidden: bool = Field(False, description="Whether board is hidden")
+    llm_prompt: Optional[str] = Field(None, description="AI prompt")
+    prompt_category: Optional[str] = Field(None, description="Prompt category")
+    prompt_topic: Optional[str] = Field(None, description="Prompt topic")
+    prompt_examples: Optional[str] = Field(None, description="Prompt examples")
+    prompt_exclusions: Optional[str] = Field(None, description="Prompt exclusions")
+    static_options: Optional[str] = Field(None, description="Static options")
+    special_function: Optional[str] = Field(None, description="Special function")
+    default_columns: int = Field(12, ge=1, le=24, description="Board columns")
+    max_rows: int = Field(7, ge=1, le=24, description="Board max rows")
+    buttons: List[TapBoardButton] = Field(default_factory=list, description="Board buttons")
+    set_as_home: bool = Field(False, description="Whether this board becomes the default home board")
+    created_during_migration: bool = Field(False, description="Board was created during TouchChat migration and has not yet been configured")
 
 # Update forward references
 TapNavigationButton.model_rebuild()
+TapBoardsMenuItem.model_rebuild()
+
+
+def _normalize_board_type(value: Any) -> str:
+    normalized = str(value or 'ai').strip().lower()
+    if normalized not in {'ai', 'static', 'system'}:
+        return 'ai'
+    return normalized
+
+
+def _normalize_owner_scope(value: Any) -> str:
+    normalized = str(value or 'user').strip().lower()
+    if normalized not in {'global', 'user'}:
+        return 'user'
+    return normalized
+
+
+def _normalize_action_type(value: Any) -> str:
+    normalized = str(value or 'announce').strip().lower()
+    if normalized not in {'announce', 'navigate', 'audio', 'special'}:
+        return 'announce'
+    return normalized
+
+
+def _normalize_board_button_payload(button: Dict[str, Any], index: int) -> Dict[str, Any]:
+    return {
+        'id': str(button.get('id') or f'btn_{index + 1}'),
+        'label': str(button.get('label') or ''),
+        'row': int(button.get('row', index // 12) or 0),
+        'col': int(button.get('col', index % 12) or 0),
+        'speech_text': button.get('speech_text'),
+        'modifier_trigger_id': button.get('modifier_trigger_id'),
+        'modifier_variants': button.get('modifier_variants') if isinstance(button.get('modifier_variants'), dict) else {},
+        'action_type': _normalize_action_type(button.get('action_type')),
+        'after_selection': str(button.get('after_selection') or '').strip() or None,
+        'target_board_id': button.get('target_board_id'),
+        'temporary_navigation': bool(button.get('temporary_navigation', False)),
+        'custom_audio_file': button.get('custom_audio_file'),
+        'special_function': button.get('special_function'),
+        'image_url': button.get('image_url'),
+        'background_color': button.get('background_color') or '#FFFFFF',
+        'text_color': button.get('text_color') or '#000000',
+        'hidden': bool(button.get('hidden', False)),
+    }
+
+
+def _normalize_board_payload(
+    board_data: Dict[str, Any],
+    board_id: str,
+    source: str = 'custom',
+    source_button_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    raw_buttons = board_data.get('buttons')
+    buttons = raw_buttons if isinstance(raw_buttons, list) else []
+    normalized_buttons = [
+        _normalize_board_button_payload(button, index)
+        for index, button in enumerate(buttons)
+        if isinstance(button, dict)
+    ]
+
+    return {
+        'id': board_id,
+        'label': str(board_data.get('label') or board_id),
+        'board_type': _normalize_board_type(board_data.get('board_type')),
+        'source': str(source or 'custom'),
+        'source_button_id': source_button_id,
+        'owner_scope': _normalize_owner_scope(board_data.get('owner_scope')),
+        'hidden': bool(board_data.get('hidden', False)),
+        'llm_prompt': board_data.get('llm_prompt'),
+        'prompt_category': board_data.get('prompt_category'),
+        'prompt_topic': board_data.get('prompt_topic'),
+        'prompt_examples': board_data.get('prompt_examples'),
+        'prompt_exclusions': board_data.get('prompt_exclusions'),
+        'static_options': board_data.get('static_options'),
+        'special_function': board_data.get('special_function'),
+        'default_columns': int(board_data.get('default_columns', 12) or 12),
+        'max_rows': int(board_data.get('max_rows', 7) or 7),
+        'buttons': normalized_buttons,
+        'created_during_migration': bool(board_data.get('created_during_migration', False)) and len(normalized_buttons) == 0,
+    }
+
+
+def _sanitize_board_slug(raw_value: Any) -> str:
+    raw = str(raw_value or "").strip().lower()
+    cleaned = "".join(ch if ch.isalnum() else "_" for ch in raw)
+    while "__" in cleaned:
+        cleaned = cleaned.replace("__", "_")
+    cleaned = cleaned.strip("_")
+    return cleaned or "board"
+
+
+def _derive_action_type(button: Dict[str, Any]) -> str:
+    if button.get('custom_audio_file'):
+        return 'audio'
+    if button.get('special_function'):
+        return 'special'
+    return 'announce'
+
+
+def _convert_children_to_board_buttons(children: Any) -> List[Dict[str, Any]]:
+    if not isinstance(children, list):
+        return []
+
+    board_buttons: List[Dict[str, Any]] = []
+    for index, child in enumerate(children):
+        if not isinstance(child, dict):
+            continue
+        board_buttons.append({
+            'id': str(child.get('id') or _sanitize_board_slug(child.get('label') or 'button')),
+            'label': str(child.get('label') or 'Untitled Button'),
+            'row': index // 12,
+            'col': index % 12,
+            'speech_text': child.get('speech_text'),
+            'action_type': _derive_action_type(child),
+            'target_board_id': None,
+            'temporary_navigation': False,
+            'custom_audio_file': child.get('custom_audio_file'),
+            'special_function': child.get('special_function'),
+            'image_url': child.get('image_url'),
+            'background_color': child.get('background_color', '#FFFFFF'),
+            'text_color': child.get('text_color', '#000000'),
+            'hidden': bool(child.get('hidden', False)),
+        })
+    return board_buttons
+
+
+def ensure_tap_boards_structure(
+    config_data: Optional[Dict[str, Any]],
+    existing_config: Optional[Dict[str, Any]] = None,
+) -> Tuple[Optional[Dict[str, Any]], bool]:
+    """Ensure parallel board-oriented structure exists while preserving legacy config compatibility."""
+    if not isinstance(config_data, dict):
+        return config_data, False
+
+    buttons = config_data.get('buttons')
+    if not isinstance(buttons, list):
+        return config_data, False
+
+    previous_boards = config_data.get('boards')
+    previous_menu = config_data.get('boards_menu')
+    previous_settings = config_data.get('board_settings')
+    previous_version = config_data.get('boards_schema_version')
+    previous_buttons = config_data.get('buttons')
+
+    existing_boards = previous_boards
+    if not isinstance(existing_boards, list) and isinstance(existing_config, dict):
+        candidate = existing_config.get('boards')
+        if isinstance(candidate, list):
+            existing_boards = candidate
+
+    existing_menu = previous_menu
+    if not isinstance(existing_menu, list) and isinstance(existing_config, dict):
+        candidate = existing_config.get('boards_menu')
+        if isinstance(candidate, list):
+            existing_menu = candidate
+
+    has_parallel_schema = (
+        int(previous_version or 0) == 1
+        and isinstance(existing_boards, list)
+        and isinstance(existing_menu, list)
+        and (len(existing_boards) > 0 or len(existing_menu) > 0)
+    )
+
+    if has_parallel_schema:
+        # Already migrated config: keep existing boards/menu as source of truth.
+        # Rebuilding legacy nodes from buttons on every request can duplicate menu entries.
+        custom_boards = [b for b in (existing_boards or []) if isinstance(b, dict)]
+        custom_menu_items = [m for m in (existing_menu or []) if isinstance(m, dict)]
+        legacy_menu_items: List[Dict[str, Any]] = []
+    else:
+        custom_boards = [
+            b for b in (existing_boards or [])
+            if isinstance(b, dict) and b.get('source') != 'legacy_category'
+        ]
+        custom_menu_items = [
+            m for m in (existing_menu or [])
+            if isinstance(m, dict) and m.get('source') != 'legacy_category'
+        ]
+        legacy_menu_items = [
+            m for m in (existing_menu or [])
+            if isinstance(m, dict) and m.get('source') == 'legacy_category'
+        ]
+
+    legacy_menu_by_source_button: Dict[str, Dict[str, Any]] = {}
+    legacy_menu_by_path: Dict[str, Dict[str, Any]] = {}
+
+    def _collect_legacy_menu_items(items: Any, parent_path: Tuple[int, ...] = ()) -> None:
+        if not isinstance(items, list):
+            return
+        for item_index, legacy_item in enumerate(items):
+            if not isinstance(legacy_item, dict):
+                continue
+
+            current_path = parent_path + (item_index,)
+            path_key = '/'.join(str(part) for part in current_path)
+            legacy_menu_by_path[path_key] = legacy_item
+
+            key = str(legacy_item.get('source_button_id') or '').strip()
+            if key:
+                legacy_menu_by_source_button[key] = legacy_item
+            _collect_legacy_menu_items(legacy_item.get('children'), current_path)
+
+    if not has_parallel_schema:
+        _collect_legacy_menu_items(legacy_menu_items)
+
+    derived_boards: List[Dict[str, Any]] = []
+    derived_menu_items: List[Dict[str, Any]] = []
+
+    existing_legacy_boards = [
+        b for b in (existing_boards or [])
+        if isinstance(b, dict) and b.get('source') == 'legacy_category'
+    ]
+    legacy_board_by_source_button: Dict[str, Dict[str, Any]] = {}
+    for legacy_board in existing_legacy_boards:
+        key = str(legacy_board.get('source_button_id') or '').strip()
+        if key:
+            legacy_board_by_source_button[key] = legacy_board
+
+    # map source_button_id -> board_id for all derived legacy boards
+    legacy_board_id_by_source_button: Dict[str, str] = {}
+    used_board_ids: set[str] = {str(b.get('id')) for b in custom_boards if isinstance(b.get('id'), str)}
+
+    def _should_create_legacy_board(button_node: Dict[str, Any], depth: int) -> bool:
+        if depth == 0:
+            return True
+        if str(button_node.get('special_function') or '').strip():
+            return True
+        if str(button_node.get('static_options') or '').strip():
+            return True
+        if str(button_node.get('llm_prompt') or '').strip():
+            return True
+        if str(button_node.get('prompt_category') or '').strip():
+            return True
+        if str(button_node.get('prompt_topic') or '').strip():
+            return True
+        if str(button_node.get('prompt_examples') or '').strip():
+            return True
+        if str(button_node.get('prompt_exclusions') or '').strip():
+            return True
+        return False
+
+    def _next_legacy_board_id(button_node: Dict[str, Any], fallback_index: int) -> str:
+        base_slug = _sanitize_board_slug(button_node.get('id') or button_node.get('label') or f'board_{fallback_index}')
+        board_id = f"board_{base_slug}"
+        suffix = 2
+        while board_id in used_board_ids:
+            board_id = f"board_{base_slug}_{suffix}"
+            suffix += 1
+        return board_id
+
+    def _collect_derived_legacy_boards(button_nodes: Any, depth: int) -> None:
+        if not isinstance(button_nodes, list):
+            return
+
+        for index, button_node in enumerate(button_nodes):
+            if not isinstance(button_node, dict):
+                continue
+
+            source_button_id = button_node.get('id')
+            source_button_key = str(source_button_id or '').strip()
+
+            create_board = _should_create_legacy_board(button_node, depth)
+            board_id: Optional[str] = None
+
+            existing_legacy_board = legacy_board_by_source_button.get(source_button_key) if source_button_key else None
+            if create_board:
+                existing_id = str(existing_legacy_board.get('id') or '').strip() if isinstance(existing_legacy_board, dict) else ''
+                if existing_id and existing_id not in used_board_ids:
+                    board_id = existing_id
+                else:
+                    board_id = _next_legacy_board_id(button_node, index)
+
+                used_board_ids.add(board_id)
+                if source_button_key:
+                    legacy_board_id_by_source_button[source_button_key] = board_id
+
+                special_function = button_node.get('special_function')
+                has_static_options = bool(str(button_node.get('static_options') or '').strip())
+                if special_function:
+                    board_type = 'system'
+                elif has_static_options:
+                    board_type = 'static'
+                else:
+                    board_type = 'ai'
+
+                owner_scope_default = 'global' if str(button_node.get('id') or '').endswith('_btn') else 'user'
+                owner_scope = owner_scope_default
+                if isinstance(existing_legacy_board, dict):
+                    owner_scope = str(existing_legacy_board.get('owner_scope') or owner_scope_default)
+
+                board = {
+                    'id': board_id,
+                    'label': str(button_node.get('label') or f'Board {index + 1}'),
+                    'board_type': board_type,
+                    'source': 'legacy_category',
+                    'source_button_id': source_button_id,
+                    'owner_scope': owner_scope,
+                    'hidden': bool(button_node.get('hidden', False)),
+                    'llm_prompt': button_node.get('llm_prompt'),
+                    'prompt_category': button_node.get('prompt_category'),
+                    'prompt_topic': button_node.get('prompt_topic'),
+                    'prompt_examples': button_node.get('prompt_examples'),
+                    'prompt_exclusions': button_node.get('prompt_exclusions'),
+                    'static_options': button_node.get('static_options'),
+                    'special_function': special_function,
+                    'default_columns': 12,
+                    'max_rows': 7,
+                    'buttons': _convert_children_to_board_buttons(button_node.get('children')),
+                }
+                derived_boards.append(board)
+
+            _collect_derived_legacy_boards(button_node.get('children'), depth + 1)
+
+    if not has_parallel_schema:
+        _collect_derived_legacy_boards(buttons, 0)
+
+    def _build_legacy_menu_node(
+        button_node: Dict[str, Any],
+        sort_order: int,
+        path: Tuple[int, ...] = (),
+    ) -> Dict[str, Any]:
+        source_button_id = button_node.get('id')
+        source_button_key = str(source_button_id or '').strip()
+        path_key = '/'.join(str(part) for part in path)
+        existing_legacy_menu_item = legacy_menu_by_source_button.get(source_button_key) if source_button_key else None
+        if not isinstance(existing_legacy_menu_item, dict):
+            existing_legacy_menu_item = legacy_menu_by_path.get(path_key)
+        derived_board_id = legacy_board_id_by_source_button.get(source_button_key) if source_button_key else None
+
+        menu_node = {
+            'id': f"menu_{_sanitize_board_slug(button_node.get('id') or button_node.get('label') or sort_order)}",
+            'label': str(button_node.get('label') or f'Board {sort_order + 1}'),
+            'board_id': derived_board_id,
+            'source': 'legacy_category',
+            'source_button_id': source_button_id,
+            'sort_order': sort_order,
+            'hidden': bool(button_node.get('hidden', False)),
+            'image_url': button_node.get('image_url'),
+            'speech_text': button_node.get('speech_text'),
+            'custom_audio_file': button_node.get('custom_audio_file'),
+            'background_color': button_node.get('background_color', '#FFFFFF'),
+            'text_color': button_node.get('text_color', '#000000'),
+            'children': [],
+        }
+
+        if isinstance(existing_legacy_menu_item, dict):
+            if existing_legacy_menu_item.get('id'):
+                menu_node['id'] = existing_legacy_menu_item.get('id')
+            menu_node['label'] = str(existing_legacy_menu_item.get('label') or menu_node['label'])
+            menu_node['hidden'] = bool(existing_legacy_menu_item.get('hidden', menu_node['hidden']))
+            menu_node['image_url'] = existing_legacy_menu_item.get('image_url')
+            menu_node['speech_text'] = existing_legacy_menu_item.get('speech_text')
+            menu_node['custom_audio_file'] = existing_legacy_menu_item.get('custom_audio_file')
+            menu_node['background_color'] = existing_legacy_menu_item.get('background_color') or menu_node['background_color']
+            menu_node['text_color'] = existing_legacy_menu_item.get('text_color') or menu_node['text_color']
+            # If a node has a board target, keep that target; otherwise preserve any existing target.
+            if derived_board_id:
+                menu_node['board_id'] = derived_board_id
+            else:
+                menu_node['board_id'] = existing_legacy_menu_item.get('board_id')
+
+        raw_children = button_node.get('children')
+        if isinstance(raw_children, list):
+            built_children: List[Dict[str, Any]] = []
+            for child_index, child_node in enumerate(raw_children):
+                if not isinstance(child_node, dict):
+                    continue
+                built_children.append(_build_legacy_menu_node(child_node, child_index, path + (child_index,)))
+            menu_node['children'] = built_children
+
+        # Enforce leaf-only board target assignment.
+        if isinstance(menu_node.get('children'), list) and len(menu_node['children']) > 0:
+            menu_node['board_id'] = None
+
+        return menu_node
+
+    if not has_parallel_schema:
+        for index, button in enumerate(buttons):
+            if not isinstance(button, dict):
+                continue
+            menu_item = _build_legacy_menu_node(button, index, (index,))
+            derived_menu_items.append(menu_item)
+
+    def _dedupe_legacy_menu_siblings(menu_nodes: Any) -> Tuple[List[Dict[str, Any]], int]:
+        if not isinstance(menu_nodes, list):
+            return [], 0
+
+        deduped: List[Dict[str, Any]] = []
+        removed_count = 0
+        seen_legacy_keys: set[Tuple[str, ...]] = set()
+
+        for raw_node in menu_nodes:
+            if not isinstance(raw_node, dict):
+                continue
+
+            node = dict(raw_node)
+            child_nodes, removed_children = _dedupe_legacy_menu_siblings(node.get('children'))
+            node['children'] = child_nodes
+            removed_count += removed_children
+
+            source = str(node.get('source') or '').strip()
+            if source != 'legacy_category':
+                deduped.append(node)
+                continue
+
+            source_button_id = str(node.get('source_button_id') or '').strip()
+            label_key = str(node.get('label') or '').strip().lower()
+            child_sig = tuple(
+                f"{str(c.get('label') or '').strip().lower()}|{str(c.get('source_button_id') or '').strip()}"
+                for c in child_nodes
+                if isinstance(c, dict)
+            )
+
+            # When source_button_id is missing, repeated nodes can accumulate from
+            # legacy reconstruction; dedupe by label/children to stabilize the tree.
+            if source_button_id:
+                dedupe_key: Tuple[str, ...] = ('legacy_source_button', source_button_id)
+            else:
+                dedupe_key = ('legacy_label_children', label_key, '|'.join(child_sig))
+
+            if dedupe_key in seen_legacy_keys:
+                removed_count += 1
+                continue
+
+            seen_legacy_keys.add(dedupe_key)
+            deduped.append(node)
+
+        return deduped, removed_count
+
+    merged_boards = custom_boards + derived_boards
+    merged_menu, removed_legacy_duplicates = _dedupe_legacy_menu_siblings(custom_menu_items + derived_menu_items)
+    merged_menu = dedupe_boards_menu_tree(merged_menu)
+    if removed_legacy_duplicates > 0:
+        logging.info(
+            "Removed %s duplicate legacy menu item(s) while normalizing tap boards structure",
+            removed_legacy_duplicates,
+        )
+
+    settings = previous_settings
+    if not isinstance(settings, dict) and isinstance(existing_config, dict):
+        candidate = existing_config.get('board_settings')
+        if isinstance(candidate, dict):
+            settings = candidate
+    if not isinstance(settings, dict):
+        settings = {}
+
+    preferred_board_ids = _collect_board_ids_from_menu(merged_menu)
+    existing_home_board_id = str(settings.get('home_board_id') or '').strip()
+    if existing_home_board_id:
+        preferred_board_ids.add(existing_home_board_id)
+
+    merged_boards, removed_duplicate_boards = dedupe_tap_boards(merged_boards, preferred_board_ids)
+    if removed_duplicate_boards > 0:
+        logging.info(
+            "Removed %s duplicate board definition(s) while normalizing tap boards structure",
+            removed_duplicate_boards,
+        )
+
+    merged_board_ids = {
+        str(board.get('id')).strip()
+        for board in merged_boards
+        if isinstance(board, dict) and str(board.get('id') or '').strip()
+    }
+
+    home_board_id = existing_home_board_id if existing_home_board_id in merged_board_ids else ''
+    if not home_board_id:
+        existing_home_board = next(
+            (
+                board for board in merged_boards
+                if isinstance(board, dict) and str(board.get('source') or '') == 'default_home'
+            ),
+            None,
+        )
+        if isinstance(existing_home_board, dict) and str(existing_home_board.get('id') or '').strip():
+            home_board_id = str(existing_home_board.get('id')).strip()
+        else:
+            home_board_id = 'board_home'
+            suffix = 2
+            while home_board_id in merged_board_ids:
+                home_board_id = f'board_home_{suffix}'
+                suffix += 1
+
+            merged_boards.append({
+                'id': home_board_id,
+                'label': 'Home',
+                'board_type': 'ai',
+                'source': 'default_home',
+                'source_button_id': None,
+                'owner_scope': 'user',
+                'hidden': False,
+                'llm_prompt': None,
+                'prompt_category': None,
+                'prompt_topic': None,
+                'prompt_examples': None,
+                'prompt_exclusions': None,
+                'static_options': None,
+                'special_function': None,
+                'default_columns': 12,
+                'max_rows': 7,
+                'buttons': [],
+            })
+            merged_board_ids.add(home_board_id)
+
+    merged_settings = {
+        'max_columns': int(settings.get('max_columns', 12) or 12),
+        'max_rows': int(settings.get('max_rows', 7) or 7),
+        'allow_user_boards': bool(settings.get('allow_user_boards', True)),
+        'default_ai_boards_global': bool(settings.get('default_ai_boards_global', True)),
+        'home_board_id': home_board_id,
+    }
+
+    # Keep legacy buttons synchronized to the canonical boards/menu structure so persisted
+    # tap_interface_config remains consistent regardless of menu depth.
+    canonical_buttons = compose_legacy_buttons_from_boards_menu({
+        'boards': merged_boards,
+        'boards_menu': merged_menu,
+    })
+
+    changed = False
+    if previous_boards != merged_boards:
+        config_data['boards'] = merged_boards
+        changed = True
+    if previous_menu != merged_menu:
+        config_data['boards_menu'] = merged_menu
+        changed = True
+    if previous_settings != merged_settings:
+        config_data['board_settings'] = merged_settings
+        changed = True
+    if previous_version != 1:
+        config_data['boards_schema_version'] = 1
+        changed = True
+    if previous_buttons != canonical_buttons:
+        config_data['buttons'] = canonical_buttons
+        changed = True
+
+    return config_data, changed
+
+
+def normalize_boards_menu_items(
+    menu_items: Any,
+    valid_board_ids: set[str],
+) -> List[Dict[str, Any]]:
+    """Normalize and validate boards menu items for persistence (tree-aware).
+    board_id is optional — a node may be a category-only parent with no associated board.
+    """
+    def _normalize_level(items: Any, level: int) -> List[Dict[str, Any]]:
+        normalized_level: List[Dict[str, Any]] = []
+        if not isinstance(items, list):
+            return normalized_level
+
+        for index, item in enumerate(items):
+            if not isinstance(item, dict):
+                continue
+
+            raw_board_id = str(item.get('board_id') or '').strip()
+            # board_id is optional; only validate if provided
+            board_id: Optional[str] = raw_board_id if raw_board_id and raw_board_id in valid_board_ids else None
+
+            label = str(item.get('label') or board_id or f'Menu Item {index + 1}')
+            item_id = str(item.get('id') or '').strip()
+            if not item_id:
+                item_id = f"menu_{_sanitize_board_slug(label)}_{level}_{index + 1}"
+
+            normalized_children = _normalize_level(item.get('children'), level + 1)
+
+            normalized_item = {
+                'id': item_id,
+                'label': label,
+                'board_id': board_id,
+                'source': str(item.get('source') or 'custom'),
+                'source_button_id': item.get('source_button_id'),
+                'sort_order': index,
+                'hidden': bool(item.get('hidden', False)),
+                'image_url': item.get('image_url'),
+                'speech_text': item.get('speech_text'),
+                'custom_audio_file': item.get('custom_audio_file'),
+                'background_color': item.get('background_color') or '#FFFFFF',
+                'text_color': item.get('text_color') or '#000000',
+                'children': normalized_children,
+            }
+
+            # Enforce leaf-only board target assignment.
+            if len(normalized_children) > 0:
+                normalized_item['board_id'] = None
+
+            normalized_level.append(normalized_item)
+
+        return normalized_level
+
+    return dedupe_boards_menu_tree(_normalize_level(menu_items, 0))
+
+
+def dedupe_boards_menu_tree(menu_items: Any) -> List[Dict[str, Any]]:
+    """Recursively dedupe sibling menu nodes while preserving first occurrence.
+
+    Key preference:
+    1) source_button_id (stable for legacy-derived nodes)
+    2) (board_id, label) for custom nodes
+    3) id as fallback
+    """
+    if not isinstance(menu_items, list):
+        return []
+
+    deduped: List[Dict[str, Any]] = []
+    seen_keys: set[Tuple[str, ...]] = set()
+
+    for raw_item in menu_items:
+        if not isinstance(raw_item, dict):
+            continue
+
+        item = dict(raw_item)
+        item['children'] = dedupe_boards_menu_tree(item.get('children'))
+
+        source_button_id = str(item.get('source_button_id') or '').strip()
+        board_id = str(item.get('board_id') or '').strip()
+        label_key = str(item.get('label') or '').strip().lower()
+        item_id = str(item.get('id') or '').strip()
+
+        if source_button_id:
+            dedupe_key: Tuple[str, ...] = ('source_button_id', source_button_id)
+        elif board_id or label_key:
+            dedupe_key = ('board_label', board_id, label_key)
+        elif item_id:
+            dedupe_key = ('id', item_id)
+        else:
+            dedupe_key = (
+                'shape',
+                str(item.get('speech_text') or ''),
+                str(item.get('image_url') or ''),
+                str(item.get('custom_audio_file') or ''),
+            )
+
+        if dedupe_key in seen_keys:
+            continue
+
+        seen_keys.add(dedupe_key)
+        item['sort_order'] = len(deduped)
+        deduped.append(item)
+
+    return deduped
+
+
+def _collect_board_ids_from_menu(menu_items: Any) -> set[str]:
+    """Collect all board_id references from a nested boards_menu tree."""
+    collected: set[str] = set()
+
+    def _walk(items: Any) -> None:
+        if not isinstance(items, list):
+            return
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            board_id = str(item.get('board_id') or '').strip()
+            if board_id:
+                collected.add(board_id)
+            _walk(item.get('children'))
+
+    _walk(menu_items)
+    return collected
+
+
+def dedupe_tap_boards(
+    boards: Any,
+    preferred_board_ids: Optional[set[str]] = None,
+) -> Tuple[List[Dict[str, Any]], int]:
+    """Deduplicate board definitions while preserving referenced/preferred board IDs.
+
+    Priority for duplicate groups:
+    1) Board IDs present in preferred_board_ids (menu/home references)
+    2) First occurrence in list order
+    """
+    if not isinstance(boards, list):
+        return [], 0
+
+    preferred = preferred_board_ids or set()
+    deduped: List[Dict[str, Any]] = []
+    kept_index_by_key: Dict[Tuple[str, ...], int] = {}
+    removed_count = 0
+
+    def _board_dedupe_key(board: Dict[str, Any]) -> Tuple[str, ...]:
+        source = str(board.get('source') or '').strip()
+        source_button_id = str(board.get('source_button_id') or '').strip()
+        board_id = str(board.get('id') or '').strip()
+        label_key = str(board.get('label') or '').strip().lower()
+        board_type = str(board.get('board_type') or '').strip().lower()
+
+        if source == 'legacy_category' and source_button_id:
+            return ('legacy_source_button', source_button_id)
+        if source == 'legacy_category' and label_key:
+            return ('legacy_label_type', label_key, board_type)
+        if board_id:
+            return ('id', board_id)
+        return ('shape', source, label_key, board_type)
+
+    for raw_board in boards:
+        if not isinstance(raw_board, dict):
+            continue
+
+        board = dict(raw_board)
+        key = _board_dedupe_key(board)
+        board_id = str(board.get('id') or '').strip()
+
+        if key not in kept_index_by_key:
+            kept_index_by_key[key] = len(deduped)
+            deduped.append(board)
+            continue
+
+        kept_idx = kept_index_by_key[key]
+        kept_board = deduped[kept_idx]
+        kept_id = str(kept_board.get('id') or '').strip()
+
+        candidate_is_preferred = bool(board_id and board_id in preferred)
+        kept_is_preferred = bool(kept_id and kept_id in preferred)
+
+        if candidate_is_preferred and not kept_is_preferred:
+            deduped[kept_idx] = board
+            removed_count += 1
+        else:
+            removed_count += 1
+
+    return deduped, removed_count
+
+
+def sort_boards_menu_tree(menu_items: Any) -> List[Dict[str, Any]]:
+    """Sort boards menu recursively by sort_order while preserving hierarchy."""
+    if not isinstance(menu_items, list):
+        return []
+
+    sorted_items = sorted(
+        [item for item in menu_items if isinstance(item, dict)],
+        key=lambda item: int(item.get('sort_order', 0)),
+    )
+
+    output: List[Dict[str, Any]] = []
+    for index, item in enumerate(sorted_items):
+        cloned = dict(item)
+        cloned['sort_order'] = index
+        cloned['children'] = sort_boards_menu_tree(item.get('children'))
+        output.append(cloned)
+
+    return output
+
+
+def compose_legacy_buttons_from_boards_menu(config_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Build legacy tap-interface buttons from boards_menu/boards so existing UI can render board menu changes."""
+    if not isinstance(config_data, dict):
+        return []
+
+    boards = config_data.get('boards') if isinstance(config_data.get('boards'), list) else []
+    boards_menu = config_data.get('boards_menu') if isinstance(config_data.get('boards_menu'), list) else []
+    existing_buttons = config_data.get('buttons') if isinstance(config_data.get('buttons'), list) else []
+
+    if not boards_menu:
+        return existing_buttons
+
+    boards_by_id: Dict[str, Dict[str, Any]] = {
+        str(board.get('id')): board
+        for board in boards
+        if isinstance(board, dict) and str(board.get('id') or '').strip()
+    }
+
+    def _build_word_options_from_board(board: Dict[str, Any]) -> List[Dict[str, Any]]:
+        raw_buttons = board.get('buttons') if isinstance(board.get('buttons'), list) else []
+        sorted_buttons = sorted(
+            [b for b in raw_buttons if isinstance(b, dict)],
+            key=lambda b: (int(b.get('row', 0) or 0), int(b.get('col', 0) or 0), str(b.get('id') or '')),
+        )
+        word_options: List[Dict[str, Any]] = []
+        for index, btn in enumerate(sorted_buttons):
+            if bool(btn.get('hidden', False)):
+                continue
+            label = str(btn.get('label') or '').strip()
+            if label:
+                word_options.append({
+                    'text': label,
+                    'row': int(btn.get('row', 0) or 0),
+                    'col': int(btn.get('col', 0) or 0),
+                    'speech_text': (str(btn.get('speech_text') or '').strip() or None),
+                    'modifier_trigger_id': btn.get('modifier_trigger_id'),
+                    'modifier_variants': btn.get('modifier_variants') if isinstance(btn.get('modifier_variants'), dict) else {},
+                    'image_url': btn.get('image_url'),
+                    'custom_audio_file': btn.get('custom_audio_file'),
+                    'action_type': btn.get('action_type'),
+                    'after_selection': btn.get('after_selection') or 'do_nothing',
+                    'target_board_id': btn.get('target_board_id'),
+                    'temporary_navigation': bool(btn.get('temporary_navigation', False)),
+                    'background_color': btn.get('background_color') or '#FFFFFF',
+                    'text_color': btn.get('text_color') or '#000000',
+                })
+        return word_options
+
+    def _build_menu_node(menu_item: Dict[str, Any], path_index: str) -> Dict[str, Any]:
+        board_id = str(menu_item.get('board_id') or '').strip()
+        board = boards_by_id.get(board_id) if board_id else None
+        menu_children = menu_item.get('children') if isinstance(menu_item.get('children'), list) else []
+
+        built_children: List[Dict[str, Any]] = []
+        if menu_children:
+            for idx, child in enumerate(menu_children):
+                if isinstance(child, dict):
+                    built_children.append(_build_menu_node(child, f"{path_index}_{idx}"))
+
+        board_word_options = _build_word_options_from_board(board) if isinstance(board, dict) else []
+        board_static_options = ', '.join(
+            option.get('text', '') for option in board_word_options if isinstance(option, dict) and option.get('text')
+        ) or None
+
+        return {
+            'id': str(menu_item.get('id') or f"menu_{path_index}"),
+            'board_id': board_id or None,
+            'label': str(menu_item.get('label') or (board.get('label') if isinstance(board, dict) else f"Menu {path_index}")),
+            'speech_text': menu_item.get('speech_text'),
+            'image_url': menu_item.get('image_url') if menu_item.get('image_url') else (board.get('image_url') if isinstance(board, dict) else None),
+            'background_color': menu_item.get('background_color') or '#FFFFFF',
+            'text_color': menu_item.get('text_color') or '#000000',
+            'llm_prompt': board.get('llm_prompt') if isinstance(board, dict) else None,
+            'words_prompt': None,
+            'prompt_category': board.get('prompt_category') if isinstance(board, dict) else None,
+            'prompt_topic': board.get('prompt_topic') if isinstance(board, dict) else None,
+            'prompt_examples': board.get('prompt_examples') if isinstance(board, dict) else None,
+            'prompt_exclusions': board.get('prompt_exclusions') if isinstance(board, dict) else None,
+            'static_options': board.get('static_options') if isinstance(board, dict) and board.get('static_options') else board_static_options,
+            'board_word_options': board_word_options,
+            'custom_audio_file': menu_item.get('custom_audio_file') if menu_item.get('custom_audio_file') else (board.get('custom_audio_file') if isinstance(board, dict) else None),
+            'special_function': board.get('special_function') if isinstance(board, dict) else None,
+            'hidden': bool(menu_item.get('hidden', False) or (bool(board.get('hidden', False)) if isinstance(board, dict) else False)),
+            'children': built_children,
+        }
+
+    sorted_menu = dedupe_boards_menu_tree(sort_boards_menu_tree(boards_menu))
+    legacy_buttons: List[Dict[str, Any]] = []
+    for index, item in enumerate(sorted_menu):
+        if isinstance(item, dict):
+            legacy_buttons.append(_build_menu_node(item, str(index)))
+
+    return legacy_buttons
 
 # --- Helper Functions ---
+TAP_CONFIG_DOC_SOFT_LIMIT_BYTES = 900_000
+TAP_CONFIG_BOARDS_CHUNK_TARGET_BYTES = 300_000
+
+
+def _tap_config_doc_ref(account_id: str, aac_user_id: str):
+    return firestore_db.document(
+        f"{FIRESTORE_ACCOUNTS_COLLECTION}/{account_id}/{FIRESTORE_ACCOUNT_USERS_SUBCOLLECTION}/{aac_user_id}/tap_interface_config/config"
+    )
+
+
+def _tap_boards_doc_ref(account_id: str, aac_user_id: str):
+    return firestore_db.document(
+        f"{FIRESTORE_ACCOUNTS_COLLECTION}/{account_id}/{FIRESTORE_ACCOUNT_USERS_SUBCOLLECTION}/{aac_user_id}/tap_interface_config/boards_config"
+    )
+
+
+def _tap_menu_doc_ref(account_id: str, aac_user_id: str):
+    return firestore_db.document(
+        f"{FIRESTORE_ACCOUNTS_COLLECTION}/{account_id}/{FIRESTORE_ACCOUNT_USERS_SUBCOLLECTION}/{aac_user_id}/tap_interface_config/menu_config"
+    )
+
+
+def _estimate_json_size_bytes(value: Any) -> int:
+    try:
+        return len(json.dumps(value, separators=(",", ":"), ensure_ascii=False, default=str).encode("utf-8"))
+    except Exception:
+        return len(str(value).encode("utf-8"))
+
+
+def _split_boards_into_chunks(boards: List[Dict[str, Any]], target_bytes: int = TAP_CONFIG_BOARDS_CHUNK_TARGET_BYTES) -> List[List[Dict[str, Any]]]:
+    if not boards:
+        return []
+
+    chunks: List[List[Dict[str, Any]]] = []
+    current_chunk: List[Dict[str, Any]] = []
+    current_size = 2  # []
+
+    for board in boards:
+        board_size = _estimate_json_size_bytes(board) + 1
+        if current_chunk and (current_size + board_size) > target_bytes:
+            chunks.append(current_chunk)
+            current_chunk = [board]
+            current_size = 2 + board_size
+        else:
+            current_chunk.append(board)
+            current_size += board_size
+
+    if current_chunk:
+        chunks.append(current_chunk)
+
+    return chunks
+
+
+async def _load_chunked_tap_boards(doc_ref) -> List[Dict[str, Any]]:
+    try:
+        chunks_collection = doc_ref.collection("boards_chunks")
+        chunk_docs = await asyncio.to_thread(lambda: list(chunks_collection.stream()))
+        ordered_chunks: List[Tuple[int, List[Dict[str, Any]]]] = []
+        for chunk_doc in chunk_docs:
+            chunk_payload = chunk_doc.to_dict() or {}
+            chunk_index = int(chunk_payload.get("index", 10**9))
+            chunk_boards = chunk_payload.get("boards") if isinstance(chunk_payload.get("boards"), list) else []
+            ordered_chunks.append((chunk_index, chunk_boards))
+
+        ordered_chunks.sort(key=lambda item: item[0])
+        boards: List[Dict[str, Any]] = []
+        for _, chunk_boards in ordered_chunks:
+            boards.extend([b for b in chunk_boards if isinstance(b, dict)])
+        return boards
+    except Exception as e:
+        logging.error(f"Error loading chunked tap boards: {e}")
+        return []
+
+
+async def _clear_chunked_tap_boards(doc_ref) -> None:
+    try:
+        chunks_collection = doc_ref.collection("boards_chunks")
+        chunk_docs = await asyncio.to_thread(lambda: list(chunks_collection.stream()))
+        for chunk_doc in chunk_docs:
+            await asyncio.to_thread(chunk_doc.reference.delete)
+    except Exception as e:
+        logging.warning(f"Could not clear chunked tap boards: {e}")
+
+
+async def _save_chunked_tap_boards(doc_ref, boards: List[Dict[str, Any]]) -> int:
+    chunks = _split_boards_into_chunks(boards)
+    for idx, chunk in enumerate(chunks):
+        chunk_ref = doc_ref.collection("boards_chunks").document(f"chunk_{idx:04d}")
+        await asyncio.to_thread(
+            chunk_ref.set,
+            {
+                "index": idx,
+                "boards": chunk,
+                "updated_at": dt.now().isoformat(),
+            },
+        )
+
+    # Remove stale chunk documents from previous larger saves.
+    existing_docs = await asyncio.to_thread(lambda: list(doc_ref.collection("boards_chunks").stream()))
+    valid_ids = {f"chunk_{i:04d}" for i in range(len(chunks))}
+    for existing in existing_docs:
+        if existing.id not in valid_ids:
+            await asyncio.to_thread(existing.reference.delete)
+
+    return len(chunks)
+
+
+async def _load_split_tap_docs(account_id: str, aac_user_id: str) -> Optional[Dict[str, Any]]:
+    """Load split tap config documents (boards/menu) and return merged sections."""
+    try:
+        boards_ref = _tap_boards_doc_ref(account_id, aac_user_id)
+        menu_ref = _tap_menu_doc_ref(account_id, aac_user_id)
+
+        boards_doc = await asyncio.to_thread(boards_ref.get)
+        menu_doc = await asyncio.to_thread(menu_ref.get)
+        if not boards_doc.exists and not menu_doc.exists:
+            return None
+
+        merged: Dict[str, Any] = {}
+
+        if boards_doc.exists:
+            boards_data = boards_doc.to_dict() or {}
+            if str(boards_data.get('boards_storage') or '').lower() == 'chunked':
+                merged['boards'] = await _load_chunked_tap_boards(boards_ref)
+            elif isinstance(boards_data.get('boards'), list):
+                merged['boards'] = [b for b in boards_data.get('boards', []) if isinstance(b, dict)]
+
+            if isinstance(boards_data.get('board_settings'), dict):
+                merged['board_settings'] = dict(boards_data['board_settings'])
+
+            if boards_data.get('boards_schema_version') is not None:
+                merged['boards_schema_version'] = boards_data.get('boards_schema_version')
+
+            if boards_data.get('updated_at'):
+                merged['updated_at'] = boards_data.get('updated_at')
+            if boards_data.get('created_at'):
+                merged['created_at'] = boards_data.get('created_at')
+
+        if menu_doc.exists:
+            menu_data = menu_doc.to_dict() or {}
+            if isinstance(menu_data.get('boards_menu'), list):
+                merged['boards_menu'] = dedupe_boards_menu_tree(menu_data.get('boards_menu'))
+
+            # Allow board_settings to be supplied from menu doc as a fallback.
+            if 'board_settings' not in merged and isinstance(menu_data.get('board_settings'), dict):
+                merged['board_settings'] = dict(menu_data['board_settings'])
+
+            if menu_data.get('boards_schema_version') is not None and 'boards_schema_version' not in merged:
+                merged['boards_schema_version'] = menu_data.get('boards_schema_version')
+
+        return merged
+    except Exception as e:
+        logging.error(f"Error loading split tap config docs: {e}")
+        return None
+
+
+async def _save_split_tap_docs(account_id: str, aac_user_id: str, config_data: Dict[str, Any]) -> bool:
+    """Dual-write tap boards/menu into separate docs for phase-1 migration."""
+    try:
+        now_iso = dt.now().isoformat()
+
+        boards_ref = _tap_boards_doc_ref(account_id, aac_user_id)
+        menu_ref = _tap_menu_doc_ref(account_id, aac_user_id)
+
+        boards = config_data.get('boards') if isinstance(config_data.get('boards'), list) else []
+        board_settings = config_data.get('board_settings') if isinstance(config_data.get('board_settings'), dict) else {}
+        boards_schema_version = int(config_data.get('boards_schema_version') or 1)
+        created_at = config_data.get('created_at') or now_iso
+
+        boards_payload = {
+            'board_settings': board_settings,
+            'boards_schema_version': boards_schema_version,
+            'updated_at': now_iso,
+            'created_at': created_at,
+        }
+
+        estimated_boards_size = _estimate_json_size_bytes({'boards': boards})
+        if estimated_boards_size <= TAP_CONFIG_DOC_SOFT_LIMIT_BYTES:
+            boards_payload['boards'] = boards
+            boards_payload.pop('boards_storage', None)
+            boards_payload.pop('boards_chunk_count', None)
+            boards_payload.pop('boards_count', None)
+            await asyncio.to_thread(boards_ref.set, boards_payload)
+            await _clear_chunked_tap_boards(boards_ref)
+        else:
+            chunk_count = await _save_chunked_tap_boards(boards_ref, boards)
+            boards_payload['boards_storage'] = 'chunked'
+            boards_payload['boards_chunk_count'] = chunk_count
+            boards_payload['boards_count'] = len(boards)
+            await asyncio.to_thread(boards_ref.set, boards_payload)
+
+        boards_menu = config_data.get('boards_menu') if isinstance(config_data.get('boards_menu'), list) else []
+        menu_payload = {
+            'boards_menu': dedupe_boards_menu_tree(boards_menu),
+            'board_settings': board_settings,
+            'boards_schema_version': boards_schema_version,
+            'updated_at': now_iso,
+            'created_at': created_at,
+        }
+        await asyncio.to_thread(menu_ref.set, menu_payload)
+
+        return True
+    except Exception as e:
+        logging.error(f"Error saving split tap config docs: {e}")
+        return False
+
+
 async def load_tap_nav_config(account_id: str, aac_user_id: str) -> Optional[Dict]:
     """Load tap navigation configuration from Firestore"""
     global firestore_db
@@ -19182,11 +23305,47 @@ async def load_tap_nav_config(account_id: str, aac_user_id: str) -> Optional[Dic
     
     try:
         # Always load the single user configuration
-        doc_ref = firestore_db.document(f"{FIRESTORE_ACCOUNTS_COLLECTION}/{account_id}/{FIRESTORE_ACCOUNT_USERS_SUBCOLLECTION}/{aac_user_id}/tap_interface_config/config")
+        doc_ref = _tap_config_doc_ref(account_id, aac_user_id)
         doc = await asyncio.to_thread(doc_ref.get)
+
+        split_data = await _load_split_tap_docs(account_id, aac_user_id)
+
         if doc.exists:
-            return doc.to_dict()
-        
+            config_data = doc.to_dict() or {}
+            if str(config_data.get('boards_storage') or '').lower() == 'chunked':
+                config_data['boards'] = await _load_chunked_tap_boards(doc_ref)
+            elif not isinstance(config_data.get('boards'), list):
+                config_data['boards'] = []
+
+            # Phase 1: prefer split docs for boards/menu/settings when present.
+            if isinstance(split_data, dict):
+                if isinstance(split_data.get('boards'), list):
+                    config_data['boards'] = split_data.get('boards')
+                if isinstance(split_data.get('boards_menu'), list):
+                    config_data['boards_menu'] = split_data.get('boards_menu')
+                if isinstance(split_data.get('board_settings'), dict):
+                    config_data['board_settings'] = split_data.get('board_settings')
+                if split_data.get('boards_schema_version') is not None:
+                    config_data['boards_schema_version'] = split_data.get('boards_schema_version')
+
+            # Keep compatibility shape updated
+            config_data['buttons'] = compose_legacy_buttons_from_boards_menu(config_data)
+            return config_data
+
+        # Backward-compatible fallback: synthesize from split docs if combined doc is missing.
+        if isinstance(split_data, dict):
+            synthesized = create_default_tap_config(account_id, aac_user_id)
+            if isinstance(split_data.get('boards'), list):
+                synthesized['boards'] = split_data.get('boards')
+            if isinstance(split_data.get('boards_menu'), list):
+                synthesized['boards_menu'] = split_data.get('boards_menu')
+            if isinstance(split_data.get('board_settings'), dict):
+                synthesized['board_settings'] = split_data.get('board_settings')
+            if split_data.get('boards_schema_version') is not None:
+                synthesized['boards_schema_version'] = split_data.get('boards_schema_version')
+            synthesized['buttons'] = compose_legacy_buttons_from_boards_menu(synthesized)
+            return synthesized
+
         return None
     except Exception as e:
         logging.error(f"Error loading tap navigation config: {e}")
@@ -19199,14 +23358,47 @@ async def save_tap_nav_config(account_id: str, aac_user_id: str, config_data: Di
         return False
     
     try:
-        # Always save to the single user configuration document
-        config_data['updated_at'] = dt.now().isoformat()
-        if 'created_at' not in config_data:
-            config_data['created_at'] = config_data['updated_at']
-        
-        doc_ref = firestore_db.document(f"{FIRESTORE_ACCOUNTS_COLLECTION}/{account_id}/{FIRESTORE_ACCOUNT_USERS_SUBCOLLECTION}/{aac_user_id}/tap_interface_config/config")
-        await asyncio.to_thread(doc_ref.set, config_data)
-        return True
+        # Phase 1 migration strategy:
+        # - Split docs (boards_config + menu_config) are primary.
+        # - Legacy combined config doc is only mirrored if it already exists,
+        #   so deleting it does not cause recreation.
+        working_config = copy.deepcopy(config_data) if isinstance(config_data, dict) else {}
+        working_config['updated_at'] = dt.now().isoformat()
+        if 'created_at' not in working_config:
+            working_config['created_at'] = working_config['updated_at']
+
+        doc_ref = _tap_config_doc_ref(account_id, aac_user_id)
+        boards = working_config.get('boards') if isinstance(working_config.get('boards'), list) else []
+
+        split_saved = await _save_split_tap_docs(account_id, aac_user_id, working_config)
+        if not split_saved:
+            return False
+
+        legacy_doc = await asyncio.to_thread(doc_ref.get)
+        if not legacy_doc.exists:
+            return True
+
+        estimated_size = _estimate_json_size_bytes(working_config)
+        combined_saved = False
+        if estimated_size <= TAP_CONFIG_DOC_SOFT_LIMIT_BYTES:
+            working_config.pop('boards_storage', None)
+            working_config.pop('boards_chunk_count', None)
+            working_config.pop('boards_count', None)
+            await asyncio.to_thread(doc_ref.set, working_config)
+            await _clear_chunked_tap_boards(doc_ref)
+            combined_saved = True
+        else:
+            # Firestore has a strict per-document limit; store large boards list in chunked sub-documents.
+            base_config = copy.deepcopy(working_config)
+            base_config.pop('boards', None)
+            chunk_count = await _save_chunked_tap_boards(doc_ref, boards)
+            base_config['boards_storage'] = 'chunked'
+            base_config['boards_chunk_count'] = chunk_count
+            base_config['boards_count'] = len(boards)
+            await asyncio.to_thread(doc_ref.set, base_config)
+            combined_saved = True
+
+        return combined_saved
     except Exception as e:
         logging.error(f"Error saving tap navigation config: {e}")
         return False
@@ -19714,7 +23906,7 @@ def create_default_tap_config(account_id: str, aac_user_id: str) -> Dict:
                     "hidden": False,
                     "background_color": "#ffffff",
                     "prompt_topic": None
-                }
+                },
             ],
             "prompt_topic": None,
             "background_color": "#FFFFFF"
@@ -20070,6 +24262,44 @@ def create_default_tap_config(account_id: str, aac_user_id: str) -> Dict:
                     "speech_text": None,
                     "static_options": None,
                     "label": "General things",
+                    "image_url": None,
+                    "prompt_examples": None,
+                    "children": [],
+                    "hidden": False,
+                    "background_color": "#ffffff",
+                    "prompt_topic": None
+                },
+                {
+                    "words_prompt": None,
+                    "special_function": None,
+                    "custom_audio_file": None,
+                    "text_color": "#000000",
+                    "id": "button_1769550096760_science",
+                    "prompt_exclusions": None,
+                    "llm_prompt": "Generate a list of nouns related to science, including planets, space, and astronomy concepts",
+                    "prompt_category": "science",
+                    "speech_text": None,
+                    "static_options": None,
+                    "label": "Science",
+                    "image_url": None,
+                    "prompt_examples": None,
+                    "children": [],
+                    "hidden": False,
+                    "background_color": "#ffffff",
+                    "prompt_topic": None
+                },
+                {
+                    "words_prompt": None,
+                    "special_function": None,
+                    "custom_audio_file": None,
+                    "text_color": "#000000",
+                    "id": "button_1769550096761_imaginary",
+                    "prompt_exclusions": None,
+                    "llm_prompt": "Generate a list of nouns for imaginary and fantasy things, including mythical creatures and magical objects",
+                    "prompt_category": "imaginary",
+                    "speech_text": None,
+                    "static_options": None,
+                    "label": "Imaginary",
                     "image_url": None,
                     "prompt_examples": None,
                     "children": [],
@@ -20553,6 +24783,25 @@ def create_default_tap_config(account_id: str, aac_user_id: str) -> Dict:
                     "hidden": False,
                     "background_color": "#ffffff",
                     "prompt_topic": None
+                },
+                {
+                    "words_prompt": None,
+                    "special_function": None,
+                    "custom_audio_file": None,
+                    "text_color": "#000000",
+                    "id": "button_1769550096759_dinosaurs",
+                    "prompt_exclusions": None,
+                    "llm_prompt": "Generate a list of dinosaurs or phrases that could be used to discuss dinosaurs",
+                    "prompt_category": "dinosaurs",
+                    "speech_text": None,
+                    "static_options": None,
+                    "label": "Dinosaurs",
+                    "image_url": None,
+                    "prompt_examples": None,
+                    "children": [],
+                    "hidden": False,
+                    "background_color": "#ffffff",
+                    "prompt_topic": None
                 }
             ],
             "prompt_topic": None,
@@ -20663,6 +24912,7 @@ def create_default_tap_config(account_id: str, aac_user_id: str) -> Dict:
     config['updated_at'] = datetime.now().isoformat()
 
     config, _ = normalize_compose_tap_config(config)
+    config, _ = ensure_tap_boards_structure(config)
     
     return config
 
@@ -20686,7 +24936,15 @@ async def get_tap_interface_config(
             await save_tap_nav_config(account_id, aac_user_id, config_data)
         else:
             config_data, was_normalized = normalize_compose_tap_config(config_data)
-            if was_normalized:
+            config_data, boards_changed = ensure_tap_boards_structure(config_data)
+            menu_before = config_data.get('boards_menu') if isinstance(config_data.get('boards_menu'), list) else []
+            menu_deduped = dedupe_boards_menu_tree(menu_before)
+            menu_changed = menu_before != menu_deduped
+            if menu_changed:
+                config_data['boards_menu'] = menu_deduped
+                config_data['buttons'] = compose_legacy_buttons_from_boards_menu(config_data)
+
+            if was_normalized or boards_changed or menu_changed:
                 await save_tap_nav_config(account_id, aac_user_id, config_data)
         
         # DEBUG: Log words_prompt presence
@@ -20699,7 +24957,9 @@ async def get_tap_interface_config(
                         if c.get('words_prompt'):
                             logging.info(f"DEBUG: Loaded child '{c.get('label')}' with words_prompt: {c.get('words_prompt')[:20]}...")
 
-        return JSONResponse(content=config_data)
+        config_response = dict(config_data)
+        config_response['buttons'] = compose_legacy_buttons_from_boards_menu(config_data)
+        return JSONResponse(content=config_response)
     except Exception as e:
         logging.error(f"Error getting tap interface config: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -20714,6 +24974,8 @@ async def save_tap_interface_config(
     account_id = current_ids["account_id"]
     
     try:
+        existing_config = await load_tap_nav_config(account_id, aac_user_id)
+
         # DEBUG: Log words_prompt presence in received config
         for b in config_data.buttons:
             if b.words_prompt:
@@ -20727,6 +24989,8 @@ async def save_tap_interface_config(
         # Always use 'user_config' as ID for single configuration per user
         config_dict['id'] = 'user_config'
         config_dict['updated_at'] = dt.now().isoformat()
+        config_dict, _ = normalize_compose_tap_config(config_dict)
+        config_dict, _ = ensure_tap_boards_structure(config_dict, existing_config=existing_config)
         
         success = await save_tap_nav_config(account_id, aac_user_id, config_dict)
         
@@ -20736,6 +25000,367 @@ async def save_tap_interface_config(
             raise HTTPException(status_code=500, detail="Failed to save configuration")
     except Exception as e:
         logging.error(f"Error saving tap interface config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/tap-interface/boards-menu")
+async def get_tap_boards_menu_config(
+    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
+):
+    """Get board-oriented menu config (parallel structure) for tap interface."""
+    aac_user_id = current_ids["aac_user_id"]
+    account_id = current_ids["account_id"]
+
+    try:
+        config_data = await load_tap_nav_config(account_id, aac_user_id)
+        if not config_data:
+            config_data = create_default_tap_config(account_id, aac_user_id)
+            await save_tap_nav_config(account_id, aac_user_id, config_data)
+        else:
+            config_data, was_normalized = normalize_compose_tap_config(config_data)
+            config_data, boards_changed = ensure_tap_boards_structure(config_data)
+            if was_normalized or boards_changed:
+                await save_tap_nav_config(account_id, aac_user_id, config_data)
+
+        boards = config_data.get('boards') if isinstance(config_data.get('boards'), list) else []
+        boards_menu = config_data.get('boards_menu') if isinstance(config_data.get('boards_menu'), list) else []
+        board_settings = config_data.get('board_settings') if isinstance(config_data.get('board_settings'), dict) else {}
+
+        boards_menu_sorted = sort_boards_menu_tree(boards_menu)
+
+        return JSONResponse(content={
+            'boards_schema_version': int(config_data.get('boards_schema_version') or 1),
+            'board_settings': {
+                'max_columns': int(board_settings.get('max_columns', 12) or 12),
+                'max_rows': int(board_settings.get('max_rows', 7) or 7),
+                'allow_user_boards': bool(board_settings.get('allow_user_boards', True)),
+                'default_ai_boards_global': bool(board_settings.get('default_ai_boards_global', True)),
+                'home_board_id': board_settings.get('home_board_id'),
+            },
+            'boards_menu': boards_menu_sorted,
+            'boards': [
+                {
+                    'id': b.get('id'),
+                    'label': b.get('label'),
+                    'board_type': b.get('board_type'),
+                    'owner_scope': b.get('owner_scope'),
+                    'hidden': bool(b.get('hidden', False)),
+                    'source': b.get('source'),
+                    'source_button_id': b.get('source_button_id'),
+                }
+                for b in boards
+                if isinstance(b, dict)
+            ],
+        })
+    except Exception as e:
+        logging.error(f"Error getting tap boards menu config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tap-interface/boards-menu")
+async def save_tap_boards_menu_config(
+    payload: TapBoardsMenuUpdateRequest,
+    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
+):
+    """Save board-oriented menu config (parallel structure) for tap interface."""
+    aac_user_id = current_ids["aac_user_id"]
+    account_id = current_ids["account_id"]
+
+    try:
+        config_data = await load_tap_nav_config(account_id, aac_user_id)
+        if not config_data:
+            config_data = create_default_tap_config(account_id, aac_user_id)
+
+        config_data, _ = normalize_compose_tap_config(config_data)
+        config_data, _ = ensure_tap_boards_structure(config_data)
+
+        boards = config_data.get('boards') if isinstance(config_data.get('boards'), list) else []
+        valid_board_ids = {
+            str(b.get('id')).strip()
+            for b in boards
+            if isinstance(b, dict) and str(b.get('id') or '').strip()
+        }
+
+        requested_menu = [item.model_dump() for item in payload.boards_menu]
+        normalized_menu = normalize_boards_menu_items(requested_menu, valid_board_ids)
+        config_data['boards_menu'] = normalized_menu
+
+        if payload.board_settings is not None:
+            config_data['board_settings'] = payload.board_settings.model_dump()
+
+        config_data['boards_schema_version'] = 1
+        config_data['updated_at'] = dt.now().isoformat()
+
+        success = await save_tap_nav_config(account_id, aac_user_id, config_data)
+        if not success:
+            raise HTTPException(status_code=500, detail='Failed to save boards menu config')
+
+        return JSONResponse(content={
+            'success': True,
+            'message': 'Boards menu saved successfully',
+            'boards_menu_count': len(normalized_menu),
+        })
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logging.error(f"Error saving tap boards menu config: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _clear_board_references_in_menu(menu_items: Any, removed_board_id: str) -> Any:
+    if not isinstance(menu_items, list):
+        return menu_items
+
+    updated_items: List[Dict[str, Any]] = []
+    for item in menu_items:
+        if not isinstance(item, dict):
+            continue
+
+        cloned = dict(item)
+        if str(cloned.get('board_id') or '').strip() == removed_board_id:
+            cloned['board_id'] = None
+        cloned['children'] = _clear_board_references_in_menu(cloned.get('children'), removed_board_id)
+        updated_items.append(cloned)
+
+    return updated_items
+
+
+@app.get("/api/tap-interface/boards")
+async def list_tap_boards(
+    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
+):
+    """List all board definitions for board builder/admin tooling."""
+    aac_user_id = current_ids["aac_user_id"]
+    account_id = current_ids["account_id"]
+
+    try:
+        config_data = await load_tap_nav_config(account_id, aac_user_id)
+        if not config_data:
+            config_data = create_default_tap_config(account_id, aac_user_id)
+            await save_tap_nav_config(account_id, aac_user_id, config_data)
+        else:
+            config_data, was_normalized = normalize_compose_tap_config(config_data)
+            config_data, boards_changed = ensure_tap_boards_structure(config_data)
+            if was_normalized or boards_changed:
+                await save_tap_nav_config(account_id, aac_user_id, config_data)
+
+        boards = config_data.get('boards') if isinstance(config_data.get('boards'), list) else []
+        board_settings = config_data.get('board_settings') if isinstance(config_data.get('board_settings'), dict) else {}
+        return JSONResponse(content={
+            'boards': [b for b in boards if isinstance(b, dict)],
+            'count': len(boards),
+            'board_settings': {
+                'max_columns': int(board_settings.get('max_columns', 12) or 12),
+                'max_rows': int(board_settings.get('max_rows', 7) or 7),
+                'allow_user_boards': bool(board_settings.get('allow_user_boards', True)),
+                'default_ai_boards_global': bool(board_settings.get('default_ai_boards_global', True)),
+                'home_board_id': board_settings.get('home_board_id'),
+            },
+        })
+    except Exception as e:
+        logging.error(f"Error listing tap boards: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/tap-interface/boards/{board_id}")
+async def get_tap_board(
+    board_id: str,
+    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
+):
+    """Get a single board definition by id."""
+    aac_user_id = current_ids["aac_user_id"]
+    account_id = current_ids["account_id"]
+
+    try:
+        config_data = await load_tap_nav_config(account_id, aac_user_id)
+        if not config_data:
+            raise HTTPException(status_code=404, detail='Board config not found')
+
+        config_data, _ = normalize_compose_tap_config(config_data)
+        config_data, _ = ensure_tap_boards_structure(config_data)
+        boards = config_data.get('boards') if isinstance(config_data.get('boards'), list) else []
+        board_settings = config_data.get('board_settings') if isinstance(config_data.get('board_settings'), dict) else {}
+
+        board = next((b for b in boards if isinstance(b, dict) and b.get('id') == board_id), None)
+        if not board:
+            raise HTTPException(status_code=404, detail='Board not found')
+
+        return JSONResponse(content={'board': board, 'board_settings': board_settings})
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error getting tap board {board_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/tap-interface/boards")
+async def create_tap_board(
+    payload: TapBoardCreateRequest,
+    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
+):
+    """Create a custom board definition."""
+    aac_user_id = current_ids["aac_user_id"]
+    account_id = current_ids["account_id"]
+
+    try:
+        config_data = await load_tap_nav_config(account_id, aac_user_id)
+        if not config_data:
+            config_data = create_default_tap_config(account_id, aac_user_id)
+
+        config_data, _ = normalize_compose_tap_config(config_data)
+        config_data, _ = ensure_tap_boards_structure(config_data)
+
+        boards = config_data.get('boards') if isinstance(config_data.get('boards'), list) else []
+        existing_ids = {
+            str(b.get('id')).strip()
+            for b in boards
+            if isinstance(b, dict) and str(b.get('id') or '').strip()
+        }
+
+        requested_id = str(payload.id or '').strip()
+        if requested_id:
+            board_id = requested_id
+            if board_id in existing_ids:
+                raise HTTPException(status_code=409, detail='Board ID already exists')
+        else:
+            base_slug = _sanitize_board_slug(payload.label)
+            board_id = f'board_{base_slug}'
+            suffix = 2
+            while board_id in existing_ids:
+                board_id = f'board_{base_slug}_{suffix}'
+                suffix += 1
+
+        board = _normalize_board_payload(payload.model_dump(), board_id=board_id, source='custom', source_button_id=None)
+        boards.append(board)
+        config_data['boards'] = boards
+        board_settings = config_data.get('board_settings') if isinstance(config_data.get('board_settings'), dict) else {}
+        if payload.set_as_home:
+            board_settings['home_board_id'] = board_id
+        config_data['board_settings'] = board_settings
+        config_data['updated_at'] = dt.now().isoformat()
+
+        success = await save_tap_nav_config(account_id, aac_user_id, config_data)
+        if not success:
+            raise HTTPException(status_code=500, detail='Failed to create board')
+
+        return JSONResponse(content={'success': True, 'board': board, 'board_settings': config_data.get('board_settings', {})})
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error creating tap board: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.put("/api/tap-interface/boards/{board_id}")
+async def update_tap_board(
+    board_id: str,
+    payload: TapBoardUpdateRequest,
+    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
+):
+    """Update an existing board definition."""
+    aac_user_id = current_ids["aac_user_id"]
+    account_id = current_ids["account_id"]
+
+    try:
+        config_data = await load_tap_nav_config(account_id, aac_user_id)
+        if not config_data:
+            raise HTTPException(status_code=404, detail='Board config not found')
+
+        config_data, _ = normalize_compose_tap_config(config_data)
+        config_data, _ = ensure_tap_boards_structure(config_data)
+
+        boards = config_data.get('boards') if isinstance(config_data.get('boards'), list) else []
+        board_index = next(
+            (i for i, b in enumerate(boards) if isinstance(b, dict) and str(b.get('id') or '') == board_id),
+            None,
+        )
+        if board_index is None:
+            raise HTTPException(status_code=404, detail='Board not found')
+
+        existing_board = boards[board_index]
+        if str(existing_board.get('source') or '') == 'legacy_category' or str(existing_board.get('board_type') or '') == 'system':
+            raise HTTPException(status_code=403, detail='Legacy and system boards are read-only')
+
+        updated_board = _normalize_board_payload(
+            payload.model_dump(),
+            board_id=board_id,
+            source=str(existing_board.get('source') or 'custom'),
+            source_button_id=existing_board.get('source_button_id'),
+        )
+        # Preserve created_during_migration flag unless the incoming payload explicitly clears it
+        if not payload.created_during_migration:
+            updated_board['created_during_migration'] = False
+        boards[board_index] = updated_board
+
+        config_data['boards'] = boards
+        board_settings = config_data.get('board_settings') if isinstance(config_data.get('board_settings'), dict) else {}
+        if payload.set_as_home:
+            board_settings['home_board_id'] = board_id
+        config_data['board_settings'] = board_settings
+        config_data['updated_at'] = dt.now().isoformat()
+
+        success = await save_tap_nav_config(account_id, aac_user_id, config_data)
+        if not success:
+            raise HTTPException(status_code=500, detail='Failed to update board')
+
+        return JSONResponse(content={'success': True, 'board': updated_board, 'board_settings': config_data.get('board_settings', {})})
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error updating tap board {board_id}: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/api/tap-interface/boards/{board_id}")
+async def delete_tap_board(
+    board_id: str,
+    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)]
+):
+    """Delete a board and clear any menu references to it."""
+    aac_user_id = current_ids["aac_user_id"]
+    account_id = current_ids["account_id"]
+
+    try:
+        config_data = await load_tap_nav_config(account_id, aac_user_id)
+        if not config_data:
+            raise HTTPException(status_code=404, detail='Board config not found')
+
+        config_data, _ = normalize_compose_tap_config(config_data)
+        config_data, _ = ensure_tap_boards_structure(config_data)
+
+        boards = config_data.get('boards') if isinstance(config_data.get('boards'), list) else []
+        board_index = next(
+            (i for i, b in enumerate(boards) if isinstance(b, dict) and str(b.get('id') or '') == board_id),
+            None,
+        )
+        if board_index is None:
+            raise HTTPException(status_code=404, detail='Board not found')
+
+        removed_board = boards[board_index]
+        if str(removed_board.get('source') or '') == 'legacy_category' or str(removed_board.get('board_type') or '') == 'system':
+            raise HTTPException(status_code=403, detail='Legacy and system boards cannot be deleted')
+
+        board_settings = config_data.get('board_settings') if isinstance(config_data.get('board_settings'), dict) else {}
+        if str(board_settings.get('home_board_id') or '').strip() == board_id:
+            raise HTTPException(status_code=400, detail='Cannot delete the current home board')
+
+        removed_board = boards.pop(board_index)
+        config_data['boards'] = boards
+
+        existing_menu = config_data.get('boards_menu')
+        if isinstance(existing_menu, list):
+            config_data['boards_menu'] = _clear_board_references_in_menu(existing_menu, board_id)
+
+        config_data['updated_at'] = dt.now().isoformat()
+        success = await save_tap_nav_config(account_id, aac_user_id, config_data)
+        if not success:
+            raise HTTPException(status_code=500, detail='Failed to delete board')
+
+        return JSONResponse(content={'success': True, 'deleted_board_id': board_id, 'deleted_label': removed_board.get('label')})
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error deleting tap board {board_id}: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # Note: Single configuration per user - no need for list, activate, or delete endpoints
@@ -20871,6 +25496,86 @@ except ImportError as e:
 
 # Store parsed MTI data temporarily (in production, use Redis or database)
 migration_sessions = {}  # Format: {session_id: {parsed_data, mapper, timestamp}}
+
+try:
+    from touchchat_ce_parser import parse_touchchat_ce_upload
+    TOUCHCHAT_MIGRATION_AVAILABLE = True
+except ImportError as e:
+    logging.warning(f"TouchChat migration utilities not available: {e}")
+    TOUCHCHAT_MIGRATION_AVAILABLE = False
+
+touchchat_migration_sessions = {}  # Format: {session_id: {parsed_data, temp_dir, c4s_path, timestamp, account_id, aac_user_id}}
+
+
+def _normalize_board_label(value: Any) -> str:
+    return str(value or "").strip().lower().replace(" ", "_")
+
+
+def _touchchat_source_board_is_speech_only(source_board: Dict[str, Any]) -> bool:
+    """Return True for speech-dominant boards that should behave like temporary nav targets.
+
+    Some TouchChat Word Power sub-vocabulary pages are almost entirely speech buttons but include
+    a couple utility nav buttons (for example ABC/123).  Those still need temporary return behavior.
+    """
+    buttons = source_board.get("buttons") if isinstance(source_board.get("buttons"), list) else []
+    if not buttons:
+        return False
+
+    total_buttons = 0
+    nav_buttons = 0
+    for btn in buttons:
+        if not isinstance(btn, dict):
+            continue
+        label = str(btn.get("label") or "").strip()
+        speech = str(btn.get("speech_text") or "").strip()
+        nav_target = str(btn.get("navigation_target_page_rid") or "").strip()
+
+        # Skip empty placeholders from sparse layouts.
+        if not label and not speech and not nav_target:
+            continue
+
+        total_buttons += 1
+        if nav_target:
+            nav_buttons += 1
+
+    if total_buttons == 0:
+        return False
+
+    # Strict speech-only still qualifies.
+    if nav_buttons == 0:
+        return True
+
+    # Treat as speech-dominant when only a small minority are utility nav buttons.
+    speech_buttons = total_buttons - nav_buttons
+    nav_ratio = nav_buttons / float(total_buttons)
+    if nav_buttons <= 2 and speech_buttons >= 8 and nav_ratio <= 0.20:
+        return True
+
+    board_name = str(source_board.get("name") or "").strip().lower()
+    # Word Power 60 stores this page with utility nav buttons, but it should still
+    # behave as a temporary-return target for pronoun+verb phrase construction.
+    if board_name == ".basic60 i you" and speech_buttons >= 30 and nav_ratio <= 0.35:
+        return True
+
+    return False
+
+
+def _touchchat_cleanup_old_sessions() -> None:
+    cleanup_time = dt.now(timezone.utc) - timedelta(hours=1)
+    stale_sessions = [
+        sid for sid, data in touchchat_migration_sessions.items()
+        if data.get("timestamp") and data["timestamp"] < cleanup_time
+    ]
+
+    import shutil
+
+    for sid in stale_sessions:
+        session = touchchat_migration_sessions.pop(sid, None)
+        if not session:
+            continue
+        temp_dir = session.get("temp_dir")
+        if temp_dir:
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
 
 def load_existing_json(json_data: Dict) -> Dict:
@@ -21650,6 +26355,819 @@ async def delete_migration_session(
     raise HTTPException(status_code=404, detail="Session not found")
 
 
+# ===================================
+# TOUCHCHAT TO BRAVO BOARD MIGRATION
+# ===================================
+
+@app.post("/api/touchchat-migration/upload-ce")
+async def upload_touchchat_ce_file(
+    file: UploadFile = File(...),
+    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)] = None,
+):
+    if not TOUCHCHAT_MIGRATION_AVAILABLE:
+        raise HTTPException(status_code=501, detail="TouchChat migration functionality not available")
+
+    account_id = current_ids["account_id"]
+    aac_user_id = current_ids["aac_user_id"]
+
+    filename = str(file.filename or "")
+    normalized_name = filename.lower()
+    if not (normalized_name.endswith(".ce") or normalized_name.endswith(".ce.zip") or normalized_name.endswith(".zip")):
+        raise HTTPException(status_code=400, detail="Please upload a TouchChat .ce export file")
+
+    try:
+        content = await file.read()
+        extracted = parse_touchchat_ce_upload(content, filename)
+
+        session_id = str(uuid.uuid4())
+        touchchat_migration_sessions[session_id] = {
+            "parsed_data": extracted.parsed_data,
+            "temp_dir": extracted.temp_dir,
+            "c4s_path": extracted.c4s_path,
+            "timestamp": dt.now(timezone.utc),
+            "account_id": account_id,
+            "aac_user_id": aac_user_id,
+        }
+
+        _touchchat_cleanup_old_sessions()
+
+        return JSONResponse(content={
+            "session_id": session_id,
+            "summary": {
+                "file": extracted.parsed_data.get("file"),
+                "total_boards": extracted.parsed_data.get("total_boards", 0),
+                "total_buttons": extracted.parsed_data.get("total_buttons", 0),
+            },
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error parsing TouchChat CE file: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Failed to parse TouchChat CE file: {str(e)}")
+
+
+@app.get("/api/touchchat-migration/boards/{session_id}")
+async def get_touchchat_migration_boards(
+    session_id: str,
+    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)] = None,
+):
+    if session_id not in touchchat_migration_sessions:
+        raise HTTPException(status_code=404, detail="TouchChat migration session not found or expired")
+
+    session = touchchat_migration_sessions[session_id]
+    if session["account_id"] != current_ids["account_id"] or session["aac_user_id"] != current_ids["aac_user_id"]:
+        raise HTTPException(status_code=403, detail="Not authorized to access this TouchChat migration session")
+
+    return JSONResponse(content=session["parsed_data"])
+
+
+@app.post("/api/touchchat-migration/import-board")
+async def import_touchchat_board(
+    request_data: Dict = Body(...),
+    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)] = None,
+):
+    account_id = current_ids["account_id"]
+    aac_user_id = current_ids["aac_user_id"]
+
+    session_id = str(request_data.get("session_id") or "").strip()
+    source_board_id = str(request_data.get("source_board_id") or "").strip()
+    selected_indices = request_data.get("selected_button_indices") or []
+    destination_type = str(request_data.get("destination_type") or "new").strip().lower()
+    destination_board_id = str(request_data.get("destination_board_id") or "").strip()
+    destination_board_name = str(request_data.get("destination_board_name") or "").strip()
+    merge_mode = str(request_data.get("merge_mode") or "update").strip().lower()
+    nav_resolutions = request_data.get("navigation_resolutions") or {}
+    import_full_cascade = bool(request_data.get("import_full_cascade", False))
+    cascade_root_board_rename = request_data.get("cascade_root_board_rename") if isinstance(request_data.get("cascade_root_board_rename"), dict) else {}
+    cascade_root_old_name = str(cascade_root_board_rename.get("old_name") or "").strip()
+    cascade_root_new_name = str(cascade_root_board_rename.get("new_name") or "").strip()
+    cascade_child_resolutions: Dict[str, Any] = (
+        request_data.get("cascade_child_resolutions")
+        if isinstance(request_data.get("cascade_child_resolutions"), dict)
+        else {}
+    )
+    # format: { source_board_id: { "action": "use_existing", "existing_board_id": "..." }
+    #                            | { "action": "new", "board_name": "..." } }
+
+    def _normalize_touchchat_name_for_compare(value: Any) -> str:
+        return " ".join(str(value or "").strip().lower().split())
+
+    root_rename_enabled = bool(
+        import_full_cascade
+        and cascade_root_old_name
+        and cascade_root_new_name
+        and (_normalize_touchchat_name_for_compare(cascade_root_old_name) != _normalize_touchchat_name_for_compare(cascade_root_new_name))
+    )
+
+    if not session_id or not source_board_id:
+        raise HTTPException(status_code=400, detail="Missing required parameters")
+    if session_id not in touchchat_migration_sessions:
+        raise HTTPException(status_code=404, detail="TouchChat migration session not found or expired")
+
+    session = touchchat_migration_sessions[session_id]
+    if session["account_id"] != account_id or session["aac_user_id"] != aac_user_id:
+        raise HTTPException(status_code=403, detail="Not authorized to access this TouchChat migration session")
+
+    parsed_data = session.get("parsed_data") or {}
+    boards_from_file = parsed_data.get("boards") if isinstance(parsed_data.get("boards"), dict) else {}
+    source_board = boards_from_file.get(source_board_id)
+    if not source_board:
+        raise HTTPException(status_code=404, detail="Source board not found in parsed TouchChat data")
+
+    sorted_buttons = source_board.get("buttons") if isinstance(source_board.get("buttons"), list) else []
+    selected_buttons = [
+        sorted_buttons[int(i)]
+        for i in selected_indices
+        if isinstance(i, int) and 0 <= int(i) < len(sorted_buttons)
+    ]
+    if import_full_cascade:
+        selected_buttons = sorted_buttons
+    if not selected_buttons:
+        raise HTTPException(status_code=400, detail="No valid buttons selected for import")
+
+    config_data = await load_tap_nav_config(account_id, aac_user_id)
+    if not config_data:
+        config_data = create_default_tap_config(account_id, aac_user_id)
+    config_data, _ = normalize_compose_tap_config(config_data)
+    config_data, _ = ensure_tap_boards_structure(config_data)
+
+    boards = config_data.get("boards") if isinstance(config_data.get("boards"), list) else []
+    existing_by_id = {
+        str(board.get("id") or "").strip(): board
+        for board in boards
+        if isinstance(board, dict) and str(board.get("id") or "").strip()
+    }
+    existing_by_label = {
+        _normalize_board_label(board.get("label")): str(board.get("id") or "").strip()
+        for board in boards
+        if isinstance(board, dict)
+    }
+
+    if destination_type not in {"new", "existing"}:
+        raise HTTPException(status_code=400, detail="destination_type must be 'new' or 'existing'")
+    if merge_mode not in {"replace", "update"}:
+        raise HTTPException(status_code=400, detail="merge_mode must be 'replace' or 'update'")
+
+    target_board: Optional[Dict[str, Any]] = None
+    target_board_id: Optional[str] = None
+    created_board = False
+
+    if destination_type == "existing":
+        if not destination_board_id:
+            raise HTTPException(status_code=400, detail="destination_board_id is required for existing board import")
+        target_board = existing_by_id.get(destination_board_id)
+        if not target_board:
+            raise HTTPException(status_code=404, detail="Destination board not found")
+        if str(target_board.get("source") or "") == "legacy_category" or str(target_board.get("board_type") or "") == "system":
+            raise HTTPException(status_code=403, detail="Cannot import into legacy/system read-only boards")
+        target_board_id = destination_board_id
+    else:
+        if not destination_board_name:
+            raise HTTPException(status_code=400, detail="destination_board_name is required for new board import")
+
+        base_slug = _sanitize_board_slug(destination_board_name)
+        candidate_id = f"board_{base_slug}"
+        suffix = 2
+        while candidate_id in existing_by_id:
+            candidate_id = f"board_{base_slug}_{suffix}"
+            suffix += 1
+
+        target_board_id = candidate_id
+        target_board = _normalize_board_payload(
+            {
+                "label": destination_board_name,
+                "board_type": "static",
+                "owner_scope": "user",
+                "hidden": False,
+                "default_columns": int(source_board.get("layout_cols") or 12),
+                "max_rows": max(7, int(source_board.get("layout_rows") or 7)),
+                "buttons": [],
+                "created_during_migration": True,
+            },
+            board_id=target_board_id,
+            source="custom",
+            source_button_id=None,
+        )
+        boards.append(target_board)
+        existing_by_id[target_board_id] = target_board
+        existing_by_label[_normalize_board_label(destination_board_name)] = target_board_id
+        created_board = True
+
+    source_page_rid = str(source_board.get("page_rid") or "").strip()
+    source_page_name = str(source_board.get("name") or "").strip()
+    missing_nav_targets: List[Dict[str, Any]] = []
+    resolved_nav_map: Dict[str, str] = {}
+    created_nav_boards: List[Dict[str, str]] = []
+
+    if import_full_cascade:
+        source_boards_by_page_id = {
+            str(board.get("page_id") or "").strip(): board
+            for board in boards_from_file.values()
+            if isinstance(board, dict) and str(board.get("page_id") or "").strip()
+        }
+        source_boards_by_rid = {
+            str(board.get("page_rid") or "").strip(): board
+            for board in boards_from_file.values()
+            if isinstance(board, dict) and str(board.get("page_rid") or "").strip()
+        }
+
+        def ensure_target_board_for_source(src_board: Dict[str, Any]) -> str:
+            src_page_id = str(src_board.get("page_id") or "").strip()
+
+            # Check for an explicit admin resolution first (from pre-flight conflict dialog)
+            if src_page_id and src_page_id in cascade_child_resolutions:
+                res = cascade_child_resolutions[src_page_id]
+                if isinstance(res, dict):
+                    if res.get("action") == "use_existing":
+                        resolved_existing_id = str(res.get("existing_board_id") or "").strip()
+                        if resolved_existing_id and resolved_existing_id in existing_by_id:
+                            return resolved_existing_id
+                    elif res.get("action") == "new":
+                        custom_name = str(res.get("board_name") or "").strip()
+                        if custom_name:
+                            custom_key = _normalize_board_label(custom_name)
+                            existing_for_custom = existing_by_label.get(custom_key)
+                            if existing_for_custom:
+                                return existing_for_custom
+                            # Create under custom name
+                            custom_slug = _sanitize_board_slug(custom_name)
+                            custom_cid = f"board_{custom_slug}"
+                            custom_suffix = 2
+                            while custom_cid in existing_by_id:
+                                custom_cid = f"board_{custom_slug}_{custom_suffix}"
+                                custom_suffix += 1
+                            new_board = _normalize_board_payload(
+                                {
+                                    "label": custom_name,
+                                    "board_type": "static",
+                                    "owner_scope": "user",
+                                    "hidden": False,
+                                    "default_columns": int(src_board.get("layout_cols") or 12),
+                                    "max_rows": max(7, int(src_board.get("layout_rows") or 7)),
+                                    "buttons": [],
+                                    "created_during_migration": True,
+                                },
+                                board_id=custom_cid,
+                                source="custom",
+                                source_button_id=None,
+                            )
+                            boards.append(new_board)
+                            existing_by_id[custom_cid] = new_board
+                            existing_by_label[custom_key] = custom_cid
+                            created_nav_boards.append({"id": custom_cid, "label": custom_name})
+                            return custom_cid
+
+            src_name = str(src_board.get("name") or src_board.get("page_id") or "Imported Board").strip() or "Imported Board"
+            src_key = _normalize_board_label(src_name)
+            existing_id = existing_by_label.get(src_key)
+            if existing_id:
+                return existing_id
+
+            src_slug = _sanitize_board_slug(src_name)
+            candidate_id = f"board_{src_slug}"
+            suffix = 2
+            while candidate_id in existing_by_id:
+                candidate_id = f"board_{src_slug}_{suffix}"
+                suffix += 1
+
+            new_board = _normalize_board_payload(
+                {
+                    "label": src_name,
+                    "board_type": "static",
+                    "owner_scope": "user",
+                    "hidden": False,
+                    "default_columns": int(src_board.get("layout_cols") or 12),
+                    "max_rows": max(7, int(src_board.get("layout_rows") or 7)),
+                    "buttons": [],
+                    "created_during_migration": True,
+                },
+                board_id=candidate_id,
+                source="custom",
+                source_button_id=None,
+            )
+            boards.append(new_board)
+            existing_by_id[candidate_id] = new_board
+            existing_by_label[src_key] = candidate_id
+            created_nav_boards.append({"id": candidate_id, "label": src_name})
+            return candidate_id
+
+        source_to_target_board_id: Dict[str, str] = {source_board_id: target_board_id}
+        queue: List[str] = [source_board_id]
+        processed: Set[str] = set()
+        total_imported_buttons = 0
+        imported_board_summaries: List[Dict[str, Any]] = []
+
+        while queue:
+            current_source_id = queue.pop(0)
+            if current_source_id in processed:
+                continue
+
+            current_source_board = source_boards_by_page_id.get(current_source_id)
+            if not current_source_board:
+                processed.add(current_source_id)
+                continue
+
+            current_target_id = source_to_target_board_id.get(current_source_id)
+            if not current_target_id:
+                current_target_id = ensure_target_board_for_source(current_source_board)
+                source_to_target_board_id[current_source_id] = current_target_id
+
+            current_target_board = existing_by_id.get(current_target_id)
+            if not current_target_board:
+                processed.add(current_source_id)
+                continue
+
+            current_buttons = current_source_board.get("buttons") if isinstance(current_source_board.get("buttons"), list) else []
+            current_source_rid = str(current_source_board.get("page_rid") or "").strip()
+            resolved_nav_map: Dict[str, str] = {}
+
+            for button in current_buttons:
+                target_rid = str(button.get("navigation_target_page_rid") or "").strip()
+                if not target_rid:
+                    continue
+                if target_rid == current_source_rid:
+                    resolved_nav_map[target_rid] = current_target_id
+                    continue
+
+                linked_source_board = source_boards_by_rid.get(target_rid)
+                if linked_source_board:
+                    linked_source_id = str(linked_source_board.get("page_id") or "").strip()
+                    if linked_source_id:
+                        linked_target_id = source_to_target_board_id.get(linked_source_id)
+                        if not linked_target_id:
+                            linked_target_id = ensure_target_board_for_source(linked_source_board)
+                            source_to_target_board_id[linked_source_id] = linked_target_id
+                        resolved_nav_map[target_rid] = linked_target_id
+                        if linked_source_id not in processed:
+                            queue.append(linked_source_id)
+                        continue
+
+                target_name = str(button.get("navigation_target_page_name") or "").strip() or target_rid
+                existing_match = existing_by_label.get(_normalize_board_label(target_name))
+                if existing_match:
+                    resolved_nav_map[target_rid] = existing_match
+                    continue
+
+                fallback_id = ensure_target_board_for_source({
+                    "name": target_name,
+                    "layout_cols": 12,
+                    "layout_rows": 7,
+                })
+                resolved_nav_map[target_rid] = fallback_id
+
+            existing_buttons = current_target_board.get("buttons") if isinstance(current_target_board.get("buttons"), list) else []
+            existing_buttons_by_position: Dict[Tuple[int, int], Dict[str, Any]] = {}
+            for existing_btn in existing_buttons:
+                if not isinstance(existing_btn, dict):
+                    continue
+                existing_buttons_by_position[(int(existing_btn.get("row", 0) or 0), int(existing_btn.get("col", 0) or 0))] = existing_btn
+
+            imported_buttons: List[Dict[str, Any]] = []
+            for idx, src_btn in enumerate(current_buttons):
+                label = str(src_btn.get("label") or "").strip()
+                row = int(src_btn.get("row") or 0)
+                col = int(src_btn.get("col") or 0)
+                existing_target_btn = existing_buttons_by_position.get((row, col))
+                image_url = None
+
+                nav_target_rid = str(src_btn.get("navigation_target_page_rid") or "").strip()
+                target_nav_board_id = resolved_nav_map.get(nav_target_rid) if nav_target_rid else None
+                temporary_navigation = bool(src_btn.get("temporary_navigation", False))
+                if not temporary_navigation and nav_target_rid:
+                    _nav_src_board = source_boards_by_rid.get(nav_target_rid)
+                    if _nav_src_board and _touchchat_source_board_is_speech_only(_nav_src_board):
+                        temporary_navigation = True
+                speech_text = str(src_btn.get("speech_text") or "").strip() or None
+
+                # If the admin chose a different destination name for the root board during full
+                # cascade import, rewrite matching text on buttons that navigate to that root board.
+                if root_rename_enabled and target_nav_board_id and target_nav_board_id == target_board_id:
+                    if _normalize_touchchat_name_for_compare(label) == _normalize_touchchat_name_for_compare(cascade_root_old_name):
+                        label = cascade_root_new_name
+                    if speech_text and _normalize_touchchat_name_for_compare(speech_text) == _normalize_touchchat_name_for_compare(cascade_root_old_name):
+                        speech_text = cascade_root_new_name
+
+                modifier_trigger_id = src_btn.get("modifier_trigger_id")
+
+                raw_modifier_variants = src_btn.get("modifier_variants") if isinstance(src_btn.get("modifier_variants"), dict) else {}
+                converted_modifier_variants: Dict[str, Dict[str, Any]] = {}
+                for modifier_id, raw_variant in raw_modifier_variants.items():
+                    if not isinstance(raw_variant, dict):
+                        continue
+                    variant_nav_rid = str(raw_variant.get("navigation_target_page_rid") or "").strip()
+                    variant_target_board_id = resolved_nav_map.get(variant_nav_rid) if variant_nav_rid else None
+                    variant_label = str(raw_variant.get("label") or "").strip()
+                    variant_speech_text = str(raw_variant.get("speech_text") or "").strip() or None
+
+                    if root_rename_enabled and variant_target_board_id and variant_target_board_id == target_board_id:
+                        if _normalize_touchchat_name_for_compare(variant_label) == _normalize_touchchat_name_for_compare(cascade_root_old_name):
+                            variant_label = cascade_root_new_name
+                        if variant_speech_text and _normalize_touchchat_name_for_compare(variant_speech_text) == _normalize_touchchat_name_for_compare(cascade_root_old_name):
+                            variant_speech_text = cascade_root_new_name
+
+                    converted_modifier_variants[str(modifier_id)] = {
+                        "label": variant_label,
+                        "speech_text": variant_speech_text,
+                        "modifier_trigger_id": raw_variant.get("modifier_trigger_id"),
+                        "action_type": "navigate" if variant_target_board_id else "announce",
+                        "after_selection": "navigate" if variant_target_board_id else "do_nothing",
+                        "target_board_id": variant_target_board_id,
+                        "temporary_navigation": (bool(raw_variant.get("temporary_navigation", False)) if variant_target_board_id else False),
+                        "background_color": raw_variant.get("background_color") or (existing_target_btn.get("background_color") if isinstance(existing_target_btn, dict) else "#FFFFFF"),
+                        "text_color": raw_variant.get("text_color") or src_btn.get("text_color") or "#000000",
+                    }
+
+                imported_buttons.append({
+                    "id": f"btn_{row}_{col}_{int(time.time() * 1000)}_{idx}",
+                    "label": label,
+                    "row": row,
+                    "col": col,
+                    "speech_text": speech_text,
+                    "modifier_trigger_id": modifier_trigger_id,
+                    "modifier_variants": converted_modifier_variants,
+                    "action_type": "navigate" if target_nav_board_id else "announce",
+                    "after_selection": "navigate" if target_nav_board_id else "do_nothing",
+                    "target_board_id": target_nav_board_id,
+                    "temporary_navigation": (temporary_navigation if target_nav_board_id else False),
+                    "custom_audio_file": None,
+                    "special_function": None,
+                    "image_url": image_url,
+                    "background_color": (
+                        existing_target_btn.get("background_color") if isinstance(existing_target_btn, dict) else "#FFFFFF"
+                    ),
+                    "text_color": src_btn.get("text_color") or "#000000",
+                    "hidden": False,
+                })
+
+            board_merge_mode = merge_mode if current_source_id == source_board_id else "update"
+            if board_merge_mode == "replace":
+                current_target_board["buttons"] = imported_buttons
+            else:
+                merged_by_position: Dict[Tuple[int, int], Dict[str, Any]] = {}
+                for btn in existing_buttons:
+                    if not isinstance(btn, dict):
+                        continue
+                    merged_by_position[(int(btn.get("row", 0) or 0), int(btn.get("col", 0) or 0))] = btn
+                for btn in imported_buttons:
+                    merged_by_position[(int(btn.get("row", 0) or 0), int(btn.get("col", 0) or 0))] = btn
+                current_target_board["buttons"] = sorted(
+                    list(merged_by_position.values()),
+                    key=lambda b: (int(b.get("row", 0) or 0), int(b.get("col", 0) or 0), str(b.get("id") or "")),
+                )
+
+            current_target_board["board_type"] = "static"
+            current_target_board["label"] = str(current_target_board.get("label") or current_source_board.get("name") or "Imported Board")
+            current_target_board["created_during_migration"] = len(current_target_board.get("buttons") or []) == 0
+
+            total_imported_buttons += len(imported_buttons)
+            imported_board_summaries.append({
+                "source_board_name": str(current_source_board.get("name") or current_source_id),
+                "target_board_label": str(current_target_board.get("label") or current_target_id),
+                "buttons_imported": len(imported_buttons),
+            })
+            processed.add(current_source_id)
+
+        config_data["boards"] = boards
+        config_data["updated_at"] = dt.now().isoformat()
+
+        success = await save_tap_nav_config(account_id, aac_user_id, config_data)
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to save TouchChat migration import")
+
+        unconfigured_created_nav_boards = [
+            b for b in created_nav_boards
+            if str(b.get("id") or "") in existing_by_id
+            and len(existing_by_id[str(b.get("id") or "")].get("buttons") or []) == 0
+        ]
+
+        return JSONResponse(content={
+            "success": True,
+            "created_board": created_board,
+            "target_board_id": target_board_id,
+            "target_board_label": target_board.get("label"),
+            "buttons_imported": total_imported_buttons,
+            "imported_boards": imported_board_summaries,
+            "created_navigation_boards": unconfigured_created_nav_boards,
+            "import_mode": "full_cascade",
+        })
+
+    for button in selected_buttons:
+        target_rid = str(button.get("navigation_target_page_rid") or "").strip()
+        if not target_rid:
+            continue
+        if target_rid == source_page_rid:
+            resolved_nav_map[target_rid] = target_board_id
+            continue
+
+        target_name = str(button.get("navigation_target_page_name") or "").strip() or target_rid
+        existing_match = existing_by_label.get(_normalize_board_label(target_name))
+        if existing_match:
+            resolved_nav_map[target_rid] = existing_match
+            continue
+
+        resolution = nav_resolutions.get(target_rid) if isinstance(nav_resolutions, dict) else None
+        action = str((resolution or {}).get("action") or "").strip().lower() if isinstance(resolution, dict) else ""
+
+        if action == "existing":
+            selected_existing_id = str((resolution or {}).get("board_id") or "").strip()
+            if selected_existing_id and selected_existing_id in existing_by_id:
+                resolved_nav_map[target_rid] = selected_existing_id
+                continue
+        elif action == "create":
+            requested_name = str((resolution or {}).get("board_name") or target_name).strip() or target_name
+            requested_key = _normalize_board_label(requested_name)
+            existing_id_for_name = existing_by_label.get(requested_key)
+            if existing_id_for_name:
+                resolved_nav_map[target_rid] = existing_id_for_name
+                continue
+
+            nav_slug = _sanitize_board_slug(requested_name)
+            nav_candidate_id = f"board_{nav_slug}"
+            nav_suffix = 2
+            while nav_candidate_id in existing_by_id:
+                nav_candidate_id = f"board_{nav_slug}_{nav_suffix}"
+                nav_suffix += 1
+
+            nav_board = _normalize_board_payload(
+                {
+                    "label": requested_name,
+                    "board_type": "static",
+                    "owner_scope": "user",
+                    "hidden": False,
+                    "default_columns": 12,
+                    "max_rows": 7,
+                    "buttons": [],
+                    "created_during_migration": True,
+                },
+                board_id=nav_candidate_id,
+                source="custom",
+                source_button_id=None,
+            )
+            boards.append(nav_board)
+            existing_by_id[nav_candidate_id] = nav_board
+            existing_by_label[requested_key] = nav_candidate_id
+            resolved_nav_map[target_rid] = nav_candidate_id
+            created_nav_boards.append({"id": nav_candidate_id, "label": requested_name})
+            continue
+
+        missing_nav_targets.append({
+            "target_page_rid": target_rid,
+            "target_page_name": target_name,
+            "button_label": str(button.get("label") or ""),
+            "source_board_name": source_page_name,
+        })
+
+    if missing_nav_targets:
+        return JSONResponse(content={
+            "requires_confirmation": True,
+            "missing_navigation_targets": missing_nav_targets,
+            "available_destination_boards": [
+                {"id": b_id, "label": (existing_by_id[b_id].get("label") or b_id)}
+                for b_id in sorted(existing_by_id.keys())
+            ],
+        })
+
+    existing_buttons = target_board.get("buttons") if isinstance(target_board.get("buttons"), list) else []
+    existing_buttons_by_position: Dict[Tuple[int, int], Dict[str, Any]] = {}
+    for existing_btn in existing_buttons:
+        if not isinstance(existing_btn, dict):
+            continue
+        existing_buttons_by_position[(int(existing_btn.get("row", 0) or 0), int(existing_btn.get("col", 0) or 0))] = existing_btn
+
+    _noncascade_boards_by_rid = {
+        str(b.get("page_rid") or "").strip(): b
+        for b in boards_from_file.values()
+        if isinstance(b, dict) and str(b.get("page_rid") or "").strip()
+    }
+
+    imported_buttons: List[Dict[str, Any]] = []
+    for idx, src_btn in enumerate(selected_buttons):
+        label = str(src_btn.get("label") or "").strip()
+        row = int(src_btn.get("row") or 0)
+        col = int(src_btn.get("col") or 0)
+        existing_target_btn = existing_buttons_by_position.get((row, col))
+        image_url = None
+
+        nav_target_rid = str(src_btn.get("navigation_target_page_rid") or "").strip()
+        target_nav_board_id = resolved_nav_map.get(nav_target_rid) if nav_target_rid else None
+        temporary_navigation = bool(src_btn.get("temporary_navigation", False))
+        if not temporary_navigation and nav_target_rid:
+            _nav_src_board = _noncascade_boards_by_rid.get(nav_target_rid)
+            if _nav_src_board and _touchchat_source_board_is_speech_only(_nav_src_board):
+                temporary_navigation = True
+        speech_text = str(src_btn.get("speech_text") or "").strip() or None
+        modifier_trigger_id = src_btn.get("modifier_trigger_id")
+
+        raw_modifier_variants = src_btn.get("modifier_variants") if isinstance(src_btn.get("modifier_variants"), dict) else {}
+        converted_modifier_variants: Dict[str, Dict[str, Any]] = {}
+        for modifier_id, raw_variant in raw_modifier_variants.items():
+            if not isinstance(raw_variant, dict):
+                continue
+            variant_nav_rid = str(raw_variant.get("navigation_target_page_rid") or "").strip()
+            variant_target_board_id = resolved_nav_map.get(variant_nav_rid) if variant_nav_rid else None
+            converted_modifier_variants[str(modifier_id)] = {
+                "label": str(raw_variant.get("label") or "").strip(),
+                "speech_text": str(raw_variant.get("speech_text") or "").strip() or None,
+                "modifier_trigger_id": raw_variant.get("modifier_trigger_id"),
+                "action_type": "navigate" if variant_target_board_id else "announce",
+                "after_selection": "navigate" if variant_target_board_id else "do_nothing",
+                "target_board_id": variant_target_board_id,
+                "temporary_navigation": (bool(raw_variant.get("temporary_navigation", False)) if variant_target_board_id else False),
+                "background_color": raw_variant.get("background_color") or (existing_target_btn.get("background_color") if isinstance(existing_target_btn, dict) else "#FFFFFF"),
+                "text_color": raw_variant.get("text_color") or src_btn.get("text_color") or "#000000",
+            }
+
+        imported_buttons.append({
+            "id": f"btn_{row}_{col}_{int(time.time() * 1000)}_{idx}",
+            "label": label,
+            "row": row,
+            "col": col,
+            "speech_text": speech_text,
+            "modifier_trigger_id": modifier_trigger_id,
+            "modifier_variants": converted_modifier_variants,
+            "action_type": "navigate" if target_nav_board_id else "announce",
+            "after_selection": "navigate" if target_nav_board_id else "do_nothing",
+            "target_board_id": target_nav_board_id,
+            "temporary_navigation": (temporary_navigation if target_nav_board_id else False),
+            "custom_audio_file": None,
+            "special_function": None,
+            "image_url": image_url,
+            "background_color": (
+                existing_target_btn.get("background_color") if isinstance(existing_target_btn, dict) else "#FFFFFF"
+            ),
+            "text_color": src_btn.get("text_color") or "#000000",
+            "hidden": False,
+        })
+
+    if merge_mode == "replace":
+        target_board["buttons"] = imported_buttons
+    else:
+        merged_by_position: Dict[Tuple[int, int], Dict[str, Any]] = {}
+        for btn in existing_buttons:
+            if not isinstance(btn, dict):
+                continue
+            merged_by_position[(int(btn.get("row", 0) or 0), int(btn.get("col", 0) or 0))] = btn
+        for btn in imported_buttons:
+            merged_by_position[(int(btn.get("row", 0) or 0), int(btn.get("col", 0) or 0))] = btn
+        target_board["buttons"] = sorted(
+            list(merged_by_position.values()),
+            key=lambda b: (int(b.get("row", 0) or 0), int(b.get("col", 0) or 0), str(b.get("id") or "")),
+        )
+
+    target_board["board_type"] = "static"
+    target_board["label"] = str(target_board.get("label") or destination_board_name or "Imported Board")
+    config_data["boards"] = boards
+    config_data["updated_at"] = dt.now().isoformat()
+
+    success = await save_tap_nav_config(account_id, aac_user_id, config_data)
+    if not success:
+        raise HTTPException(status_code=500, detail="Failed to save TouchChat migration import")
+
+    logging.info(
+        "TouchChat import complete: board=%s buttons=%d",
+        str(target_board.get("label") or target_board_id or ""),
+        len(imported_buttons),
+    )
+
+    unconfigured_created_nav_boards = [
+        b for b in created_nav_boards
+        if str(b.get("id") or "") in existing_by_id
+        and len(existing_by_id[str(b.get("id") or "")].get("buttons") or []) == 0
+    ]
+
+    return JSONResponse(content={
+        "success": True,
+        "created_board": created_board,
+        "target_board_id": target_board_id,
+        "target_board_label": target_board.get("label"),
+        "buttons_imported": len(imported_buttons),
+        "created_navigation_boards": unconfigured_created_nav_boards,
+    })
+
+
+@app.post("/api/touchchat-migration/check-cascade-conflicts")
+async def check_touchchat_cascade_conflicts(
+    request_data: Dict = Body(...),
+    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)] = None,
+):
+    """Pre-flight check: return child boards in the cascade that already exist in the
+    user's Tap config, so the frontend can prompt the admin to resolve each conflict
+    before the actual import is executed."""
+    account_id = current_ids["account_id"]
+    aac_user_id = current_ids["aac_user_id"]
+
+    session_id = str(request_data.get("session_id") or "").strip()
+    source_board_id = str(request_data.get("source_board_id") or "").strip()
+
+    if not session_id or not source_board_id:
+        raise HTTPException(status_code=400, detail="Missing required parameters")
+    if session_id not in touchchat_migration_sessions:
+        raise HTTPException(status_code=404, detail="TouchChat migration session not found or expired")
+
+    session = touchchat_migration_sessions[session_id]
+    if session["account_id"] != account_id or session["aac_user_id"] != aac_user_id:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    parsed_data = session.get("parsed_data") or {}
+    boards_from_file = parsed_data.get("boards") if isinstance(parsed_data.get("boards"), dict) else {}
+    source_board = boards_from_file.get(source_board_id)
+    if not source_board:
+        raise HTTPException(status_code=404, detail="Source board not found")
+
+    # Build lookups keyed by page_id and page_rid for traversal
+    src_by_page_id: Dict[str, Any] = {
+        str(b.get("page_id") or "").strip(): b
+        for b in boards_from_file.values()
+        if isinstance(b, dict) and str(b.get("page_id") or "").strip()
+    }
+    src_by_page_rid: Dict[str, Any] = {
+        str(b.get("page_rid") or "").strip(): b
+        for b in boards_from_file.values()
+        if isinstance(b, dict) and str(b.get("page_rid") or "").strip()
+    }
+
+    # Load the user's existing Tap boards to detect name collisions
+    config_data = await load_tap_nav_config(account_id, aac_user_id)
+    if not config_data:
+        config_data = create_default_tap_config(account_id, aac_user_id)
+    config_data, _ = normalize_compose_tap_config(config_data)
+    config_data, _ = ensure_tap_boards_structure(config_data)
+    tap_boards = config_data.get("boards") if isinstance(config_data.get("boards"), list) else []
+    tap_by_label: Dict[str, Dict[str, Any]] = {
+        _normalize_board_label(b.get("label")): b
+        for b in tap_boards
+        if isinstance(b, dict)
+    }
+
+    # BFS through the cascade; skip the root (already handled by the root conflict dialog)
+    visited: Set[str] = {source_board_id}
+    queue_ids: List[str] = [source_board_id]
+    conflicts: List[Dict[str, Any]] = []
+    seen_conflict_names: Set[str] = set()
+
+    while queue_ids:
+        current_id = queue_ids.pop(0)
+        current_src = src_by_page_id.get(current_id)
+        if not current_src:
+            continue
+        for btn in (current_src.get("buttons") or []):
+            if not isinstance(btn, dict):
+                continue
+            target_rid = str(btn.get("navigation_target_page_rid") or "").strip()
+            if not target_rid:
+                continue
+            linked = src_by_page_rid.get(target_rid)
+            if not linked:
+                continue
+            linked_id = str(linked.get("page_id") or "").strip()
+            if not linked_id or linked_id in visited:
+                continue
+            visited.add(linked_id)
+            queue_ids.append(linked_id)
+
+            # Skip root board — already handled separately
+            if linked_id == source_board_id:
+                continue
+
+            child_name = str(linked.get("name") or linked.get("page_id") or "").strip()
+            child_key = _normalize_board_label(child_name)
+            if not child_name or child_key in seen_conflict_names:
+                continue
+            existing_tap_board = tap_by_label.get(child_key)
+            if existing_tap_board:
+                seen_conflict_names.add(child_key)
+                conflicts.append({
+                    "source_board_id": linked_id,
+                    "source_board_name": child_name,
+                    "existing_board_id": str(existing_tap_board.get("id") or ""),
+                    "existing_board_label": str(existing_tap_board.get("label") or child_name),
+                })
+
+    return JSONResponse(content={"conflicts": conflicts})
+
+
+@app.delete("/api/touchchat-migration/session/{session_id}")
+async def delete_touchchat_migration_session(
+    session_id: str,
+    current_ids: Annotated[Dict[str, str], Depends(get_current_account_and_user_ids)] = None,
+):
+    session = touchchat_migration_sessions.get(session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="TouchChat migration session not found")
+
+    if session["account_id"] != current_ids["account_id"] or session["aac_user_id"] != current_ids["aac_user_id"]:
+        raise HTTPException(status_code=403, detail="Not authorized")
+
+    import shutil
+
+    touchchat_migration_sessions.pop(session_id, None)
+    temp_dir = session.get("temp_dir")
+    if temp_dir:
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
+    return JSONResponse(content={"success": True})
+
+
 # --- Guess Games Endpoints (Who/Where/What) ---
 
 DEFAULT_GUESS_WHO_CATEGORIES = [
@@ -22128,7 +27646,11 @@ async def _generate_items(request: GuessWhoGeneratePeopleRequest, current_ids: D
     try:
         # Load user settings for LLMOptions
         settings = await load_settings_from_file(account_id, aac_user_id)
-        llm_options = settings.get("LLMOptions", 10)
+        raw_llm_options = settings.get("LLMOptions", 10)
+        # Allow Tap phrases to be disabled with LLMOptions=0 without breaking Guess Games.
+        llm_options = int(raw_llm_options) if isinstance(raw_llm_options, (int, float)) else 10
+        if llm_options <= 0:
+            llm_options = 5
         
         # Build exclusion instruction
         exclusion_instruction = ""
@@ -22191,7 +27713,11 @@ async def _generate_clues(request: GuessWhoGenerateCluesRequest, current_ids: Di
     
     try:
         settings = await load_settings_from_file(account_id, aac_user_id)
-        llm_options = settings.get("LLMOptions", 5)
+        raw_llm_options = settings.get("LLMOptions", 5)
+        # Allow Tap phrases to be disabled with LLMOptions=0 without breaking Guess Games.
+        llm_options = int(raw_llm_options) if isinstance(raw_llm_options, (int, float)) else 5
+        if llm_options <= 0:
+            llm_options = 5
         
         exclusion_instruction = ""
         if request.previous_clues and len(request.previous_clues) > 0:
@@ -22272,7 +27798,11 @@ async def _generate_guesses(request: GuessWhoGenerateGuessesRequest, current_ids
     
     try:
         settings = await load_settings_from_file(account_id, aac_user_id)
-        llm_options = settings.get("LLMOptions", 5)
+        raw_llm_options = settings.get("LLMOptions", 5)
+        # Allow Tap phrases to be disabled with LLMOptions=0 without breaking Guess Games.
+        llm_options = int(raw_llm_options) if isinstance(raw_llm_options, (int, float)) else 5
+        if llm_options <= 0:
+            llm_options = 5
         total_guesses_needed = llm_options * 2
         
         clues_context = "\n".join([f"- {clue}" for clue in request.clues])

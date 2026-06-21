@@ -1,0 +1,1235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Boards Menu Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <script src="/static/admin_interface_navigation.js" defer></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f5f5f5; color: #333; }
+        .btn { padding: 0.75rem 1.5rem; border: none; border-radius: 4px; cursor: pointer; font-size: 0.9rem; display: inline-block; transition: all 0.2s; }
+        .btn:hover { transform: translateY(-1px); }
+        .btn-primary { background-color: #3498db; color: white; }
+        .btn-primary:hover { background-color: #2980b9; }
+        .btn-danger { background-color: #e74c3c; color: white; }
+        .btn-danger:hover { background-color: #c0392b; }
+        .main-container { display: flex; height: calc(100vh - 56px); }
+        .sidebar { width: 350px; background-color: white; border-right: 1px solid #ddd; display: flex; flex-direction: column; overflow-y: auto; }
+        .tree-section { flex: 1; padding: 1rem; overflow-y: auto; }
+        .tree-header { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.75rem; border-bottom: 2px solid #3498db; padding-bottom: 0.5rem; }
+        .tree-section h3 { margin: 0; color: #2c3e50; }
+        .tree-toolbar { display: flex; gap: 0.4rem; }
+        .tree-toolbar-btn { border: 1px solid #d6dce2; background: white; color: #4b5563; border-radius: 999px; padding: 0.3rem 0.65rem; font-size: 0.75rem; cursor: pointer; }
+        .tree-toolbar-btn:hover { background: #eff6ff; border-color: #93c5fd; color: #1d4ed8; }
+        .tree-item { margin: 0.15rem 0; position: relative; }
+        .tree-button { display: flex; align-items: center; gap: 0.45rem; padding: 0.45rem 0.55rem; background-color: #f8f9fa; border: 1px solid #e5eaf0; border-radius: 6px; cursor: pointer; transition: all 0.2s; word-wrap: break-word; min-height: 40px; margin-left: var(--depth, 0px); }
+        .tree-row-main { display: flex; align-items: center; gap: 0.45rem; min-width: 0; flex: 1; }
+        .tree-node-children { margin-top: 0.1rem; border-left: 1px solid #e3e8ef; margin-left: 0.95rem; padding-left: 0.25rem; }
+        .tree-node-children.collapsed { display: none; }
+        .tree-toggle { width: 24px; min-width: 24px; height: 24px; border-radius: 5px; border: 1px solid transparent; background: transparent; color: #6c7a89; display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
+        .tree-toggle:hover { color: #1f2937; border-color: #93c5fd; background: #eff6ff; }
+        .tree-toggle.placeholder { visibility: hidden; pointer-events: none; }
+        .tree-button:hover { border-color: #3498db; background-color: #eaf3ff; }
+        .tree-button.selected { border-color: #2ecc71; background-color: #dff7e8; }
+        .tree-button.dragging { opacity: 0.5; transform: rotate(2deg); }
+        .tree-button.drag-over { border-color: #007bff; background-color: #e3f2fd; box-shadow: 0 0 0 2px rgba(0,123,255,0.25); position: relative; }
+        .tree-button.drag-over.child-mode { background-color: #e8f5e8; border-color: #4caf50; box-shadow: 0 0 0 2px rgba(76,175,80,0.25); }
+        .tree-button.drag-over::after { content: '↕️ Reorder'; position: absolute; top: 50%; right: 10px; transform: translateY(-50%); background: #ff9800; color: white; padding: 2px 6px; border-radius: 4px; font-size: 12px; z-index: 1000; pointer-events: none; }
+        .tree-button.drag-over.child-mode::after { content: '➕ Add Child'; background: #4caf50; }
+        .button-label { flex: 1; font-weight: 500; font-size: 0.86rem; min-width: 0; }
+        .tree-item-meta { display: inline-flex; align-items: center; gap: 0.35rem; color: #6b7280; font-size: 0.75rem; }
+        .board-target-pill { background: #e5eefb; color: #375a8c; border-radius: 999px; padding: 0.1rem 0.45rem; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .add-button { margin: 1rem 0; text-align: center; }
+        .content-area { flex: 1; background-color: white; display: flex; flex-direction: column; overflow-y: auto; }
+        .content-header { padding: 1.5rem 2rem 1rem; border-bottom: 1px solid #eee; background-color: #f8f9fa; }
+        .content-header h2 { margin: 0; color: #2c3e50; }
+        .content-header p { margin: 0.5rem 0 0; color: #7f8c8d; font-size: 0.9rem; }
+        .form-container { padding: 2rem; flex: 1; }
+        .form-group { margin-bottom: 1.5rem; }
+        .form-group label { display: block; margin-bottom: 0.5rem; font-weight: 600; color: #2c3e50; }
+        .form-group input, .form-group textarea, .form-group select { width: 100%; padding: 0.75rem; border: 2px solid #e9ecef; border-radius: 4px; font-size: 0.9rem; transition: border-color 0.2s; background-color: white; }
+        .form-group input:focus, .form-group textarea:focus, .form-group select:focus { outline: none; border-color: #3498db; }
+        .color-input-container { display: flex; gap: 0.5rem; align-items: center; }
+        .color-input { width: 50px; height: 40px; padding: 0; border: 2px solid #e9ecef; border-radius: 4px; cursor: pointer; -webkit-appearance: none; appearance: none; }
+        .color-input::-webkit-color-swatch-wrapper { padding: 0; }
+        .color-input::-webkit-color-swatch { border: none; border-radius: 2px; }
+        .form-actions { display: flex; gap: 1rem; margin-top: 2rem; padding-top: 1rem; border-top: 1px solid #eee; }
+        .notification { position: fixed; top: 1rem; right: 1rem; padding: 1rem 1.5rem; border-radius: 6px; color: white; font-weight: 600; z-index: 1000; transform: translateX(400px); transition: transform 0.3s ease; }
+        .notification.show { transform: translateX(0); }
+        .notification.success { background-color: #27ae60; }
+        .notification.error { background-color: #e74c3c; }
+        .welcome-message { text-align: center; padding: 3rem 2rem; color: #7f8c8d; }
+        .welcome-message h3 { margin-bottom: 1rem; color: #2c3e50; }
+        .welcome-message ul { text-align: left; max-width: 480px; margin: 0 auto; line-height: 1.8; }
+        .root-drop-zone { min-height: 20px; margin-bottom: 0.75rem; padding: 10px; border: 2px dashed #ccc; border-radius: 4px; text-align: center; color: #999; transition: all 0.2s; opacity: 0; visibility: hidden; pointer-events: none; }
+        .root-drop-zone.show { opacity: 1; visibility: visible; pointer-events: auto; }
+        .root-drop-zone.drag-over { border-color: #3498db; background-color: rgba(52,152,219,0.1); color: #2980b9; }
+        .hidden-badge { font-size: 0.7rem; background: #fbbf24; color: #92400e; border-radius: 3px; padding: 1px 5px; margin-left: 6px; }
+        .page-actions { display: flex; align-items: center; gap: 0.75rem; padding: 0.75rem 1rem; background: white; border-bottom: 1px solid #e5e7eb; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04); flex-wrap: wrap; }
+    </style>
+</head>
+<body>
+    <div class="page-banner flex flex-wrap items-center justify-between gap-3 bg-[#002244] text-[#FB4F14] px-4 py-2 shadow" style="min-height:56px;">
+        <div class="flex items-center gap-2">
+            <button onclick="window.navigateToHome ? window.navigateToHome() : window.location.href='tap_interface.html'" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100 focus:outline-none focus:ring-2 focus:ring-orange-500" title="Home">
+                <i class="fas fa-home"></i>
+            </button>
+            <h1 class="ml-2 text-xl font-semibold">Boards Menu Administration</h1>
+        </div>
+        <div class="admin-toolbar flex flex-wrap items-center gap-2">
+            <a href="admin_pages.html" title="Pages &amp; Buttons" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-th-large"></i></a>
+            <a href="admin_settings.html" title="Global Settings" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-cog"></i></a>
+            <a href="user_current_admin.html" title="User Current Location" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-map-marker-alt"></i></a>
+            <a href="user_info_admin.html" title="User Info &amp; Birthdays" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-info-circle"></i></a>
+            <a href="user_diary_admin.html" title="User Diary" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-book-open"></i></a>
+            <a href="audio_admin.html" title="Audio Devices" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-volume-up"></i></a>
+            <a href="favorites_admin.html" title="Event Sources" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-star"></i></a>
+            <a href="admin_audit_report.html" title="Activity Reports" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-clipboard-list"></i></a>
+            <span class="border-l border-white h-6 mx-1"></span>
+            <button id="switch-user-button" title="Switch User Profile" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-users"></i></button>
+            <button id="logout-button" title="Logout" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-sign-out-alt"></i></button>
+            <button id="help-icon" title="Help" aria-label="Help" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full ml-2 transition-colors duration-200 text-base hover:bg-orange-100 focus:outline-none focus:ring-2 focus:ring-orange-500">
+                <i class="fas fa-question-circle"></i>
+            </button>
+        </div>
+    </div>
+
+    <div class="page-actions">
+        <button onclick="window.location.href='tap_board_builder.html'" class="h-10 px-4 flex items-center justify-center text-[#FB4F14] bg-white border border-[#FB4F14] rounded-full hover:bg-orange-100" title="Back to Board Builder">
+            <i class="fas fa-table-cells-large mr-2"></i>Board Builder
+        </button>
+        <div id="changesIndicator" style="display:none;padding:0.5rem 1rem;background-color:#f39c12;color:white;border-radius:0.375rem;font-size:0.875rem;">⚠️ Unsaved Changes</div>
+        <button class="h-10 px-4 flex items-center justify-center text-white bg-green-600 rounded-full text-sm hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed" id="saveBtn" disabled>
+            <i class="fas fa-save mr-1"></i>Save
+        </button>
+        <button class="h-10 px-4 flex items-center justify-center text-white bg-gray-500 rounded-full text-sm hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed" id="cancelBtn" disabled>
+            <i class="fas fa-times mr-1"></i>Cancel
+                <button class="h-10 px-4 flex items-center justify-center text-white bg-blue-600 rounded-full text-sm hover:bg-blue-700" id="translateMenuBtn" title="Translate all menu items">
+                    <i class="fas fa-language mr-1"></i>Translate
+                </button>
+        </button>
+    </div>
+
+    <div class="main-container">
+        <div class="sidebar">
+            <div class="tree-section">
+                <div class="tree-header">
+                    <h3>Menu Structure</h3>
+                    <div class="tree-toolbar">
+                        <button type="button" class="tree-toolbar-btn" id="expandAllTreeBtn">Expand all</button>
+                        <button type="button" class="tree-toolbar-btn" id="collapseAllTreeBtn">Collapse all</button>
+                    </div>
+                </div>
+                <div class="root-drop-zone" id="rootDropTopZone">Drop here to move to top of root menu</div>
+                <div id="treeContainer"></div>
+                <div class="root-drop-zone" id="rootDropBottomZone">Drop here to move to end of root menu</div>
+                <div class="add-button">
+                    <button class="btn btn-primary" id="addMenuItemBtn">+ Add Root Menu Item</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="content-area">
+            <div class="content-header">
+                <h2 id="contentTitle">Select a menu item to edit</h2>
+                <p id="contentDescription">Choose an item from the hierarchy on the left to modify its properties.</p>
+            </div>
+            <div class="form-container">
+                <div id="welcomeMessage" class="welcome-message">
+                    <h3>Welcome to Boards Menu Admin</h3>
+                    <p>Select a menu item from the tree on the left to start editing, or add a new item.</p>
+                    <br>
+                    <p><strong>Tree Navigation:</strong></p>
+                    <ul>
+                        <li>Use the <strong>chevron</strong> to collapse or expand parent items</li>
+                        <li>Click a row to edit it in the panel on the right</li>
+                        <li>Use <strong>Add Root Menu Item</strong> and <strong>Add Child Item</strong> to build the hierarchy</li>
+                    </ul>
+                    <br>
+                    <p><strong>Drag &amp; Drop:</strong></p>
+                    <ul>
+                        <li>Drag an item row to reorder it</li>
+                        <li>Drag onto another item to <strong>reorder</strong> (orange &ldquo;↕️ Reorder&rdquo;)</li>
+                        <li>Hold <strong>Shift</strong> while dropping to make it a <strong>child</strong> (green &ldquo;➕ Add Child&rdquo;)</li>
+                        <li>Drop on the <strong>top root zone</strong> to move item to the top of root menus</li>
+                        <li>Drop on the <strong>bottom root zone</strong> to move item to the end of root menus</li>
+                    </ul>
+                </div>
+
+                <div id="itemForm" style="display:none;">
+                    <form id="editForm" onsubmit="return false;">
+                        <div class="form-group">
+                            <label for="itemLabel">Menu Label *</label>
+                            <input type="text" id="itemLabel" required placeholder="Label shown in the navigation menu">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="boardTarget">Board Target</label>
+                            <div style="display:flex; gap:0.5rem; align-items:center;">
+                                <select id="boardTarget" style="flex:1;">
+                                <option value="">— None / Category only —</option>
+                                </select>
+                                <button type="button" id="openBoardBuilderBtn" class="btn btn-primary" style="padding:0.7rem 0.9rem;">Open</button>
+                            </div>
+                            <small style="color:#7f8c8d;font-size:0.8rem;">The board displayed when the user taps this menu item.</small>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="speechText">Speech Text (Optional)</label>
+                            <input type="text" id="speechText" placeholder="Text to speak aloud (if different from label)">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="imageUrl">Image URL (Optional)</label>
+                            <input type="url" id="imageUrl" placeholder="https://example.com/icon.png">
+                        </div>
+
+                        <div class="form-group">
+                            <label for="customAudioFile">Custom Audio File URL (Optional)</label>
+                            <input type="url" id="customAudioFile" placeholder="https://storage.googleapis.com/.../audio.mp3">
+                            <small style="color:#7f8c8d;font-size:0.8rem;">Direct URL to an MP3 or WAV file played when this item is activated.</small>
+                        </div>
+
+                        <div style="display:flex;gap:1rem;">
+                            <div class="form-group" style="flex:1;">
+                                <label for="backgroundColor">Background Color</label>
+                                <div class="color-input-container">
+                                    <input type="color" id="backgroundColorPicker" class="color-input" value="#FFFFFF">
+                                    <input type="text" id="backgroundColor" placeholder="#FFFFFF" style="flex:1;">
+                                </div>
+                            </div>
+                            <div class="form-group" style="flex:1;">
+                                <label for="textColor">Text Color</label>
+                                <div class="color-input-container">
+                                    <input type="color" id="textColorPicker" class="color-input" value="#000000">
+                                    <input type="text" id="textColor" placeholder="#000000" style="flex:1;">
+                                </div>
+                            </div>
+                            <div class="form-group" style="flex:0 0 auto;display:flex;flex-direction:column;justify-content:flex-end;">
+                                <div style="display:flex;align-items:center;height:42px;margin-bottom:2px;">
+                                    <input type="checkbox" id="hiddenCheck" style="width:auto;margin-right:0.5rem;">
+                                    <label for="hiddenCheck" style="margin-bottom:0;cursor:pointer;">Hidden</label>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="form-actions">
+                            <button type="button" class="btn btn-danger" id="deleteItemBtn">Delete Item</button>
+                            <button type="button" class="btn btn-primary" id="addChildBtn">Add Child Item</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="notification" class="notification"></div>
+
+    <div id="translateMenuModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full hidden" style="z-index: 5300;">
+        <div class="relative top-20 mx-auto p-5 border w-11/12 max-w-4xl shadow-lg rounded-md bg-white">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-bold text-gray-900">Translate Menu Items</h3>
+                <button id="closeTranslateMenuModal" class="text-gray-400 hover:text-gray-600"><i class="fas fa-times text-xl"></i></button>
+            </div>
+            <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-700 mb-2">Target Language</label>
+                <select id="translateMenuTargetLanguage" class="w-full px-3 py-2 border border-gray-300 rounded-md">
+                    <option value="">Select language...</option>
+                    <option value="es">Spanish</option>
+                    <option value="fr">French</option>
+                    <option value="de">German</option>
+                    <option value="it">Italian</option>
+                    <option value="pt">Portuguese</option>
+                    <option value="ru">Russian</option>
+                    <option value="ja">Japanese</option>
+                    <option value="zh">Chinese (Simplified)</option>
+                    <option value="ar">Arabic</option>
+                    <option value="ko">Korean</option>
+                </select>
+            </div>
+            <div id="translateMenuResultsContainer" class="bg-gray-50 p-4 rounded-md max-h-[400px] overflow-y-auto hidden">
+                <h4 class="text-sm font-semibold mb-3">Translations:</h4>
+                <div id="translateMenuResults"></div>
+            </div>
+            <div id="translateMenuLoadingSpinner" class="text-center py-4 hidden">
+                <i class="fas fa-spinner fa-spin mr-2"></i>Translating...
+            </div>
+            <div class="flex justify-end gap-2 mt-4">
+                <button id="cancelTranslateMenuModal" class="px-4 py-2 bg-gray-300 rounded-md hover:bg-gray-400">Close</button>
+                <button id="performMenuTranslationBtn" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700" disabled>Translate</button>
+                <button id="applyMenuTranslationsBtn" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700" disabled>Apply &amp; Save</button>
+            </div>
+        </div>
+    </div>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+    <script>
+        let authToken = null, currentAacUserId = null;
+        let boards = [], menuTree = [], originalMenuTree = [];
+        let selectedPath = null, draggedPath = null, hasUnsavedChanges = false;
+        let expandedMenuNodeKeys = new Set();
+        let pendingMenuTranslationEntries = [];
+
+        function sanitizeTranslatedLabel(value) {
+            return String(value || '')
+                .trim()
+                .replace(/^[\s"“”‘’`]+/, '')
+                .replace(/[\s"“”‘’`]+$/, '')
+                .replace(/,+$/, '')
+                .trim();
+        }
+
+        function formatMenuLabel(value) {
+            return sanitizeTranslatedLabel(value || '').replace(/"+$/g, '').trim();
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            document.getElementById('saveBtn').addEventListener('click', saveChanges);
+            document.getElementById('cancelBtn').addEventListener('click', cancelChanges);
+            document.getElementById('addMenuItemBtn').addEventListener('click', addMenuItem);
+            document.getElementById('expandAllTreeBtn').addEventListener('click', expandAllTreeNodes);
+            document.getElementById('collapseAllTreeBtn').addEventListener('click', collapseAllTreeNodes);
+                        document.getElementById('translateMenuBtn').addEventListener('click', openTranslateMenuModal);
+                        document.getElementById('closeTranslateMenuModal').addEventListener('click', closeTranslateMenuModal);
+                        document.getElementById('cancelTranslateMenuModal').addEventListener('click', closeTranslateMenuModal);
+                        document.getElementById('performMenuTranslationBtn').addEventListener('click', performMenuTranslation);
+                        document.getElementById('applyMenuTranslationsBtn').addEventListener('click', applyMenuTranslations);
+                        document.getElementById('translateMenuTargetLanguage').addEventListener('change', () => {
+                            document.getElementById('performMenuTranslationBtn').disabled = !document.getElementById('translateMenuTargetLanguage').value;
+                        });
+            document.getElementById('switch-user-button').addEventListener('click', () => {
+                window.location.href = 'auth.html';
+            });
+            document.getElementById('logout-button').addEventListener('click', async () => {
+                try {
+                    await firebase.auth().signOut();
+                } catch (error) {
+                    console.error('Logout failed:', error);
+                }
+                window.location.href = 'auth.html';
+            });
+            setupColorInputs();
+            setupFormListeners();
+            setupDragAndDrop();
+            initAuth();
+        });
+
+        async function initAuth() {
+            try {
+                const res = await fetch('/api/frontend-config');
+                const data = await res.json();
+                const cfg = data.firebase_config || data;
+                if (!cfg || !cfg.apiKey) throw new Error('Missing firebase config');
+                if (!firebase.apps.length) firebase.initializeApp(cfg);
+                firebase.auth().onAuthStateChanged(async (user) => {
+                    if (!user) { window.location.href = '/auth.html?redirect=' + encodeURIComponent(window.location.pathname); return; }
+                    currentAacUserId = sessionStorage.getItem('currentAacUserId');
+                    if (!currentAacUserId) { window.location.href = 'auth.html'; return; }
+                    authToken = await user.getIdToken();
+                    await loadBoardsMenu();
+                });
+            } catch (err) { console.error(err); showNotification('Failed to initialize authentication', 'error'); }
+        }
+
+        function getAuthHeaders() {
+            const h = { 'Content-Type': 'application/json' };
+            if (authToken) h['Authorization'] = 'Bearer ' + authToken;
+            if (currentAacUserId) h['X-User-ID'] = currentAacUserId;
+            const a = sessionStorage.getItem('adminTargetAccountId');
+            if (a) h['X-Admin-Target-Account'] = a;
+            return h;
+        }
+
+        async function loadBoardsMenu() {
+            try {
+                const res = await fetch('/api/tap-interface/boards-menu', { headers: getAuthHeaders() });
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const payload = await res.json();
+                boards = Array.isArray(payload.boards) ? payload.boards : [];
+                menuTree = Array.isArray(payload.boards_menu) ? payload.boards_menu : [];
+                originalMenuTree = JSON.parse(JSON.stringify(menuTree));
+                initializeExpandedMenuNodes();
+                markAsSaved();
+                renderTree();
+                showNotification('Loaded successfully', 'success');
+            } catch (err) { console.error(err); showNotification('Failed to load: ' + err.message, 'error'); }
+        }
+
+        async function saveChanges() {
+            if (!hasUnsavedChanges) return;
+            if (selectedPath) flushFormToNode(selectedPath);
+            try {
+                const res = await fetch('/api/tap-interface/boards-menu', {
+                    method: 'POST', headers: getAuthHeaders(),
+                    body: JSON.stringify({ boards_menu: serializeTree(menuTree) })
+                });
+                if (!res.ok) { const b = await res.json().catch(() => ({})); throw new Error(b.detail || 'HTTP ' + res.status); }
+                originalMenuTree = JSON.parse(JSON.stringify(menuTree));
+                markAsSaved();
+                renderTree();
+                showNotification('Saved successfully', 'success');
+            } catch (err) { console.error(err); showNotification('Save failed: ' + err.message, 'error'); }
+        }
+
+        function cancelChanges() {
+            menuTree = JSON.parse(JSON.stringify(originalMenuTree));
+            selectedPath = null;
+            initializeExpandedMenuNodes();
+            markAsSaved();
+            renderTree();
+            showWelcome();
+        }
+
+        function openTranslateMenuModal() {
+            document.getElementById('translateMenuTargetLanguage').value = '';
+            document.getElementById('performMenuTranslationBtn').disabled = true;
+            document.getElementById('applyMenuTranslationsBtn').disabled = true;
+            document.getElementById('applyMenuTranslationsBtn').classList.add('hidden');
+            document.getElementById('performMenuTranslationBtn').classList.remove('hidden');
+            document.getElementById('translateMenuResultsContainer').classList.add('hidden');
+            document.getElementById('translateMenuLoadingSpinner').classList.add('hidden');
+            document.getElementById('translateMenuResults').innerHTML = '';
+            pendingMenuTranslationEntries = [];
+            document.getElementById('translateMenuModal').classList.remove('hidden');
+        }
+
+        function closeTranslateMenuModal() {
+            document.getElementById('translateMenuModal').classList.add('hidden');
+        }
+
+        async function performMenuTranslation() {
+            const targetLanguage = document.getElementById('translateMenuTargetLanguage').value;
+            if (!targetLanguage) { showNotification('Please select a language', 'error'); return; }
+            if (!menuTree || menuTree.length === 0) { showNotification('No menu items to translate', 'error'); return; }
+            
+            document.getElementById('performMenuTranslationBtn').disabled = true;
+            document.getElementById('applyMenuTranslationsBtn').disabled = true;
+            document.getElementById('translateMenuLoadingSpinner').classList.remove('hidden');
+            document.getElementById('translateMenuResultsContainer').classList.add('hidden');
+            
+            try {
+                // Collect all menu item labels that need translation
+                const textsToTranslate = [];
+                const translationEntries = [];
+                
+                const collectLabels = (nodes, parentPath = []) => {
+                    nodes.forEach((node, idx) => {
+                        const path = [...parentPath, idx];
+                        if (node.label) {
+                            textsToTranslate.push(node.label);
+                            translationEntries.push({ type: 'label', path, original: node.label });
+                        }
+                        if (Array.isArray(node.children)) collectLabels(node.children, path);
+                    });
+                };
+                
+                collectLabels(menuTree);
+                
+                if (textsToTranslate.length === 0) {
+                    showNotification('No text to translate', 'error');
+                    document.getElementById('translateMenuLoadingSpinner').classList.add('hidden');
+                    document.getElementById('performMenuTranslationBtn').disabled = false;
+                    return;
+                }
+                
+                // Call translation API
+                const response = await fetch('/api/translate-lines', {
+                    method: 'POST',
+                    headers: { ...getAuthHeaders(), 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        lines: textsToTranslate,
+                        source_locale: null,
+                        target_locale: targetLanguage
+                    })
+                });
+                
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const payload = await response.json();
+                const translations = Array.isArray(payload?.translated_lines) ? payload.translated_lines : [];
+                pendingMenuTranslationEntries = translationEntries.map((entry, index) => ({
+                    ...entry,
+                    translated: formatMenuLabel(translations[index] || entry.original),
+                }));
+                
+                // Display results
+                displayMenuTranslationResults(pendingMenuTranslationEntries, targetLanguage);
+                document.getElementById('translateMenuLoadingSpinner').classList.add('hidden');
+                document.getElementById('translateMenuResultsContainer').classList.remove('hidden');
+                document.getElementById('applyMenuTranslationsBtn').disabled = pendingMenuTranslationEntries.length === 0;
+                document.getElementById('applyMenuTranslationsBtn').classList.remove('hidden');
+                document.getElementById('performMenuTranslationBtn').classList.add('hidden');
+            } catch (error) {
+                console.error(error);
+                showNotification('Translation failed: ' + error.message, 'error');
+                document.getElementById('translateMenuLoadingSpinner').classList.add('hidden');
+                document.getElementById('performMenuTranslationBtn').disabled = false;
+            } finally {
+                if (document.getElementById('performMenuTranslationBtn').classList.contains('hidden')) {
+                    document.getElementById('performMenuTranslationBtn').disabled = false;
+                }
+            }
+        }
+
+        function displayMenuTranslationResults(entries, targetLanguage) {
+            const container = document.getElementById('translateMenuResults');
+            let html = '';
+            if (!entries || entries.length === 0) {
+                html = '<p class="text-gray-600 text-sm">No translations found.</p>';
+            } else {
+                html = `<p class="text-sm text-gray-600 mb-3 pb-3 border-b">Total items: <span class="font-semibold">${entries.length}</span></p>`;
+                entries.forEach(entry => {
+                    const pathLabel = Array.isArray(entry.path) ? entry.path.join(' › ') : String(entry.path || '');
+                    html += `<div class="mb-3 p-3 bg-white border-l-4 border-gray-300 rounded">
+                        <div class="text-sm mb-1">
+                            <span class="text-gray-600">EN:</span> <span class="font-medium">${entry.original}</span><br>
+                            <span class="text-green-600 font-semibold">${targetLanguage.toUpperCase()}:</span> <span class="font-medium">${entry.translated}</span>
+                        </div>
+                        <div class="text-xs text-gray-600">Menu path: ${pathLabel}</div>
+                    </div>`;
+                });
+            }
+            
+            container.innerHTML = html;
+        }
+
+        function applyTranslationsToMenuTree(nodes, entriesByPath, parentPath = []) {
+            if (!Array.isArray(nodes)) return;
+            nodes.forEach((node, index) => {
+                const path = [...parentPath, index];
+                const pathKey = path.join('/');
+                const translatedLabel = entriesByPath[pathKey];
+                if (translatedLabel && node && typeof node === 'object') {
+                    node.label = formatMenuLabel(translatedLabel);
+                }
+                if (Array.isArray(node?.children)) {
+                    applyTranslationsToMenuTree(node.children, entriesByPath, path);
+                }
+            });
+        }
+
+        async function applyMenuTranslations() {
+            if (!pendingMenuTranslationEntries.length) {
+                showNotification('Translate the menu first', 'error');
+                return;
+            }
+
+            const entriesByPath = {};
+            pendingMenuTranslationEntries.forEach(entry => {
+                if (entry.type === 'label') {
+                    entriesByPath[entry.path.join('/')] = formatMenuLabel(entry.translated || entry.original);
+                }
+            });
+
+            if (selectedPath) {
+                flushFormToNode(selectedPath);
+            }
+
+            applyTranslationsToMenuTree(menuTree, entriesByPath);
+
+            if (selectedPath) {
+                const selectedNode = getNodeByPath(selectedPath);
+                if (selectedNode) {
+                    document.getElementById('itemLabel').value = formatMenuLabel(selectedNode.label || '');
+                    document.getElementById('contentTitle').textContent = 'Editing: ' + (selectedNode.label || '(unlabeled)');
+                }
+            }
+
+            markAsChanged();
+            renderTree();
+
+            try {
+                await saveChanges();
+                closeTranslateMenuModal();
+                showNotification('Translations applied and saved', 'success');
+            } catch (error) {
+                console.error(error);
+                showNotification('Failed to save translated menu: ' + error.message, 'error');
+            }
+        }
+        function markAsChanged() {
+            hasUnsavedChanges = true;
+            document.getElementById('saveBtn').disabled = false;
+            document.getElementById('cancelBtn').disabled = false;
+            document.getElementById('changesIndicator').style.display = 'block';
+        }
+
+        function markAsSaved() {
+            hasUnsavedChanges = false;
+            document.getElementById('saveBtn').disabled = true;
+            document.getElementById('cancelBtn').disabled = true;
+            document.getElementById('changesIndicator').style.display = 'none';
+        }
+
+        // ── Tree rendering ────────────────────────────────────────────────────────
+        function renderTree() {
+            const container = document.getElementById('treeContainer');
+            container.innerHTML = '';
+            if (!menuTree.length) {
+                container.innerHTML = '<p style="color:#999;font-size:0.85rem;padding:0.5rem;">No items yet. Click &quot;+ Add Root Menu Item&quot;.</p>';
+                return;
+            }
+            const fragment = document.createDocumentFragment();
+            menuTree.forEach((node, i) => fragment.appendChild(renderNode(node, [i], 0)));
+            container.appendChild(fragment);
+        }
+
+        function renderNode(node, path, depth) {
+            const isSelected = selectedPath && JSON.stringify(selectedPath) === JSON.stringify(path);
+            const children = Array.isArray(node.children) ? node.children : [];
+            const hasChildren = children.length > 0;
+            const expansionKey = getMenuNodeExpansionKey(node, path);
+            const isExpanded = hasChildren && expandedMenuNodeKeys.has(expansionKey);
+            const wrapper = document.createElement('div');
+            wrapper.className = 'tree-item';
+
+            const row = document.createElement('div');
+            row.className = 'tree-button' + (isSelected ? ' selected' : '');
+            row.style.setProperty('--depth', (depth * 18) + 'px');
+            row.setAttribute('draggable', 'true');
+            row.dataset.path = JSON.stringify(path);
+
+            const folderIcon = hasChildren ? (isExpanded ? 'fa-folder-open' : 'fa-folder') : 'fa-file-alt';
+            const boardLabel = getBoardLabel(node.board_id);
+            row.innerHTML =
+                '<div class="tree-row-main">' +
+                    '<button type="button" class="tree-toggle' + (hasChildren ? '' : ' placeholder') + '" data-action="toggle" title="' + (isExpanded ? 'Collapse' : 'Expand') + '">' +
+                        '<i class="fas ' + (isExpanded ? 'fa-chevron-down' : 'fa-chevron-right') + '"></i>' +
+                    '</button>' +
+                    '<i class="fas ' + folderIcon + '" style="color:#6b7280;font-size:0.85rem;"></i>' +
+                    '<span class="button-label">' + escapeHtml(formatMenuLabel(node.label || '(unlabeled)')) + '</span>' +
+                    '<span class="tree-item-meta">' +
+                        (boardLabel ? '<span class="board-target-pill" title="' + escapeHtml(boardLabel) + '">' + escapeHtml(boardLabel) + '</span>' : '') +
+                        (node.hidden ? '<span class="hidden-badge">HIDDEN</span>' : '') +
+                    '</span>' +
+                '</div>';
+
+            row.addEventListener('click', (e) => {
+                if (e.target.closest('.tree-toggle')) return;
+                selectItem(path);
+            });
+
+            const toggle = row.querySelector('[data-action="toggle"]');
+            if (toggle && hasChildren) {
+                toggle.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    toggleTreeNode(node, path);
+                });
+            }
+
+            wrapper.appendChild(row);
+
+            const childrenContainer = document.createElement('div');
+            childrenContainer.className = 'tree-node-children' + (isExpanded ? '' : ' collapsed');
+            children.forEach((child, ci) => childrenContainer.appendChild(renderNode(child, [...path, ci], depth + 1)));
+            wrapper.appendChild(childrenContainer);
+            return wrapper;
+        }
+
+        function getMenuNodeExpansionKey(node, path) {
+            return JSON.stringify(path || []);
+        }
+
+        function collectExpandableNodeKeys(nodes, output = new Set()) {
+            (nodes || []).forEach((node, index) => {
+                if (!node) return;
+                const key = getMenuNodeExpansionKey(node, [index]);
+                if (Array.isArray(node.children) && node.children.length > 0) {
+                    output.add(key);
+                    collectExpandableNodeKeys(node.children, output);
+                }
+            });
+            return output;
+        }
+
+        function initializeExpandedMenuNodes() {
+            expandedMenuNodeKeys = new Set();
+            const visit = (nodes, parentPath = []) => {
+                (nodes || []).forEach((node, index) => {
+                    const path = [...parentPath, index];
+                    if (Array.isArray(node.children) && node.children.length > 0) {
+                        expandedMenuNodeKeys.add(getMenuNodeExpansionKey(node, path));
+                        visit(node.children, path);
+                    }
+                });
+            };
+            visit(menuTree);
+        }
+
+        function expandAllTreeNodes() {
+            initializeExpandedMenuNodes();
+            renderTree();
+        }
+
+        function collapseAllTreeNodes() {
+            expandedMenuNodeKeys = new Set();
+            renderTree();
+        }
+
+        function toggleTreeNode(node, path) {
+            const key = getMenuNodeExpansionKey(node, path);
+            if (expandedMenuNodeKeys.has(key)) expandedMenuNodeKeys.delete(key);
+            else expandedMenuNodeKeys.add(key);
+            renderTree();
+        }
+
+        function expandAncestors(path) {
+            if (!Array.isArray(path)) return;
+            for (let i = 1; i < path.length; i++) {
+                const ancestor = getNodeByPath(path.slice(0, i));
+                if (ancestor) expandedMenuNodeKeys.add(getMenuNodeExpansionKey(ancestor, path.slice(0, i)));
+            }
+        }
+
+        function getBoardLabel(boardId) {
+            if (!boardId) return '';
+            const board = boards.find((item) => item.id === boardId);
+            return board ? String(board.label || board.id || '') : String(boardId);
+        }
+
+        // ── Selection / form ──────────────────────────────────────────────────────
+        function selectItem(path) {
+            if (selectedPath) flushFormToNode(selectedPath);
+            selectedPath = path;
+            expandAncestors(path);
+            const node = getNodeByPath(path);
+            if (!node) return;
+
+            document.getElementById('contentTitle').textContent = 'Editing: ' + (node.label || '(unlabeled)');
+            document.getElementById('contentDescription').textContent = 'Tree path: ' + path.join(' › ');
+
+            document.getElementById('itemLabel').value = node.label || '';
+            populateBoardSelect(node.board_id);
+            document.getElementById('speechText').value = node.speech_text || '';
+            document.getElementById('imageUrl').value = node.image_url || '';
+            document.getElementById('customAudioFile').value = node.custom_audio_file || '';
+            setColorField('backgroundColor', 'backgroundColorPicker', node.background_color || '#FFFFFF');
+            setColorField('textColor', 'textColorPicker', node.text_color || '#000000');
+            document.getElementById('hiddenCheck').checked = !!node.hidden;
+
+            document.getElementById('welcomeMessage').style.display = 'none';
+            document.getElementById('itemForm').style.display = 'block';
+            document.getElementById('deleteItemBtn').onclick = () => deleteItem(path);
+            document.getElementById('addChildBtn').onclick = () => addChildItem(path);
+
+            document.querySelectorAll('.tree-button.selected').forEach(el => el.classList.remove('selected'));
+            document.querySelectorAll('.tree-button[data-path=\'' + JSON.stringify(path) + '\']').forEach(el => el.classList.add('selected'));
+        }
+
+        function showWelcome() {
+            selectedPath = null;
+            document.getElementById('welcomeMessage').style.display = '';
+            document.getElementById('itemForm').style.display = 'none';
+            document.getElementById('contentTitle').textContent = 'Select a menu item to edit';
+            document.getElementById('contentDescription').textContent = 'Choose an item from the hierarchy on the left to modify its properties.';
+        }
+
+        function flushFormToNode(path) {
+            const node = getNodeByPath(path);
+            if (!node) return;
+            node.label = formatMenuLabel(document.getElementById('itemLabel').value);
+            node.board_id = document.getElementById('boardTarget').value || null;
+            node.speech_text = formatMenuLabel(document.getElementById('speechText').value) || null;
+            node.image_url = document.getElementById('imageUrl').value || null;
+            node.custom_audio_file = document.getElementById('customAudioFile').value || null;
+            node.background_color = document.getElementById('backgroundColor').value || '#FFFFFF';
+            node.text_color = document.getElementById('textColor').value || '#000000';
+            node.hidden = document.getElementById('hiddenCheck').checked;
+        }
+
+        function setupFormListeners() {
+            ['itemLabel','boardTarget','speechText','imageUrl','customAudioFile','backgroundColor','textColor','hiddenCheck'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) { el.addEventListener('change', markAsChanged); el.addEventListener('input', markAsChanged); }
+            });
+            const boardTargetSel = document.getElementById('boardTarget');
+            if (boardTargetSel) { boardTargetSel.addEventListener('change', updateOpenBoardBtnState); }
+
+            const openBoardBuilderBtn = document.getElementById('openBoardBuilderBtn');
+            if (openBoardBuilderBtn) {
+                openBoardBuilderBtn.addEventListener('click', () => {
+                    const targetBoardId = (document.getElementById('boardTarget').value || '').trim();
+                    if (targetBoardId) {
+                        window.location.href = 'tap_board_builder.html?board_id=' + encodeURIComponent(targetBoardId);
+                    } else {
+                        window.location.href = 'tap_board_builder.html';
+                    }
+                });
+            }
+        }
+
+        function updateOpenBoardBtnState() {
+            const sel = document.getElementById('boardTarget');
+            const btn = document.getElementById('openBoardBuilderBtn');
+            if (!btn) return;
+            const selected = sel && sel.options[sel.selectedIndex];
+            const boardType = selected ? (selected.dataset.boardType || '') : '';
+            const source = selected ? (selected.dataset.source || '') : '';
+            const isReadOnly = boardType === 'system' || source === 'legacy_category';
+            btn.disabled = isReadOnly;
+            btn.title = isReadOnly ? 'Cannot open built-in / standard boards in the Board Builder' : 'Open this board in the Board Builder';
+            btn.style.opacity = isReadOnly ? '0.45' : '';
+            btn.style.cursor = isReadOnly ? 'not-allowed' : '';
+        }
+
+        function populateBoardSelect(selectedId) {
+            const sel = document.getElementById('boardTarget');
+            sel.innerHTML = '<option value="">— None / Category only —</option>';
+            const sortedBoards = [...boards].sort((a, b) => {
+                const aLabel = String((a && (a.label || a.id)) || '').trim().toLowerCase();
+                const bLabel = String((b && (b.label || b.id)) || '').trim().toLowerCase();
+                return aLabel.localeCompare(bLabel);
+            });
+            sortedBoards.forEach(b => {
+                const opt = document.createElement('option');
+                opt.value = b.id;
+                opt.dataset.boardType = b.board_type || '';
+                opt.dataset.source = b.source || '';
+                opt.textContent = (b.label || b.id) + (b.board_type ? ' (' + b.board_type + ')' : '');
+                if (b.id === selectedId) opt.selected = true;
+                sel.appendChild(opt);
+            });
+            updateOpenBoardBtnState();
+        }
+
+        function setColorField(textId, pickerId, value) {
+            const hex = /^#[0-9A-Fa-f]{6}$/.test(value) ? value : '#FFFFFF';
+            document.getElementById(textId).value = hex;
+            document.getElementById(pickerId).value = hex;
+        }
+
+        function setupColorInputs() {
+            document.getElementById('backgroundColorPicker').addEventListener('input', (e) => { document.getElementById('backgroundColor').value = e.target.value; markAsChanged(); });
+            document.getElementById('backgroundColor').addEventListener('input', (e) => { if (/^#[0-9A-Fa-f]{6}$/.test(e.target.value)) document.getElementById('backgroundColorPicker').value = e.target.value; markAsChanged(); });
+            document.getElementById('textColorPicker').addEventListener('input', (e) => { document.getElementById('textColor').value = e.target.value; markAsChanged(); });
+            document.getElementById('textColor').addEventListener('input', (e) => { if (/^#[0-9A-Fa-f]{6}$/.test(e.target.value)) document.getElementById('textColorPicker').value = e.target.value; markAsChanged(); });
+        }
+
+        // ── Add / Delete ──────────────────────────────────────────────────────────
+        function addMenuItem() {
+            if (selectedPath) flushFormToNode(selectedPath);
+            menuTree.push(makeNewItem());
+            const newPath = [menuTree.length - 1];
+            markAsChanged();
+            renderTree();
+            if (newPath) selectItem(newPath);
+        }
+
+        function addChildItem(parentPath) {
+            if (selectedPath) flushFormToNode(selectedPath);
+            const parent = getNodeByPath(parentPath);
+            if (!parent) return;
+            if (!Array.isArray(parent.children)) parent.children = [];
+            parent.children.push(makeNewItem());
+            expandedMenuNodeKeys.add(getMenuNodeExpansionKey(parent, parentPath));
+            const childPath = [...parentPath, parent.children.length - 1];
+            markAsChanged();
+            renderTree();
+            selectItem(childPath);
+        }
+
+        function deleteItem(path) {
+            if (!confirm('Delete this menu item and all its children?')) return;
+            removeNodeFromPath(path);
+            selectedPath = null;
+            markAsChanged();
+            renderTree();
+            showWelcome();
+        }
+
+        function makeNewItem() {
+            return { id: 'menu_custom_' + Date.now(), label: 'New Menu Item', board_id: boards.length ? boards[0].id : null, source: 'custom', source_button_id: null, sort_order: 0, hidden: false, image_url: null, speech_text: null, custom_audio_file: null, background_color: '#FFFFFF', text_color: '#000000', children: [] };
+        }
+
+        // ── Drag & Drop ───────────────────────────────────────────────────────────
+        function setupDragAndDrop() {
+            const rootDropTopZone = document.getElementById('rootDropTopZone');
+            const rootDropBottomZone = document.getElementById('rootDropBottomZone');
+
+            function cleanupDragState() {
+                draggedPath = null;
+                [rootDropTopZone, rootDropBottomZone].forEach((zone) => {
+                    zone.classList.remove('show', 'drag-over');
+                });
+                document.querySelectorAll('.tree-button.dragging, .tree-button.drag-over, .tree-button.child-mode').forEach(el => el.classList.remove('dragging', 'drag-over', 'child-mode'));
+            }
+
+            document.addEventListener('dragstart', (e) => {
+                const row = e.target.closest('.tree-button');
+                if (!row || e.target.closest('.tree-toggle')) return;
+                const pathStr = row.dataset.path;
+                if (!pathStr) { e.preventDefault(); return; }
+                draggedPath = parsePath(pathStr);
+                if (!draggedPath) { e.preventDefault(); return; }
+                row.classList.add('dragging');
+                [rootDropTopZone, rootDropBottomZone].forEach((zone) => zone.classList.add('show'));
+                e.dataTransfer.effectAllowed = 'move';
+            });
+
+            document.addEventListener('dragend', cleanupDragState);
+
+            document.addEventListener('dragover', (e) => {
+                const btn = e.target.closest('.tree-button');
+                const onRootTop = e.target === rootDropTopZone || rootDropTopZone.contains(e.target);
+                const onRootBottom = e.target === rootDropBottomZone || rootDropBottomZone.contains(e.target);
+                if (!btn && !onRootTop && !onRootBottom) return;
+                e.preventDefault();
+                if (onRootTop || onRootBottom) {
+                    if (onRootTop) {
+                        rootDropTopZone.classList.add('drag-over');
+                        rootDropBottomZone.classList.remove('drag-over');
+                    } else {
+                        rootDropBottomZone.classList.add('drag-over');
+                        rootDropTopZone.classList.remove('drag-over');
+                    }
+                    return;
+                }
+                if (btn.classList.contains('dragging')) return;
+                rootDropTopZone.classList.remove('drag-over');
+                rootDropBottomZone.classList.remove('drag-over');
+                document.querySelectorAll('.tree-button.drag-over, .tree-button.child-mode').forEach(el => { if (el !== btn) el.classList.remove('drag-over', 'child-mode'); });
+                btn.classList.add('drag-over');
+                e.shiftKey ? btn.classList.add('child-mode') : btn.classList.remove('child-mode');
+            });
+
+            document.addEventListener('dragleave', (e) => {
+                const btn = e.target.closest('.tree-button');
+                if (btn) btn.classList.remove('drag-over', 'child-mode');
+                if (e.target === rootDropTopZone || rootDropTopZone.contains(e.target)) rootDropTopZone.classList.remove('drag-over');
+                if (e.target === rootDropBottomZone || rootDropBottomZone.contains(e.target)) rootDropBottomZone.classList.remove('drag-over');
+            });
+
+            document.addEventListener('drop', (e) => {
+                if (!draggedPath) return;
+                e.preventDefault();
+                try {
+                    const onRootTop = e.target === rootDropTopZone || rootDropTopZone.contains(e.target);
+                    const onRootBottom = e.target === rootDropBottomZone || rootDropBottomZone.contains(e.target);
+                    if (onRootTop) { moveNodeToRoot(draggedPath, 'top'); }
+                    else if (onRootBottom) { moveNodeToRoot(draggedPath, 'bottom'); }
+                    else {
+                        const targetBtn = e.target.closest('.tree-button');
+                        if (!targetBtn) return;
+                        const targetPath = parsePath(targetBtn.dataset.path);
+                        if (!targetPath) return;
+                        if (e.shiftKey) moveNodeAsChild(draggedPath, targetPath);
+                        else moveNodeAfter(draggedPath, targetPath);
+                    }
+                    if (selectedPath) showWelcome();
+                    markAsChanged();
+                    renderTree();
+                } finally { cleanupDragState(); }
+            });
+        }
+
+        // ── Tree mutation helpers ─────────────────────────────────────────────────
+        function getNodeByPath(path) {
+            if (!Array.isArray(path) || !path.length) return null;
+            let list = menuTree, node = null;
+            for (let i = 0; i < path.length; i++) {
+                const idx = path[i];
+                if (!Array.isArray(list) || idx < 0 || idx >= list.length) return null;
+                node = list[idx]; list = node.children || [];
+            }
+            return node;
+        }
+
+        function getSiblingList(path) {
+            if (!path.length || path.length === 1) return menuTree;
+            const parent = getNodeByPath(path.slice(0, -1));
+            if (!parent) return null;
+            if (!Array.isArray(parent.children)) parent.children = [];
+            return parent.children;
+        }
+
+        function removeNodeFromPath(path) {
+            const siblings = getSiblingList(path);
+            if (!siblings) return null;
+            const idx = path[path.length - 1];
+            if (idx < 0 || idx >= siblings.length) return null;
+            return siblings.splice(idx, 1)[0];
+        }
+
+        function moveNodeToRoot(srcPath, position = 'bottom') {
+            const node = removeNodeFromPath(srcPath);
+            if (!node) return;
+            if (position === 'top') {
+                menuTree.unshift(node);
+            } else {
+                menuTree.push(node);
+            }
+        }
+
+        function moveNodeAfter(srcPath, targetPath) {
+            if (JSON.stringify(srcPath) === JSON.stringify(targetPath)) return;
+            const node = removeNodeFromPath(srcPath);
+            if (!node) return;
+            const adj = adjustPath(targetPath, srcPath);
+            const siblings = getSiblingList(adj);
+            if (!siblings) { menuTree.push(node); return; }
+            const at = (adj[adj.length - 1] || 0) + 1;
+            siblings.splice(Math.min(at, siblings.length), 0, node);
+        }
+
+        function moveNodeAsChild(srcPath, targetPath) {
+            if (JSON.stringify(srcPath) === JSON.stringify(targetPath)) return;
+            const node = removeNodeFromPath(srcPath);
+            if (!node) return;
+            const adj = adjustPath(targetPath, srcPath);
+            const parent = getNodeByPath(adj);
+            if (!parent) { menuTree.push(node); return; }
+            if (!Array.isArray(parent.children)) parent.children = [];
+            parent.children.push(node);
+            expandedMenuNodeKeys.add(getMenuNodeExpansionKey(parent, adj));
+        }
+
+        function adjustPath(targetPath, removedPath) {
+            const adjusted = [...targetPath];
+            let same = true;
+            for (let i = 0; i < removedPath.length - 1; i++) { if (removedPath[i] !== targetPath[i]) { same = false; break; } }
+            if (same) {
+                const ri = removedPath[removedPath.length - 1];
+                const ti = targetPath[removedPath.length - 1];
+                if (ti !== undefined && ti > ri) adjusted[removedPath.length - 1]--;
+            }
+            return adjusted;
+        }
+
+        // ── Serialization ─────────────────────────────────────────────────────────
+        function serializeTree(items) {
+            if (!Array.isArray(items)) return [];
+            return items.map((item, i) => ({
+                id: item.id || ('menu_custom_' + Date.now() + '_' + i),
+                label: item.label || ('Menu Item ' + (i + 1)),
+                board_id: item.board_id || null,
+                source: item.source || 'custom',
+                source_button_id: item.source_button_id || null,
+                sort_order: i,
+                hidden: !!item.hidden,
+                image_url: item.image_url || null,
+                speech_text: item.speech_text || null,
+                custom_audio_file: item.custom_audio_file || null,
+                background_color: item.background_color || '#FFFFFF',
+                text_color: item.text_color || '#000000',
+                children: serializeTree(item.children)
+            }));
+        }
+
+        function parsePath(str) { try { const p = JSON.parse(str || '[]'); return Array.isArray(p) ? p : null; } catch { return null; } }
+
+        function escapeHtml(v) {
+            return String(v || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;');
+        }
+
+        function showNotification(msg, type) {
+            const el = document.getElementById('notification');
+            el.textContent = msg; el.className = 'notification ' + type + ' show';
+            setTimeout(() => el.classList.remove('show'), 2500);
+        }
+    </script>
+
+    <!-- Help Modal -->
+    <div id="help-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white p-8 rounded-2xl shadow-2xl w-[90vw] h-[90vh] max-w-5xl max-h-[90vh] mx-2 relative flex flex-col">
+            <button id="help-modal-close" class="absolute top-4 right-6 text-gray-500 hover:text-red-500 text-3xl font-bold focus:outline-none" aria-label="Close Help">&times;</button>
+            <div class="mb-2">
+                <h2 class="text-2xl font-bold text-gray-800">Help &amp; User Guide</h2>
+            </div>
+            <div id="help-modal-content" class="overflow-y-auto flex-1 px-0 py-0">
+                <div id="help-loading" class="text-center text-gray-400">Loading help...</div>
+            </div>
+            <div class="mt-4 text-center">
+                <button onclick="openBMAContactModal()" class="inline-block text-green-700 font-semibold underline hover:text-green-900">Contact Support</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Contact Support Modal -->
+    <div id="contact-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white p-8 rounded-2xl shadow-2xl w-[90vw] max-w-md mx-2 relative flex flex-col">
+            <button id="contact-modal-close" class="absolute top-4 right-6 text-gray-500 hover:text-red-500 text-3xl font-bold focus:outline-none" aria-label="Close Contact">&times;</button>
+            <h3 class="text-lg font-semibold mb-4">Contact Support</h3>
+            <form id="bma-contact-form" class="space-y-2" method="POST" action="https://formspree.io/f/myzpzero">
+                <input type="text" name="name" placeholder="Your Name" class="w-full px-3 py-2 border border-gray-300 rounded-md" required>
+                <input type="email" name="email" placeholder="Your Email" class="w-full px-3 py-2 border border-gray-300 rounded-md" required>
+                <textarea name="message" placeholder="How can we help you?" class="w-full px-3 py-2 border border-gray-300 rounded-md" rows="3" required></textarea>
+                <button type="submit" class="w-full bg-green-600 text-white py-2 rounded-md hover:bg-green-700">Send to Support</button>
+            </form>
+            <div id="bma-support-success" class="hidden text-green-600 mt-2">Thank you! Your message has been sent.</div>
+            <div id="bma-support-error" class="hidden text-red-600 mt-2">There was an error. Please try again or email admin@talkwithbravo.com.</div>
+        </div>
+    </div>
+
+    <script>
+    // --- Boards Menu Admin Help Modal ---
+    (function () {
+        const helpIcon = document.getElementById('help-icon');
+        const helpModal = document.getElementById('help-modal');
+        const helpModalClose = document.getElementById('help-modal-close');
+        const helpModalContent = document.getElementById('help-modal-content');
+        const helpLoading = document.getElementById('help-loading');
+        const contactModal = document.getElementById('contact-modal');
+        const contactModalClose = document.getElementById('contact-modal-close');
+
+        helpIcon.addEventListener('click', openHelpModal);
+        helpModalClose.addEventListener('click', closeHelpModal);
+        contactModalClose.addEventListener('click', () => contactModal.classList.add('hidden'));
+        helpModal.addEventListener('click', (e) => { if (e.target === helpModal) closeHelpModal(); });
+        contactModal.addEventListener('click', (e) => { if (e.target === contactModal) contactModal.classList.add('hidden'); });
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeHelpModal(); contactModal.classList.add('hidden'); } });
+
+        document.getElementById('bma-contact-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const data = new FormData(e.target);
+            try {
+                const res = await fetch(e.target.action, { method: 'POST', body: data, headers: { Accept: 'application/json' } });
+                if (res.ok) { document.getElementById('bma-support-success').classList.remove('hidden'); e.target.reset(); }
+                else { document.getElementById('bma-support-error').classList.remove('hidden'); }
+            } catch { document.getElementById('bma-support-error').classList.remove('hidden'); }
+        });
+
+        function openHelpModal() {
+            helpModal.classList.remove('hidden');
+            helpLoading.style.display = 'none';
+            helpModalContent.innerHTML = buildBMAGuide();
+        }
+
+        function closeHelpModal() { helpModal.classList.add('hidden'); }
+
+        window.openBMAContactModal = function () { closeHelpModal(); contactModal.classList.remove('hidden'); };
+
+        window.toggleBMAGuideDetails = function (element) {
+            const details = element.querySelector('.guide-details');
+            const icon = element.querySelector('.fa-chevron-down');
+            if (details.classList.contains('hidden')) {
+                details.classList.remove('hidden');
+                if (icon) icon.style.transform = 'rotate(180deg)';
+            } else {
+                details.classList.add('hidden');
+                if (icon) icon.style.transform = 'rotate(0deg)';
+            }
+        };
+
+        function guideItem(iconClass, iconColor, title, detailsHtml) {
+            return `
+            <div class="admin-guide-item cursor-pointer" onclick="toggleBMAGuideDetails(this)">
+                <div class="flex items-start p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition">
+                    <div class="flex-shrink-0 mt-1"><i class="${iconClass} ${iconColor} text-lg"></i></div>
+                    <div class="ml-3 flex-1">
+                        <div class="flex items-center justify-between">
+                            <div class="font-semibold text-gray-900">${title}</div>
+                            <i class="fas fa-chevron-down text-gray-400 transition-transform"></i>
+                        </div>
+                        <div class="guide-details hidden mt-2">
+                            <div class="text-sm text-gray-700 space-y-2">${detailsHtml}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+        }
+
+        function buildBMAGuide() {
+            return `
+            <div class="p-6">
+                <div class="mb-6 bg-gradient-to-r from-blue-50 to-indigo-50 p-4 rounded-lg border-l-4 border-blue-500">
+                    <h3 class="text-lg font-bold text-blue-900 mb-2">
+                        <i class="fas fa-sitemap text-blue-600 mr-2"></i>Boards Menu Administration Guide
+                    </h3>
+                    <p class="text-sm text-gray-700">
+                        This page controls what appears in the Tap Interface navigation menu — which boards are visible,
+                        how they are grouped, and the order they appear. Use Board Builder to create boards first,
+                        then come here to add them to the menu.
+                    </p>
+                </div>
+
+                <div class="space-y-3">
+
+                    ${guideItem('fas fa-sitemap', 'text-blue-600', 'Menu Structure Tree', `
+                        <p><strong>Purpose:</strong> The left panel shows the full hierarchy of your Tap Interface navigation menu.</p>
+                        <div class="bg-blue-50 border-l-4 border-blue-500 p-3 rounded">
+                            <p class="text-sm font-semibold text-blue-900 mb-1">Tree Concepts:</p>
+                            <ul class="text-xs text-gray-700 ml-4 space-y-1">
+                                <li>• <strong>Top-level items</strong> appear as main menu categories in Tap Interface</li>
+                                <li>• <strong>Nested items</strong> (children) appear as sub-categories under their parent</li>
+                                <li>• Each item can be linked to a board, or be a pure grouping folder</li>
+                            </ul>
+                        </div>
+                    `)}
+
+                    ${guideItem('fas fa-grip-lines', 'text-indigo-600', 'Drag &amp; Drop Reordering', `
+                        <p><strong>Purpose:</strong> Reorder menu items or move them into different groups without deleting and re-creating them.</p>
+                        <div class="bg-indigo-50 border-l-4 border-indigo-500 p-3 rounded">
+                            <p class="text-sm font-semibold text-indigo-900 mb-1">How to Use:</p>
+                            <ul class="text-xs text-gray-700 ml-4 space-y-1">
+                                <li>• Drag a <strong>menu row</strong> directly to move it</li>
+                                <li>• Drag onto another item → shows <span class="text-orange-600 font-semibold">↕️ Reorder</span> indicator to swap positions</li>
+                                <li>• Drag onto an item and hold → shows <span class="text-blue-600 font-semibold">📂 Nest inside</span> to make it a child</li>
+                                <li>• Drag to the <strong>Top Root Drop Zone</strong> to move an item to the first root position</li>
+                                <li>• Drag to the <strong>Bottom Root Drop Zone</strong> to move an item to the last root position</li>
+                            </ul>
+                        </div>
+                        <div class="bg-yellow-50 border-l-4 border-yellow-500 p-3 rounded">
+                            <p class="text-xs text-gray-700"><strong>Remember:</strong> Click <em>Save</em> in the top bar to persist your reordering changes.</p>
+                        </div>
+                    `)}
+
+                    ${guideItem('fas fa-plus-circle', 'text-green-600', 'Adding Menu Items', `
+                        <p><strong>Purpose:</strong> Create new entries in the navigation menu.</p>
+                        <div class="bg-green-50 border-l-4 border-green-500 p-3 rounded">
+                            <p class="text-sm font-semibold text-green-900 mb-1">Steps:</p>
+                            <ol class="text-xs text-gray-700 ml-4 space-y-1 list-decimal">
+                                <li>Click <strong>+ Add Root Menu Item</strong> at the bottom of the tree panel</li>
+                                <li>A new item appears — click it to open the editor on the right</li>
+                                <li>Set the <strong>Label</strong> (what users see in the menu)</li>
+                                <li>Choose a <strong>Board</strong> to link this menu item to</li>
+                                <li>Click <em>Save</em> to keep your changes</li>
+                            </ol>
+                        </div>
+                    `)}
+
+                    ${guideItem('fas fa-edit', 'text-blue-600', 'Editing a Menu Item', `
+                        <p><strong>Purpose:</strong> Change the label, linked board, or other settings of an existing menu item.</p>
+                        <div class="bg-blue-50 border-l-4 border-blue-500 p-3 rounded">
+                            <p class="text-sm font-semibold text-blue-900 mb-1">Editable Properties:</p>
+                            <ul class="text-xs text-gray-700 ml-4 space-y-1">
+                                <li>• <strong>Label:</strong> The name shown in the Tap Interface menu</li>
+                                <li>• <strong>Linked Board:</strong> Which board opens when the user selects this menu item</li>
+                                <li>• <strong>Hidden:</strong> Hide the item from users without deleting it</li>
+                                <li>• <strong>Open in Board Builder:</strong> Jump directly to editing the linked board</li>
+                            </ul>
+                        </div>
+                        <div class="bg-amber-50 border-l-4 border-amber-500 p-3 rounded">
+                            <p class="text-xs text-gray-700"><strong>Read-only boards:</strong> Standard/legacy system boards cannot be opened in the Board Builder. Build a copy instead.</p>
+                        </div>
+                    `)}
+
+                    ${guideItem('fas fa-trash', 'text-red-600', 'Removing Menu Items', `
+                        <p><strong>Purpose:</strong> Remove a menu item from the navigation. This does <em>not</em> delete the underlying board.</p>
+                        <div class="bg-red-50 border-l-4 border-red-500 p-3 rounded">
+                            <p class="text-xs text-gray-700"><strong>⚠️ Note:</strong> Deleting a parent item also removes all its child items from the menu. The boards themselves are preserved in Board Builder.</p>
+                        </div>
+                    `)}
+
+                    ${guideItem('fas fa-save', 'text-red-600', 'Saving Changes', `
+                        <div class="bg-red-50 border-l-4 border-red-500 p-4 rounded">
+                            <p class="text-sm font-bold text-red-900 mb-2">💾 Changes are NOT saved automatically!</p>
+                            <p class="text-xs text-gray-700">The <span class="font-semibold text-orange-700">⚠️ Unsaved Changes</span> indicator appears in the toolbar whenever you have pending edits. Click <strong>Save</strong> to persist, or <strong>Cancel</strong> to revert.</p>
+                        </div>
+                    `)}
+
+                </div>
+
+                <div class="mt-6 p-4 bg-gray-100 rounded-lg text-center">
+                    <p class="text-sm text-gray-600 mb-2">Need more help?</p>
+                    <button onclick="openBMAContactModal()" class="inline-block bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition">
+                        <i class="fas fa-envelope mr-2"></i>Contact Support
+                    </button>
+                </div>
+            </div>`;
+        }
+    })();
+    </script>
+</body>
+</html>

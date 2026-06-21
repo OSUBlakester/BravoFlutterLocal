@@ -9,6 +9,7 @@
     <script src="/static/interactive-guide.js?v=20250901-fix3" defer></script>
     <script src="/static/admin-pages-guide-fixed.js?v=20250901-fix5" defer></script>
     <script src="/static/admin-pages-comprehensive-guide.js?v=20250901-fix5" defer></script>
+        <script src="/static/admin_interface_navigation.js" defer></script>
     <script src="/static/admin_pages.js?v=20251021-mp3-feature" defer></script>
   <style>
     /* Custom base styles */
@@ -1806,10 +1807,16 @@
     <main class="container mx-auto p-4 mt-8 bg-white rounded-lg shadow-md text-gray-800">
         <div class="flex justify-between items-center mb-4">
             <h2 class="text-2xl font-bold">Manage Pages & Buttons</h2>
-            <button id="openMigrationBtn" class="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors">
-                <i class="fas fa-exchange-alt"></i>
-                Migrate User Data
-            </button>
+            <div class="flex items-center gap-3">
+                <button id="translatePagesBtn" type="button" class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                    <i class="fas fa-language"></i>
+                    Translate Pages
+                </button>
+                <button id="openMigrationBtn" class="bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg flex items-center gap-2 transition-colors">
+                    <i class="fas fa-exchange-alt"></i>
+                    Migrate User Data
+                </button>
+            </div>
         </div>
 
         <div class="mb-6 flex items-center space-x-4">
@@ -1861,6 +1868,76 @@
             <!-- Visual buttons will be rendered here by JavaScript -->
         </div>
     </main>
+
+    <div id="translatePagesModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full hidden" style="z-index: 5100;">
+        <div class="relative top-20 mx-auto p-5 border w-11/12 max-w-2xl shadow-lg rounded-md bg-white">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-bold text-gray-900">Translate Page Content</h3>
+                <button id="closeTranslatePagesModal" class="text-gray-400 hover:text-gray-600">
+                    <i class="fas fa-times text-xl"></i>
+                </button>
+            </div>
+
+            <div class="space-y-4">
+                <p class="text-sm text-gray-600">
+                    Translate page labels and button content while keeping internal page names and navigation links unchanged.
+                </p>
+
+                <div>
+                    <label for="translateScope" class="block text-sm font-medium text-gray-700">Translate Scope</label>
+                    <select id="translateScope" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm">
+                        <option value="current">Current page only</option>
+                        <option value="all">All pages</option>
+                        <option value="tap_boards">Tap boards only (AI prompts)</option>
+                    </select>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label for="translateSourceLocale" class="block text-sm font-medium text-gray-700">Translate From</label>
+                        <select id="translateSourceLocale" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"></select>
+                    </div>
+                    <div>
+                        <label for="translateTargetLocale" class="block text-sm font-medium text-gray-700">Translate To</label>
+                        <select id="translateTargetLocale" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 sm:text-sm"></select>
+                    </div>
+                </div>
+
+                <div>
+                    <span class="block text-sm font-medium text-gray-700 mb-2">Fields To Translate</span>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-gray-700">
+                        <label class="flex items-center">
+                            <input id="translateIncludeDisplayName" type="checkbox" class="mr-2" checked>
+                            Page display names
+                        </label>
+                        <label class="flex items-center">
+                            <input id="translateIncludeButtonText" type="checkbox" class="mr-2" checked>
+                            Button labels
+                        </label>
+                        <label class="flex items-center">
+                            <input id="translateIncludeSpeechPhrase" type="checkbox" class="mr-2" checked>
+                            Button announcements
+                        </label>
+                        <label class="flex items-center">
+                            <input id="translateIncludeLlmQuery" type="checkbox" class="mr-2">
+                            Button AI query prompts
+                        </label>
+                    </div>
+                </div>
+
+                <div id="translatePagesStatus" class="hidden text-sm rounded-md px-3 py-2"></div>
+            </div>
+
+            <div class="mt-6 flex justify-end space-x-3">
+                <button id="cancelTranslatePagesBtn" type="button" class="px-4 py-2 bg-gray-500 text-white rounded-md hover:bg-gray-600 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-gray-500">
+                    Cancel
+                </button>
+                <button id="runTranslatePagesBtn" type="button" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500">
+                    Translate Now
+                </button>
+            </div>
+        </div>
+    </div>
 
     <!-- Button Editor Modal -->
     <div id="buttonEditorModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full hidden" style="z-index: 5000;">

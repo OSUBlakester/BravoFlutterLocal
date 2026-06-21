@@ -6,6 +6,7 @@
     <title>User Current Location</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <script src="/static/admin_interface_navigation.js" defer></script>
     <script src="/static/user_current_admin.js" defer></script>
 </head>
 
@@ -194,7 +195,7 @@
     </div>
 
     <div class="container mx-auto p-6">
-        <p class="mb-4 text-gray-600">Use the following format for dictation: Location: [location], People: [people], Activity: [activity]</p>
+        <p class="mb-4 text-gray-600">Dictation currently supports: Location, People, and Activity. Discussion Context fields are optional and can be entered manually or loaded from Favorites.</p>
 
         <!-- Favorites Section -->
         <div class="mb-8 p-6 bg-gray-50 rounded-lg border">
@@ -238,6 +239,15 @@
             </div>
 
             <div>
+                <label for="locationLanguageOverride" class="block text-sm font-medium text-gray-700 mb-1">Location Language Override:</label>
+                <select id="locationLanguageOverride" name="locationLanguageOverride" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+                    <option value="">None (use default partner language)</option>
+                </select>
+                <p class="text-xs text-gray-500 mt-1">Uses one of the allowed override languages configured in Admin Settings.</p>
+                <p id="defaultPartnerLanguageDisplay" class="text-xs text-gray-500 mt-1">Default partner language: loading...</p>
+            </div>
+
+            <div>
                 <label for="people" class="block text-sm font-medium text-gray-700 mb-1">People Present:</label>
                 <input type="text" id="people" name="people" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
             </div>
@@ -246,12 +256,35 @@
                 <label for="activity" class="block text-sm font-medium text-gray-700 mb-1">Activity:</label>
                 <input type="text" id="activity" name="activity" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
             </div>
+
+            <div class="pt-2 border-t border-gray-200">
+                <h2 class="text-lg font-semibold text-gray-800 mb-2">Discussion Context</h2>
+                <p class="text-xs text-gray-500 mb-3"><strong>All fields in this section are OPTIONAL.</strong> If using a stored Favorite, make sure to update the Focus Pages or Chapters and Discussion Narrative as needed.</p>
+            </div>
+
+            <div>
+                <label for="topicTitle" class="block text-sm font-medium text-gray-700 mb-1">Book Title or Subject:</label>
+                <input type="text" id="topicTitle" name="topicTitle" placeholder="Example: A Forgery of Fate" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+            </div>
+
+            <div>
+                <label for="focusChapters" class="block text-sm font-medium text-gray-700 mb-1">Focus Pages or Chapters:</label>
+                <input type="text" id="focusChapters" name="focusChapters" placeholder="Example: Pages 120-145 or Chapters 5-6" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500">
+            </div>
+
+            <div>
+                <label for="topicSummary" class="block text-sm font-medium text-gray-700 mb-1">Discussion Narrative:</label>
+                <textarea id="topicSummary" name="topicSummary" rows="3" placeholder="Short recap of the assigned pages/chapters" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"></textarea>
+            </div>
         </div>
 
         <!-- Action Buttons -->
         <div class="flex gap-4 mb-4">
             <button id="dictationButton" class="bg-gray-600 hover:bg-gray-700 text-white px-6 py-2 rounded-md font-medium">
                 Start Dictation
+            </button>
+            <button id="clearButton" class="bg-red-600 hover:bg-red-700 text-white px-6 py-2 rounded-md font-medium">
+                Clear
             </button>
             <button id="saveButton" class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-md font-medium">
                 Save
@@ -301,6 +334,9 @@
                         <p id="favoritePreviewLocation" class="text-sm text-gray-600"></p>
                         <p id="favoritePreviewPeople" class="text-sm text-gray-600"></p>
                         <p id="favoritePreviewActivity" class="text-sm text-gray-600"></p>
+                        <p id="favoritePreviewTopicTitle" class="text-sm text-gray-600"></p>
+                        <p id="favoritePreviewFocusChapters" class="text-sm text-gray-600"></p>
+                        <p id="favoritePreviewTopicSummary" class="text-sm text-gray-600"></p>
                     </div>
 
                     <!-- Schedule Section -->
@@ -378,6 +414,702 @@
                 await window.updatePageTitleWithProfile('User Current Location Administration');
             }
         });
+    </script>
+
+    <!-- User Current Location Help Modal -->
+    <div id="help-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-[1000] flex items-center justify-center p-4" style="z-index: 1000;">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] overflow-hidden flex flex-col">
+            <div class="p-6 border-b border-gray-200 bg-gradient-to-r from-orange-50 to-red-50 flex justify-between items-center">
+                <h2 class="text-2xl font-bold text-gray-800">
+                    <i class="fas fa-map-marker-alt text-[#FB4F14] mr-2"></i>User Current Location Guide
+                </h2>
+                <button id="close-help-modal" class="text-gray-500 hover:text-gray-700 transition-colors">
+                    <i class="fas fa-times text-2xl"></i>
+                </button>
+            </div>
+            
+            <div class="flex-1 overflow-y-auto p-6">
+                <div class="prose max-w-none">
+                    <p class="text-gray-700 mb-6">
+                        The User Current Location page helps you keep track of where your user is, who they're with, and what they're doing. This contextual information enhances AI responses and enables location-based features.
+                    </p>
+                    
+                    <div class="space-y-3">
+                        <!-- Location Favorites -->
+                        <div class="settings-guide-item cursor-pointer" onclick="toggleLocationGuideDetails(this)">
+                            <div class="flex items-start p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition">
+                                <div class="flex-shrink-0 mt-1">
+                                    <i class="fas fa-star text-purple-600 text-lg"></i>
+                                </div>
+                                <div class="ml-3 flex-1">
+                                    <div class="flex items-center justify-between">
+                                        <div class="font-semibold text-gray-900">Location Favorites</div>
+                                        <div class="flex items-center space-x-2">
+                                            <button onclick="event.stopPropagation(); startLocationGuide('favorites');" class="px-3 py-1 bg-purple-500 text-white text-xs rounded-lg hover:bg-purple-600 transition flex items-center">
+                                                <i class="fas fa-route mr-1"></i>Guide Me
+                                            </button>
+                                            <i class="fas fa-chevron-down text-gray-400 transition-transform"></i>
+                                        </div>
+                                    </div>
+                                    <div class="guide-details hidden mt-2">
+                                        <div class="text-sm text-gray-700 space-y-2">
+                                            <p><strong>Purpose:</strong> Save commonly-used locations for quick access and automated scheduling.</p>
+                                            <div class="bg-purple-50 border-l-4 border-purple-500 p-3 rounded">
+                                                <p class="text-sm font-semibold text-purple-900 mb-1">Features:</p>
+                                                <ul class="text-xs text-gray-700 ml-4 space-y-1">
+                                                    <li>• <strong>Load Favorite:</strong> Instantly populate Location, People, Activity, and Discussion Context fields</li>
+                                                    <li>• <strong>Add to Favorites:</strong> Save current form values and discussion context as a new favorite with optional scheduling</li>
+                                                    <li>• <strong>Important:</strong> After loading a Favorite, update Focus Pages or Chapters and Discussion Narrative as needed for the current assignment</li>
+                                                    <li>• <strong>Manage Favorites:</strong> Edit names, view/edit schedules, or delete saved favorites</li>
+                                                    <li>• <strong>Scheduling:</strong> Automatically set location based on day of week and time of day</li>
+                                                </ul>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Current Information -->
+                        <div class="settings-guide-item cursor-pointer" onclick="toggleLocationGuideDetails(this)">
+                            <div class="flex items-start p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition">
+                                <div class="flex-shrink-0 mt-1">
+                                    <i class="fas fa-edit text-blue-600 text-lg"></i>
+                                </div>
+                                <div class="ml-3 flex-1">
+                                    <div class="flex items-center justify-between">
+                                        <div class="font-semibold text-gray-900">Current Information Form</div>
+                                        <div class="flex items-center space-x-2">
+                                            <button onclick="event.stopPropagation(); startLocationGuide('form');" class="px-3 py-1 bg-blue-500 text-white text-xs rounded-lg hover:bg-blue-600 transition flex items-center">
+                                                <i class="fas fa-route mr-1"></i>Guide Me
+                                            </button>
+                                            <i class="fas fa-chevron-down text-gray-400 transition-transform"></i>
+                                        </div>
+                                    </div>
+                                    <div class="guide-details hidden mt-2">
+                                        <div class="text-sm text-gray-700 space-y-2">
+                                            <p><strong>Fields:</strong></p>
+                                            <div class="bg-blue-50 border-l-4 border-blue-500 p-3 rounded">
+                                                <ul class="text-xs text-gray-700 ml-4 space-y-1">
+                                                    <li>• <strong>Location:</strong> Where the user is right now (e.g., "Home", "School", "Grandma's house")</li>
+                                                    <li>• <strong>People Present:</strong> Who is with the user (e.g., "Mom and Dad", "Teacher Ms. Smith", "Friends")</li>
+                                                    <li>• <strong>Activity:</strong> What the user is doing (e.g., "Playing outside", "Eating lunch", "Doing homework")</li>
+                                                    <li>• <strong>Book Title or Subject:</strong> What is being discussed (e.g., "A Forgery of Fate" or "Civil War")</li>
+                                                    <li>• <strong>Focus Pages or Chapters:</strong> Current discussion range (e.g., "Pages 120-145" or "Chapters 5-6")</li>
+                                                    <li>• <strong>Discussion Narrative:</strong> Short recap of the pages/chapters being discussed</li>
+                                                </ul>
+                                            </div>
+                                            <p class="text-xs text-gray-600 mt-2"><i class="fas fa-info-circle text-blue-500 mr-1"></i>This information helps the AI provide more relevant and personalized responses based on the user's current context.</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Dictation & Save -->
+                        <div class="settings-guide-item cursor-pointer" onclick="toggleLocationGuideDetails(this)">
+                            <div class="flex items-start p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition">
+                                <div class="flex-shrink-0 mt-1">
+                                    <i class="fas fa-microphone text-green-600 text-lg"></i>
+                                </div>
+                                <div class="ml-3 flex-1">
+                                    <div class="flex items-center justify-between">
+                                        <div class="font-semibold text-gray-900">Dictation & Save Actions</div>
+                                        <div class="flex items-center space-x-2">
+                                            <button onclick="event.stopPropagation(); startLocationGuide('actions');" class="px-3 py-1 bg-green-500 text-white text-xs rounded-lg hover:bg-green-600 transition flex items-center">
+                                                <i class="fas fa-route mr-1"></i>Guide Me
+                                            </button>
+                                            <i class="fas fa-chevron-down text-gray-400 transition-transform"></i>
+                                        </div>
+                                    </div>
+                                    <div class="guide-details hidden mt-2">
+                                        <div class="text-sm text-gray-700 space-y-2">
+                                            <div class="bg-green-50 border-l-4 border-green-500 p-3 rounded">
+                                                <p class="text-sm font-semibold text-green-900 mb-1">Actions:</p>
+                                                <ul class="text-xs text-gray-700 ml-4 space-y-1">
+                                                    <li>• <strong>Start Dictation:</strong> Use voice input to fill Location, People, and Activity. Speak in format: "Location: [place], People: [names], Activity: [what doing]"</li>
+                                                    <li>• <strong>Save:</strong> Save current location plus optional discussion context fields to update AI context.</li>
+                                                </ul>
+                                            </div>
+                                            <p class="text-xs text-gray-600 mt-2"><i class="fas fa-lightbulb text-yellow-500 mr-1"></i><strong>Tip:</strong> Dictation is fastest for location context, then quickly update Focus Pages or Chapters and Discussion Narrative manually (or via Favorite).</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Scheduling -->
+                        <div class="settings-guide-item cursor-pointer" onclick="toggleLocationGuideDetails(this)">
+                            <div class="flex items-start p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition">
+                                <div class="flex-shrink-0 mt-1">
+                                    <i class="fas fa-clock text-indigo-600 text-lg"></i>
+                                </div>
+                                <div class="ml-3 flex-1">
+                                    <div class="flex items-center justify-between">
+                                        <div class="font-semibold text-gray-900">Automated Scheduling</div>
+                                        <div class="flex items-center space-x-2">
+                                            <button onclick="event.stopPropagation(); startLocationGuide('scheduling');" class="px-3 py-1 bg-indigo-500 text-white text-xs rounded-lg hover:bg-indigo-600 transition flex items-center">
+                                                <i class="fas fa-route mr-1"></i>Guide Me
+                                            </button>
+                                            <i class="fas fa-chevron-down text-gray-400 transition-transform"></i>
+                                        </div>
+                                    </div>
+                                    <div class="guide-details hidden mt-2">
+                                        <div class="text-sm text-gray-700 space-y-2">
+                                            <p><strong>Purpose:</strong> Automatically update user location based on their regular schedule.</p>
+                                            <div class="bg-indigo-50 border-l-4 border-indigo-500 p-3 rounded">
+                                                <p class="text-sm font-semibold text-indigo-900 mb-1">How Scheduling Works:</p>
+                                                <ul class="text-xs text-gray-700 ml-4 space-y-1">
+                                                    <li>• When adding a favorite, enable "Enable Schedule" checkbox</li>
+                                                    <li>• Select days of week (Monday-Sunday) when this location applies</li>
+                                                    <li>• Set start and end times for when the user is typically at this location</li>
+                                                    <li>• System automatically updates location when schedule matches</li>
+                                                </ul>
+                                            </div>
+                                            <p class="text-xs text-gray-600 mt-2"><i class="fas fa-info-circle text-indigo-500 mr-1"></i><strong>Example:</strong> Set "School" for Monday-Friday, 8:00 AM to 3:00 PM to automatically update location during school hours.</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="p-6 border-t border-gray-200 bg-gray-50 flex justify-between items-center">
+                <button id="contact-support-btn" class="text-sm text-[#FB4F14] hover:text-orange-600 transition-colors flex items-center">
+                    <i class="fas fa-envelope mr-2"></i>Contact Support
+                </button>
+                <button id="close-help-modal-footer" class="px-4 py-2 bg-[#FB4F14] text-white rounded-lg hover:bg-orange-600 transition-colors">
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Contact Support Modal -->
+    <div id="contact-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-[1001] flex items-center justify-center p-4">
+        <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+            <div class="p-6 border-b border-gray-200 bg-gradient-to-r from-orange-50 to-red-50">
+                <h3 class="text-xl font-bold text-gray-800">
+                    <i class="fas fa-envelope text-[#FB4F14] mr-2"></i>Contact Support
+                </h3>
+            </div>
+            
+            <div class="p-6">
+                <form id="contact-form" action="https://formspree.io/f/xnnqkvqj" method="POST">
+                    <div class="space-y-4">
+                        <div>
+                            <label for="contact-email" class="block text-sm font-medium text-gray-700 mb-1">Your Email</label>
+                            <input type="email" id="contact-email" name="email" required class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500">
+                        </div>
+                        <div>
+                            <label for="contact-message" class="block text-sm font-medium text-gray-700 mb-1">Message</label>
+                            <textarea id="contact-message" name="message" rows="4" required class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500 focus:border-orange-500"></textarea>
+                        </div>
+                    </div>
+                    
+                    <div class="flex gap-3 mt-6">
+                        <button type="button" id="cancel-contact" class="flex-1 px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors">
+                            Cancel
+                        </button>
+                        <button type="submit" class="flex-1 px-4 py-2 bg-[#FB4F14] text-white rounded-lg hover:bg-orange-600 transition-colors">
+                            Send Message
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <style>
+        /* Guide highlighting animation */
+        @keyframes guidePulse {
+            0%, 100% {
+                box-shadow: 0 0 0 0 rgba(251, 79, 20, 0.7), 0 0 20px rgba(251, 79, 20, 0.4);
+                border-color: #FB4F14;
+            }
+            50% {
+                box-shadow: 0 0 0 10px rgba(251, 79, 20, 0), 0 0 30px rgba(251, 79, 20, 0.6);
+                border-color: #F97316;
+            }
+        }
+        
+        .guide-highlight-target {
+            animation: guidePulse 2s ease-in-out infinite;
+            position: relative;
+            z-index: 1000;
+            border: 3px solid #FB4F14 !important;
+            border-radius: 8px !important;
+        }
+    </style>
+
+    <script>
+        // Toggle guide details
+        function toggleLocationGuideDetails(element) {
+            const details = element.querySelector('.guide-details');
+            const chevron = element.querySelector('.fa-chevron-down');
+            
+            if (details.classList.contains('hidden')) {
+                details.classList.remove('hidden');
+                chevron.style.transform = 'rotate(180deg)';
+            } else {
+                details.classList.add('hidden');
+                chevron.style.transform = 'rotate(0deg)';
+            }
+        }
+
+        // Help modal controls
+        const helpIcon = document.getElementById('help-icon');
+        const helpModal = document.getElementById('help-modal');
+        const closeHelpModal = document.getElementById('close-help-modal');
+        const closeHelpModalFooter = document.getElementById('close-help-modal-footer');
+        const contactSupportBtn = document.getElementById('contact-support-btn');
+        const contactModal = document.getElementById('contact-modal');
+        const cancelContact = document.getElementById('cancel-contact');
+
+        function openHelpModal() {
+            helpModal.classList.remove('hidden');
+        }
+
+        function closeHelpModalFunc() {
+            helpModal.classList.add('hidden');
+        }
+
+        function openContactModal() {
+            contactModal.classList.remove('hidden');
+            helpModal.classList.add('hidden');
+        }
+
+        function closeContactModal() {
+            contactModal.classList.add('hidden');
+        }
+
+        helpIcon?.addEventListener('click', openHelpModal, true);
+        closeHelpModal?.addEventListener('click', closeHelpModalFunc);
+        closeHelpModalFooter?.addEventListener('click', closeHelpModalFunc);
+        contactSupportBtn?.addEventListener('click', openContactModal);
+        cancelContact?.addEventListener('click', closeContactModal);
+
+        // Close modals on outside click
+        helpModal?.addEventListener('click', function(e) {
+            if (e.target === helpModal) closeHelpModalFunc();
+        });
+        contactModal?.addEventListener('click', function(e) {
+            if (e.target === contactModal) closeContactModal();
+        });
+
+        // Contact form submission
+        const contactForm = document.getElementById('contact-form');
+        contactForm?.addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            try {
+                const response = await fetch(contactForm.action, {
+                    method: 'POST',
+                    body: new FormData(contactForm),
+                    headers: { 'Accept': 'application/json' }
+                });
+                
+                if (response.ok) {
+                    alert('Thank you for contacting support! We\'ll get back to you soon.');
+                    contactForm.reset();
+                    closeContactModal();
+                } else {
+                    alert('There was a problem sending your message. Please try again.');
+                }
+            } catch (error) {
+                alert('There was a problem sending your message. Please try again.');
+            }
+        });
+
+        // Interactive Guide Objects
+        let currentLocationGuide = null;
+
+        const favoritesGuide = {
+            id: 'favorites',
+            steps: [
+                {
+                    title: 'Select Favorite Dropdown',
+                    content: 'Use this dropdown to choose from your saved favorites. Each favorite can include Location, People, Activity, and optional Discussion Context fields.',
+                    highlight: '#favoritesSelect',
+                    action: function() {
+                        const select = document.getElementById('favoritesSelect');
+                        if (select) {
+                            select.classList.add('guide-highlight-target');
+                            select.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }
+                    },
+                    cleanup: function() {
+                        const select = document.getElementById('favoritesSelect');
+                        if (select) select.classList.remove('guide-highlight-target');
+                    }
+                },
+                {
+                    title: 'Load Favorite Button',
+                    content: 'Click this button to load the selected favorite into the form fields below. This fills in Location, People, Activity, and any saved discussion context.',
+                    highlight: '#loadFavoriteBtn',
+                    action: function() {
+                        const btn = document.getElementById('loadFavoriteBtn');
+                        if (btn) {
+                            btn.classList.add('guide-highlight-target');
+                            btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }
+                    },
+                    cleanup: function() {
+                        const btn = document.getElementById('loadFavoriteBtn');
+                        if (btn) btn.classList.remove('guide-highlight-target');
+                    }
+                },
+                {
+                    title: 'Add to Favorites',
+                    content: 'Save current form values as a new favorite, including optional discussion context fields. You can also add an optional schedule.',
+                    highlight: '#addToFavoritesBtn',
+                    action: function() {
+                        const btn = document.getElementById('addToFavoritesBtn');
+                        if (btn) {
+                            btn.classList.add('guide-highlight-target');
+                            btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }
+                    },
+                    cleanup: function() {
+                        const btn = document.getElementById('addToFavoritesBtn');
+                        if (btn) btn.classList.remove('guide-highlight-target');
+                    }
+                },
+                {
+                    title: 'Manage Favorites',
+                    content: 'Open the favorites management interface to edit, view schedules, or delete existing favorites.',
+                    highlight: '#manageFavoritesBtn',
+                    action: function() {
+                        const btn = document.getElementById('manageFavoritesBtn');
+                        if (btn) {
+                            btn.classList.add('guide-highlight-target');
+                            btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }
+                    },
+                    cleanup: function() {
+                        const btn = document.getElementById('manageFavoritesBtn');
+                        if (btn) btn.classList.remove('guide-highlight-target');
+                    }
+                }
+            ]
+        };
+
+        const formGuide = {
+            id: 'form',
+            steps: [
+                {
+                    title: 'Location Field',
+                    content: 'Enter where the user currently is. Examples: "Home", "School", "Grandma\'s house", "The park". This helps AI understand the user\'s physical context.',
+                    highlight: '#location',
+                    action: function() {
+                        const input = document.getElementById('location');
+                        if (input) {
+                            input.classList.add('guide-highlight-target');
+                            input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }
+                    },
+                    cleanup: function() {
+                        const input = document.getElementById('location');
+                        if (input) input.classList.remove('guide-highlight-target');
+                    }
+                },
+                {
+                    title: 'People Present Field',
+                    content: 'List who is with the user right now. Examples: "Mom and Dad", "Teacher Ms. Smith", "Best friend Jake", "Therapy team". Helps AI provide contextually appropriate responses.',
+                    highlight: '#people',
+                    action: function() {
+                        const input = document.getElementById('people');
+                        if (input) {
+                            input.classList.add('guide-highlight-target');
+                            input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }
+                    },
+                    cleanup: function() {
+                        const input = document.getElementById('people');
+                        if (input) input.classList.remove('guide-highlight-target');
+                    }
+                },
+                {
+                    title: 'Activity Field',
+                    content: 'Describe what the user is currently doing. Examples: "Playing outside", "Eating lunch", "Doing homework", "Physical therapy session". Provides activity context to AI.',
+                    highlight: '#activity',
+                    action: function() {
+                        const input = document.getElementById('activity');
+                        if (input) {
+                            input.classList.add('guide-highlight-target');
+                            input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }
+                    },
+                    cleanup: function() {
+                        const input = document.getElementById('activity');
+                        if (input) input.classList.remove('guide-highlight-target');
+                    }
+                },
+                {
+                    title: 'Book Title or Subject & Focus Pages or Chapters',
+                    content: 'Use Book Title or Subject and Focus Pages or Chapters to tell AI what is being discussed and which range to stay within.',
+                    highlight: '#topicTitle',
+                    action: function() {
+                        const input = document.getElementById('topicTitle');
+                        if (input) {
+                            input.classList.add('guide-highlight-target');
+                            input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }
+                    },
+                    cleanup: function() {
+                        const input = document.getElementById('topicTitle');
+                        if (input) input.classList.remove('guide-highlight-target');
+                    }
+                },
+                {
+                    title: 'Discussion Narrative',
+                    content: 'Add a short narrative of the assigned pages/chapters so AI can generate grounded options without making up unsupported details.',
+                    highlight: '#topicSummary',
+                    action: function() {
+                        const input = document.getElementById('topicSummary');
+                        if (input) {
+                            input.classList.add('guide-highlight-target');
+                            input.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }
+                    },
+                    cleanup: function() {
+                        const input = document.getElementById('topicSummary');
+                        if (input) input.classList.remove('guide-highlight-target');
+                    }
+                }
+            ]
+        };
+
+        const actionsGuide = {
+            id: 'actions',
+            steps: [
+                {
+                    title: 'Start Dictation',
+                    content: 'Use voice input to quickly fill Location, People, and Activity. Speak in this format: "Location: the park, People: Mom and brother, Activity: playing on the swings". Then manually update optional discussion context fields if needed.',
+                    highlight: '#dictationButton',
+                    action: function() {
+                        const btn = document.getElementById('dictationButton');
+                        if (btn) {
+                            btn.classList.add('guide-highlight-target');
+                            btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }
+                    },
+                    cleanup: function() {
+                        const btn = document.getElementById('dictationButton');
+                        if (btn) btn.classList.remove('guide-highlight-target');
+                    }
+                },
+                {
+                    title: 'Save Current Information',
+                    content: 'Click Save to update current location and optional discussion context information. This makes the context available for AI-enhanced communication.',
+                    highlight: '#saveButton',
+                    action: function() {
+                        const btn = document.getElementById('saveButton');
+                        if (btn) {
+                            btn.classList.add('guide-highlight-target');
+                            btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }
+                    },
+                    cleanup: function() {
+                        const btn = document.getElementById('saveButton');
+                        if (btn) btn.classList.remove('guide-highlight-target');
+                    }
+                }
+            ]
+        };
+
+        const schedulingGuide = {
+            id: 'scheduling',
+            steps: [
+                {
+                    title: 'Adding a Scheduled Favorite',
+                    content: 'To create an automated schedule, fill in Location, People, and Activity (and optional discussion context if desired), then click "Add to Favorites".',
+                    highlight: '#addToFavoritesBtn',
+                    action: function() {
+                        const btn = document.getElementById('addToFavoritesBtn');
+                        if (btn) {
+                            btn.classList.add('guide-highlight-target');
+                            btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }
+                    },
+                    cleanup: function() {
+                        const btn = document.getElementById('addToFavoritesBtn');
+                        if (btn) btn.classList.remove('guide-highlight-target');
+                    }
+                },
+                {
+                    title: 'Schedule Configuration',
+                    content: 'In the Add Favorite modal, check "Enable Schedule" to set up automatic location updates. Then select the days of week and time range when this location applies.',
+                    highlight: null,
+                    action: function() {
+                        // No specific element to highlight - informational step
+                    },
+                    cleanup: function() {}
+                },
+                {
+                    title: 'Managing Schedules',
+                    content: 'Use "Manage Favorites" to view, edit, or remove schedules from existing favorites. You can update the schedule times or disable scheduling entirely.',
+                    highlight: '#manageFavoritesBtn',
+                    action: function() {
+                        const btn = document.getElementById('manageFavoritesBtn');
+                        if (btn) {
+                            btn.classList.add('guide-highlight-target');
+                            btn.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                        }
+                    },
+                    cleanup: function() {
+                        const btn = document.getElementById('manageFavoritesBtn');
+                        if (btn) btn.classList.remove('guide-highlight-target');
+                    }
+                }
+            ]
+        };
+
+        // Start guide function
+        function startLocationGuide(guideId) {
+            console.log('Starting location guide for:', guideId);
+            
+            closeHelpModalFunc();
+            
+            const guides = {
+                'favorites': favoritesGuide,
+                'form': formGuide,
+                'actions': actionsGuide,
+                'scheduling': schedulingGuide
+            };
+            
+            const guide = guides[guideId];
+            if (guide) {
+                currentLocationGuide = {
+                    guide: guide,
+                    currentStep: 0
+                };
+                showLocationGuideWindow();
+            }
+        }
+
+        // Guide window functions
+        function showLocationGuideWindow() {
+            if (!currentLocationGuide) return;
+            
+            let guideWindow = document.getElementById('location-guide-window');
+            if (!guideWindow) {
+                guideWindow = document.createElement('div');
+                guideWindow.id = 'location-guide-window';
+                guideWindow.style.cssText = 'position: fixed; bottom: 20px; right: 20px; width: 400px; max-height: 500px; background: white; border-radius: 12px; box-shadow: 0 10px 40px rgba(0,0,0,0.3); z-index: 9999; display: flex; flex-direction: column;';
+                
+                guideWindow.innerHTML = `
+                    <div style="background: linear-gradient(135deg, #FB4F14 0%, #F97316 100%); color: white; padding: 16px; border-radius: 12px 12px 0 0; display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                            <div id="location-guide-title" style="font-weight: bold; font-size: 18px;"></div>
+                            <div id="location-guide-progress" style="font-size: 12px; opacity: 0.9; margin-top: 4px;"></div>
+                        </div>
+                        <button id="location-guide-close" style="background: none; border: none; color: white; font-size: 24px; cursor: pointer; padding: 0; width: 32px; height: 32px;">&times;</button>
+                    </div>
+                    <div id="location-guide-content" style="padding: 20px; flex: 1; overflow-y: auto;"></div>
+                    <div style="border-top: 1px solid #e5e7eb; padding: 16px; display: flex; justify-content: space-between; align-items: center; background: #f9fafb; border-radius: 0 0 12px 12px;">
+                        <button id="location-guide-prev" style="padding: 8px 16px; background: #6b7280; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px;">
+                            <i class="fas fa-arrow-left"></i> Previous
+                        </button>
+                        <div id="location-guide-step-indicator" style="display: flex; gap: 8px;"></div>
+                        <button id="location-guide-next" style="padding: 8px 16px; background: #FB4F14; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px;">
+                            Next <i class="fas fa-arrow-right"></i>
+                        </button>
+                    </div>
+                `;
+                
+                document.body.appendChild(guideWindow);
+                
+                document.getElementById('location-guide-close').addEventListener('click', closeLocationGuide);
+                document.getElementById('location-guide-prev').addEventListener('click', previousLocationGuideStep);
+                document.getElementById('location-guide-next').addEventListener('click', nextLocationGuideStep);
+            }
+            
+            guideWindow.style.display = 'flex';
+            updateLocationGuideStep();
+        }
+
+        function updateLocationGuideStep() {
+            if (!currentLocationGuide) return;
+            
+            const guide = currentLocationGuide.guide;
+            const step = guide.steps[currentLocationGuide.currentStep];
+            
+            document.getElementById('location-guide-title').textContent = step.title;
+            document.getElementById('location-guide-progress').textContent = `Step ${currentLocationGuide.currentStep + 1} of ${guide.steps.length}`;
+            document.getElementById('location-guide-content').innerHTML = `<p style="color: #374151; line-height: 1.6;">${step.content}</p>`;
+            
+            const indicatorContainer = document.getElementById('location-guide-step-indicator');
+            indicatorContainer.innerHTML = '';
+            for (let i = 0; i < guide.steps.length; i++) {
+                const dot = document.createElement('div');
+                dot.style.cssText = 'width: 10px; height: 10px; border-radius: 50%; transition: all 0.3s;';
+                if (i < currentLocationGuide.currentStep) {
+                    dot.style.background = '#10b981';
+                } else if (i === currentLocationGuide.currentStep) {
+                    dot.style.background = '#FB4F14';
+                    dot.style.transform = 'scale(1.3)';
+                } else {
+                    dot.style.background = '#d1d5db';
+                }
+                indicatorContainer.appendChild(dot);
+            }
+            
+            const prevBtn = document.getElementById('location-guide-prev');
+            const nextBtn = document.getElementById('location-guide-next');
+            
+            prevBtn.disabled = currentLocationGuide.currentStep === 0;
+            prevBtn.style.opacity = prevBtn.disabled ? '0.5' : '1';
+            prevBtn.style.cursor = prevBtn.disabled ? 'not-allowed' : 'pointer';
+            
+            const isLastStep = currentLocationGuide.currentStep === guide.steps.length - 1;
+            nextBtn.innerHTML = isLastStep ? 'Complete <i class="fas fa-check"></i>' : 'Next <i class="fas fa-arrow-right"></i>';
+            
+            if (step.action) {
+                if (currentLocationGuide.currentStep > 0) {
+                    const prevStep = guide.steps[currentLocationGuide.currentStep - 1];
+                    if (prevStep.cleanup) prevStep.cleanup();
+                }
+                step.action();
+            }
+        }
+
+        function nextLocationGuideStep() {
+            if (!currentLocationGuide) return;
+            
+            const guide = currentLocationGuide.guide;
+            
+            if (currentLocationGuide.currentStep < guide.steps.length - 1) {
+                currentLocationGuide.currentStep++;
+                updateLocationGuideStep();
+            } else {
+                closeLocationGuide();
+            }
+        }
+
+        function previousLocationGuideStep() {
+            if (!currentLocationGuide) return;
+            
+            if (currentLocationGuide.currentStep > 0) {
+                currentLocationGuide.currentStep--;
+                updateLocationGuideStep();
+            }
+        }
+
+        function closeLocationGuide() {
+            if (!currentLocationGuide) return;
+            
+            const guide = currentLocationGuide.guide;
+            const step = guide.steps[currentLocationGuide.currentStep];
+            if (step.cleanup) step.cleanup();
+            
+            const guideWindow = document.getElementById('location-guide-window');
+            if (guideWindow) guideWindow.style.display = 'none';
+            
+            currentLocationGuide = null;
+        }
     </script>
 
 </body>

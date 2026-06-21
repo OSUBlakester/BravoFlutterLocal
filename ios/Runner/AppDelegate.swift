@@ -36,6 +36,10 @@ import AVFoundation
         self?.routeToPersonal(result: result)
       case "captureCurrentVolume":
         self?.captureCurrentVolume(call: call, result: result)
+      case "checkMicrophonePermission":
+        self?.checkMicrophonePermission(result: result)
+      case "requestMicrophonePermission":
+        self?.requestMicrophonePermission(result: result)
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -115,7 +119,7 @@ import AVFoundation
       try audioSession.setCategory(
         .playAndRecord,
         mode: .default,
-        options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP]
+        options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP, .mixWithOthers]
       )
       try audioSession.setActive(true)
       // Remove any speaker override so audio goes to the connected BT device
@@ -144,7 +148,7 @@ import AVFoundation
       try audioSession.setCategory(
         .playAndRecord,
         mode: .default,
-        options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP]
+        options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP, .mixWithOthers]
       )
       try audioSession.setActive(true)
       
@@ -166,21 +170,43 @@ import AVFoundation
   /// Force audio output to the built-in speaker (for system announcements).
   /// This overrides Bluetooth and routes directly to the device speaker.
   private func forceSpeaker(result: @escaping FlutterResult) {
+    let audioSession = AVAudioSession.sharedInstance()
+
+    // First attempt: ensure category/active state supports output override.
     do {
-      let audioSession = AVAudioSession.sharedInstance()
-      
-      // Configure audio session for playback with speaker output
-      try audioSession.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP])
+      try audioSession.setCategory(
+        .playAndRecord,
+        mode: .default,
+        options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP, .mixWithOthers]
+      )
       try audioSession.setActive(true)
-      
-      // Override route to force speaker
       try audioSession.overrideOutputAudioPort(.speaker)
-      
-      print("✅ iOS Audio: Forced speaker output")
+
+      let currentRoute = audioSession.currentRoute
+      let outputPortNames = currentRoute.outputs.map { $0.portName }
+      print("✅ iOS Audio: Forced speaker output (outputs: \(outputPortNames))")
+      result(true)
+      return
+    } catch {
+      print("⚠️ iOS Audio: forceSpeaker primary attempt failed - \(error.localizedDescription)")
+    }
+
+    // Second attempt: clear override, reactivate, then re-apply speaker override.
+    do {
+      try audioSession.overrideOutputAudioPort(.none)
+      try audioSession.setActive(true)
+      try audioSession.overrideOutputAudioPort(.speaker)
+
+      let currentRoute = audioSession.currentRoute
+      let outputPortNames = currentRoute.outputs.map { $0.portName }
+      print("✅ iOS Audio: Forced speaker output on retry (outputs: \(outputPortNames))")
       result(true)
     } catch {
-      print("❌ iOS Audio: Failed to force speaker - \(error.localizedDescription)")
-      result(FlutterError(code: "AUDIO_ERROR", message: "Failed to force speaker: \(error.localizedDescription)", details: nil))
+      // Do not throw FlutterError here. Dart side treats this as a hard failure and
+      // falls back to local TTS, which causes the wrong first-announcement voice path.
+      // Returning false keeps the backend path alive while still logging diagnostics.
+      print("❌ iOS Audio: Failed to force speaker after retry - \(error.localizedDescription)")
+      result(false)
     }
   }
   
@@ -189,21 +215,11 @@ import AVFoundation
   private func routeToPersonal(result: @escaping FlutterResult) {
     do {
       let audioSession = AVAudioSession.sharedInstance()
-      
-      // Ensure session is configured with Bluetooth A2DP support
-      try audioSession.setCategory(
-        .playAndRecord,
-        mode: .default,
-        options: [.defaultToSpeaker, .allowBluetooth, .allowBluetoothA2DP]
-      )
-      try audioSession.setActive(true)
-      
-      // Remove speaker override — audio will route to Bluetooth if connected
+      // Directly override port without changing category/active state to prevent background audio session interruptions
       try audioSession.overrideOutputAudioPort(.none)
-      
       let currentRoute = audioSession.currentRoute
       let outputPortNames = currentRoute.outputs.map { $0.portName }
-      print("✅ iOS Audio: Routed to personal device (outputs: \(outputPortNames))")
+      print("✅ iOS Audio: Routed to personal device (outputs: \(outputPortNames)) (direct override)")
       result(true)
     } catch {
       print("❌ iOS Audio: Failed to route to personal - \(error.localizedDescription)")
@@ -231,6 +247,31 @@ import AVFoundation
     } catch {
       print("❌ iOS Audio: Failed to reset audio - \(error.localizedDescription)")
       result(FlutterError(code: "AUDIO_ERROR", message: "Failed to reset audio: \(error.localizedDescription)", details: nil))
+    }
+  }
+
+  /// Check microphone permission status for iOS speech recognition flows.
+  /// Returns one of: granted, denied, undetermined.
+  private func checkMicrophonePermission(result: @escaping FlutterResult) {
+    let recordPermission = AVAudioSession.sharedInstance().recordPermission
+    switch recordPermission {
+    case .granted:
+      result("granted")
+    case .denied:
+      result("denied")
+    case .undetermined:
+      result("undetermined")
+    @unknown default:
+      result("undetermined")
+    }
+  }
+
+  /// Request microphone permission and return granted/denied.
+  private func requestMicrophonePermission(result: @escaping FlutterResult) {
+    AVAudioSession.sharedInstance().requestRecordPermission { granted in
+      DispatchQueue.main.async {
+        result(granted ? "granted" : "denied")
+      }
     }
   }
   

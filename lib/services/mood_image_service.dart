@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../config/environment_config.dart';
+import 'pictogram_service.dart';
 
 /// Service for fetching mood mascot images from Firestore
 class MoodImageService {
@@ -11,6 +12,11 @@ class MoodImageService {
 
   // Cache for storing mood image URLs to avoid repeated API calls
   final Map<String, String?> _moodImageCache = {};
+
+  static const Set<String> _nonImageMoods = {
+    'skip',
+    'no mood selected',
+  };
   
   /// Get mood mascot image URL for a given mood name
   /// Returns the image URL or null if not found (fallback to emoji)
@@ -24,37 +30,72 @@ class MoodImageService {
       debugPrint('🎭 MoodImageService: Cache hit for $moodName: $cachedUrl');
       return cachedUrl;
     }
+
+    if (_nonImageMoods.contains(cacheKey)) {
+      debugPrint('🎭 MoodImageService: Skipping image lookup for non-image mood: $moodName');
+      _moodImageCache[cacheKey] = null;
+      return null;
+    }
     
+    // Primary path: dedicated mood endpoint.
+    final endpointUrl = await _fetchFromMoodEndpoint(cacheKey, moodName);
+    if (endpointUrl != null && endpointUrl.isNotEmpty) {
+      _moodImageCache[cacheKey] = endpointUrl;
+      debugPrint('🎭 MoodImageService: Assigned mood endpoint image for $moodName: $endpointUrl');
+      return endpointUrl;
+    }
+
+    // Fallback path: same general symbol lookup path the web app uses.
+    final fallbackUrl = await _fetchFromGenericSymbolLookup(moodName);
+    if (fallbackUrl != null && fallbackUrl.isNotEmpty) {
+      _moodImageCache[cacheKey] = fallbackUrl;
+      debugPrint('🎭 MoodImageService: Assigned fallback symbol image for $moodName: $fallbackUrl');
+      return fallbackUrl;
+    }
+
+    debugPrint('🎭 MoodImageService: No image found for $moodName after endpoint + fallback lookup');
+    _moodImageCache[cacheKey] = null;
+    return null;
+  }
+
+  Future<String?> _fetchFromMoodEndpoint(String cacheKey, String moodName) async {
     try {
-      // Query the mood_images collection for this mood
       final response = await http.get(
         Uri.parse('${EnvironmentConfig.apiBaseUrl}/api/mood/image/$cacheKey'),
         headers: {
           'Content-Type': 'application/json',
         },
       );
-      
+
       debugPrint('🎭 MoodImageService: API response status for $moodName: ${response.statusCode}');
-      
-      if (response.statusCode == 200) {
-        final data = json.decode(response.body);
-        final imageUrl = data['image_url'] as String?;
-        
-        // Cache the result (including null results to avoid repeated failed requests)
-        _moodImageCache[cacheKey] = imageUrl;
-        
-        debugPrint('🎭 MoodImageService: Found image for $moodName: $imageUrl');
-        return imageUrl;
-      } else {
-        debugPrint('🎭 MoodImageService: No image found for $moodName (status: ${response.statusCode})');
-        // Cache null result
-        _moodImageCache[cacheKey] = null;
+
+      if (response.statusCode != 200) {
+        debugPrint('🎭 MoodImageService: Mood endpoint miss for $moodName (status: ${response.statusCode})');
         return null;
       }
+
+      final data = json.decode(response.body);
+      return data['image_url'] as String?;
     } catch (error) {
-      debugPrint('🎭 MoodImageService: Error fetching mood image for $moodName: $error');
-      // Cache null result on error to avoid repeated failed requests
-      _moodImageCache[cacheKey] = null;
+      debugPrint('🎭 MoodImageService: Mood endpoint error for $moodName: $error');
+      return null;
+    }
+  }
+
+  Future<String?> _fetchFromGenericSymbolLookup(String moodName) async {
+    try {
+      final result = await PictogramService().getPictogramResult(
+        moodName,
+        enableSightWords: false,
+        shouldLogMissing: false,
+        // Intentionally omit keywords/locale so this path uses the public
+        // /api/imagecreator/search lookup and avoids auth-only button-search.
+        keywords: null,
+        locale: null,
+      );
+      return result?.imageUrl;
+    } catch (error) {
+      debugPrint('🎭 MoodImageService: Fallback symbol lookup error for $moodName: $error');
       return null;
     }
   }

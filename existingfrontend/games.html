@@ -401,7 +401,7 @@
     <div id="splashScreen" class="splash-screen">
         <div class="splash-content">
             <i class="fas fa-gamepad" style="font-size: 4rem; color: #FB4F14; margin-bottom: 1rem;"></i>
-            <h2>Loading Games...</h2>
+            <h2 id="games-splash-title">Loading Games...</h2>
         </div>
     </div>
 
@@ -433,11 +433,11 @@
 
             <!-- Role Selection -->
             <div id="roleSelection" class="game-grid">
-                <div class="game-button" onclick="selectRole('ask')">
+                <div id="role-ask-btn" class="game-button" onclick="selectRole('ask')">
                     <i class="fas fa-user-friends"></i>
                     I ask the questions
                 </div>
-                <div class="game-button" onclick="selectRole('answer')">
+                <div id="role-answer-btn" class="game-button" onclick="selectRole('answer')">
                     <i class="fas fa-lightbulb"></i>
                     They ask the questions
                 </div>
@@ -445,15 +445,15 @@
 
             <!-- Category Selection -->
             <div id="categorySelection" class="game-grid hidden">
-                <div class="game-button" onclick="selectCategory('person')">
+                <div id="category-person-btn" class="game-button" onclick="selectCategory('person')">
                     <i class="fas fa-user"></i>
                     Person
                 </div>
-                <div class="game-button" onclick="selectCategory('place')">
+                <div id="category-place-btn" class="game-button" onclick="selectCategory('place')">
                     <i class="fas fa-map-marker-alt"></i>
                     Place
                 </div>
-                <div class="game-button" onclick="selectCategory('thing')">
+                <div id="category-thing-btn" class="game-button" onclick="selectCategory('thing')">
                     <i class="fas fa-cube"></i>
                     Thing
                 </div>
@@ -471,7 +471,7 @@
 
             <!-- Question History -->
             <div id="questionHistory" class="question-history hidden">
-                <h3>Questions Asked:</h3>
+                <h3 id="questions-asked-title">Questions Asked:</h3>
                 <div id="qaList">
                     <!-- Q&A pairs will be added here -->
                 </div>
@@ -480,19 +480,19 @@
             <!-- Listening Indicator -->
             <div id="listeningIndicator" class="listening-indicator hidden">
                 <i class="fas fa-microphone"></i>
-                <div>Listening...</div>
+                <div id="listening-indicator-text">Listening...</div>
             </div>
 
             <!-- Loading State -->
             <div id="loadingState" class="loading hidden">
                 <i class="fas fa-spinner"></i>
-                <div>Generating options...</div>
+                <div id="loading-state-text">Generating options...</div>
             </div>
 
             <!-- Error State -->
             <div id="errorState" class="error-state hidden">
                 <i class="fas fa-exclamation-triangle"></i>
-                <h3>Oops!</h3>
+                <h3 id="error-title">Oops!</h3>
                 <p id="errorMessage">Something went wrong. Please try again.</p>
             </div>
 
@@ -500,15 +500,15 @@
             <div id="actionButtons" class="game-grid hidden">
                 <div id="askAnotherBtn" class="game-button" onclick="askAnother()">
                     <i class="fas fa-question-circle"></i>
-                    Ask Another Question
+                    <span id="ask-another-label">Ask Another Question</span>
                 </div>
                 <div id="makeGuessBtn" class="game-button" onclick="makeGuess()">
                     <i class="fas fa-lightbulb"></i>
-                    Make a Guess
+                    <span id="make-guess-label">Make a Guess</span>
                 </div>
-                <div class="game-button" style="background-color: #dc2626; color: white;" onclick="exitGame()">
+                <div id="exit-game-btn" class="game-button" style="background-color: #dc2626; color: white;" onclick="exitGame()">
                     <i class="fas fa-times"></i>
-                    Exit Game
+                    <span id="exit-game-label">Exit Game</span>
                 </div>
             </div>
         </div>
@@ -520,12 +520,12 @@
             </div>
 
             <div id="storyTranscript" class="question-history">
-                <h3>Story Q&A</h3>
+                <h3 id="story-qa-title">Story Q&A</h3>
                 <div id="storyQaList"></div>
             </div>
 
             <div id="storyLibrary" class="question-history">
-                <h3>Saved Stories</h3>
+                <h3 id="saved-stories-title">Saved Stories</h3>
                 <div id="storyLibraryList" class="game-grid"></div>
             </div>
 
@@ -539,16 +539,16 @@
                 </div>
                 <div id="storyReadText" class="story-read-text"></div>
                 <div id="storyReadActions" class="game-grid" style="margin-top: 1rem;">
-                    <button class="game-button" onclick="readSelectedStoryAgain()"><i class="fas fa-volume-up"></i>Read Again</button>
-                    <button class="game-button" onclick="exportStoryAudio(false)"><i class="fas fa-file-audio"></i>Export Audio</button>
+                    <button id="story-read-again-btn" class="game-button" onclick="readSelectedStoryAgain()"><i class="fas fa-volume-up"></i>Read Again</button>
+                    <button id="story-export-audio-read-btn" class="game-button" onclick="exportStoryAudio(false)"><i class="fas fa-file-audio"></i>Export Audio</button>
                     <button id="createIllustrationReadButton" class="game-button" onclick="createStoryIllustration(false)"><i class="fas fa-image"></i>Create Illustration</button>
                     <button id="regenerateIllustrationReadButton" class="game-button" onclick="createStoryIllustration(true)"><i class="fas fa-sync"></i>Regenerate Illustration</button>
-                    <button class="game-button" onclick="backToStoryReadList()"><i class="fas fa-arrow-left"></i>Back to Stories</button>
+                    <button id="story-back-to-stories-btn" class="game-button" onclick="backToStoryReadList()"><i class="fas fa-arrow-left"></i>Back to Stories</button>
                 </div>
             </div>
 
             <div id="storyDetail" class="question-history hidden">
-                <h3>Story Detail</h3>
+                <h3 id="story-detail-title">Story Detail</h3>
                 <input id="storyTitleInput" class="w-full p-2 border border-gray-300 rounded mb-3" placeholder="Story title" />
                 <textarea id="storyTextInput" class="w-full p-2 border border-gray-300 rounded" rows="8" placeholder="Story text"></textarea>
                 <div id="storyIllustrationContainer" class="story-illustration-container" style="margin-top: 0.85rem;">
@@ -558,13 +558,13 @@
                     </div>
                 </div>
                 <div id="storyDetailActions" class="game-grid" style="margin-top: 1rem;">
-                    <button class="game-button" onclick="readCurrentStory()"><i class="fas fa-volume-up"></i>Read Story</button>
-                    <button class="game-button" onclick="exportStoryAudio(true)"><i class="fas fa-file-audio"></i>Export Audio</button>
-                    <button class="game-button" onclick="saveCurrentStoryEdits()"><i class="fas fa-save"></i>Save Edits</button>
+                    <button id="story-read-btn" class="game-button" onclick="readCurrentStory()"><i class="fas fa-volume-up"></i>Read Story</button>
+                    <button id="story-export-audio-btn" class="game-button" onclick="exportStoryAudio(true)"><i class="fas fa-file-audio"></i>Export Audio</button>
+                    <button id="story-save-edits-btn" class="game-button" onclick="saveCurrentStoryEdits()"><i class="fas fa-save"></i>Save Edits</button>
                     <button id="createIllustrationButton" class="game-button" onclick="createStoryIllustration(false)"><i class="fas fa-image"></i>Create Illustration</button>
                     <button id="regenerateIllustrationButton" class="game-button" onclick="createStoryIllustration(true)"><i class="fas fa-sync"></i>Regenerate Illustration</button>
-                    <button class="game-button" onclick="deleteCurrentStory()" style="background-color: #dc2626; color: white;"><i class="fas fa-trash"></i>Delete Story</button>
-                    <button class="game-button" onclick="closeStoryDetail()"><i class="fas fa-arrow-left"></i>Back to Builder</button>
+                    <button id="story-delete-btn" class="game-button" onclick="deleteCurrentStory()" style="background-color: #dc2626; color: white;"><i class="fas fa-trash"></i>Delete Story</button>
+                    <button id="story-back-to-builder-btn" class="game-button" onclick="closeStoryDetail()"><i class="fas fa-arrow-left"></i>Back to Builder</button>
                 </div>
             </div>
 
@@ -582,13 +582,13 @@
             <div id="storyDeleteModal" class="hidden" style="position: fixed; inset: 0; background: rgba(0,0,0,0.55); z-index: 60; display: flex; align-items: center; justify-content: center; padding: 1rem;">
                 <div style="background: #fff; width: min(760px, 95vw); max-height: 85vh; border-radius: 12px; padding: 1rem; overflow: hidden; display: flex; flex-direction: column;">
                     <div style="display:flex; align-items:center; justify-content:space-between; margin-bottom: 0.75rem;">
-                        <h3 style="margin: 0; color: #002244; font-size: 1.2rem;">Delete Stories</h3>
-                        <button type="button" style="padding: 0.4rem 0.8rem; font-size: 0.9rem; border-radius:8px; border:1px solid #cbd5e1; background:#fff;" onclick="closeStoryDeleteModal()"><i class="fas fa-times"></i> Close</button>
+                        <h3 id="story-delete-modal-title" style="margin: 0; color: #002244; font-size: 1.2rem;">Delete Stories</h3>
+                        <button id="story-delete-modal-close-btn" type="button" style="padding: 0.4rem 0.8rem; font-size: 0.9rem; border-radius:8px; border:1px solid #cbd5e1; background:#fff;" onclick="closeStoryDeleteModal()"><i class="fas fa-times"></i> Close</button>
                     </div>
                     <p id="storyDeleteModalMessage" style="margin: 0 0 0.6rem 0; color: #334155; font-size: 0.95rem;">Select stories to delete.</p>
                     <div id="storyDeleteList" style="overflow-y: auto; border: 1px solid #e5e7eb; border-radius: 8px; padding: 0.6rem; flex: 1;"></div>
                     <div style="display:flex; justify-content:flex-end; gap:0.6rem; margin-top: 0.8rem;">
-                        <button type="button" style="padding: 0.6rem 1rem; border-radius:8px; border:1px solid #cbd5e1; background:#fff;" onclick="closeStoryDeleteModal()">Cancel</button>
+                        <button id="story-delete-modal-cancel-btn" type="button" style="padding: 0.6rem 1rem; border-radius:8px; border:1px solid #cbd5e1; background:#fff;" onclick="closeStoryDeleteModal()">Cancel</button>
                         <button id="storyConfirmDeleteButton" type="button" style="padding: 0.6rem 1rem; border-radius:8px; border:1px solid #991b1b; background:#dc2626; color:#fff; font-weight:700;" onclick="confirmDeleteSelectedStories()">Delete Selected</button>
                     </div>
                 </div>
@@ -624,6 +624,253 @@
             scanDelay: 3500, // Will be loaded from settings
             awaitingAnswerType: null // 'question' or 'guess'
         };
+
+        const GAMES_HUB_UI_TEXT_DEFAULTS = {
+            gamesHubTitle: 'Games',
+            loadingGames: 'Loading Games...',
+            menuHome: 'Home',
+            menu20Questions: '20 Questions',
+            menuGuessWho: 'Guess Who',
+            menuGuessWhere: 'Guess Where',
+            menuGuessWhat: 'Guess What',
+            menuHangman: 'Hangman',
+            menuStoryBuilder: 'Story Builder',
+            statusChooseHowToPlay: 'Choose how you want to play:',
+            roleAsk: 'I ask the questions',
+            roleAnswer: 'They ask the questions',
+            categoryPerson: 'Person',
+            categoryPlace: 'Place',
+            categoryThing: 'Thing',
+            questionsAsked: 'Questions Asked:',
+            listening: 'Listening...',
+            generatingOptions: 'Generating options...',
+            oops: 'Oops!',
+            genericError: 'Something went wrong. Please try again.',
+            askAnotherQuestion: 'Ask Another Question',
+            makeGuess: 'Make a Guess',
+            exitGame: 'Exit Game',
+            storyQa: 'Story Q&A',
+            savedStories: 'Saved Stories',
+            readAgain: 'Read Again',
+            exportAudio: 'Export Audio',
+            createIllustration: 'Create Illustration',
+            regenerateIllustration: 'Regenerate Illustration',
+            backToStories: 'Back to Stories',
+            storyDetail: 'Story Detail',
+            storyTitlePlaceholder: 'Story title',
+            storyTextPlaceholder: 'Story text',
+            noIllustrationYet: 'No illustration yet.',
+            readStory: 'Read Story',
+            saveEdits: 'Save Edits',
+            deleteStory: 'Delete Story',
+            backToBuilder: 'Back to Builder',
+            deleteStories: 'Delete Stories',
+            close: 'Close',
+            selectStoriesToDelete: 'Select stories to delete.',
+            cancel: 'Cancel',
+            deleteSelected: 'Delete Selected',
+            storyWakePrompt: 'Say the wake word to ask the next question or complete the story.',
+            noSavedStoriesYet: 'No saved stories yet.',
+            statusSayReadySelected: 'Say "ready" when you have selected something for me to guess',
+            statusWhatTypeThing: 'What type of thing are you thinking of?',
+            statusSayReadySelectedYour: 'Say "ready" when you have selected your',
+            statusThinkingQuestions: 'Let me think of some questions...',
+            statusQuestionsRemaining: 'Questions remaining:',
+            statusGuessesRemaining: 'Guesses remaining:',
+            statusChooseYour: 'Choose your',
+            statusReadyWithWakeWord: 'I\'m ready. To ask a question or make a guess, start with',
+            statusListeningNext: 'Listening for next question or guess...',
+            statusWhatNext: 'What would you like to do next?',
+            failedLoadOptions: 'Failed to load options. Please try again.',
+            failedLoadQuestions: 'Failed to load questions. Please try again.',
+            failedLoadGuesses: 'Failed to load guesses. Please try again.',
+            failedLoadDifferentOptions: 'Failed to load different options. Please try again.',
+            somethingElse: 'Something Else',
+            isItPrefix: 'Is it',
+            qPrefix: 'Q:',
+            aPrefix: 'A:'
+        };
+        let gamesHubUiText = { ...GAMES_HUB_UI_TEXT_DEFAULTS };
+        let gamesHubTargetLocale = 'en-US';
+        let gamesHubPartnerLocale = 'en-US';
+        const gamesHubRuntimeTranslationCache = new Map();
+
+        function getGamesHubLocalizedText(key, fallback) {
+            const candidate = String(gamesHubUiText[key] || '').trim();
+            return candidate || fallback;
+        }
+
+        async function translateGamesHubRuntimeLine(line, locale) {
+            const source = String(line || '').trim();
+            if (!source) {
+                return source;
+            }
+            const targetLocale = locale || gamesHubTargetLocale;
+            if (!targetLocale || targetLocale.toLowerCase() === 'en-us') {
+                return source;
+            }
+            const cacheKey = `${targetLocale}:${source}`;
+            if (gamesHubRuntimeTranslationCache.has(cacheKey)) {
+                return gamesHubRuntimeTranslationCache.get(cacheKey);
+            }
+
+            try {
+                const response = await authenticatedFetch('/api/translate-lines', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        lines: [source],
+                        source_locale: 'en-US',
+                        target_locale: targetLocale
+                    })
+                });
+
+                if (response.ok) {
+                    const payload = await response.json();
+                    const translated = String(payload?.translated_lines?.[0] || '').trim() || source;
+                    gamesHubRuntimeTranslationCache.set(cacheKey, translated);
+                    return translated;
+                }
+            } catch (error) {
+                console.warn('[GAMES HUB I18N] Runtime line translation failed:', error);
+            }
+
+            gamesHubRuntimeTranslationCache.set(cacheKey, source);
+            return source;
+        }
+
+        async function localizeGamesHubOptionLabel(labelText) {
+            const source = String(labelText || '').trim();
+            if (!source) {
+                return source;
+            }
+            return translateGamesHubRuntimeLine(source, gamesHubTargetLocale);
+        }
+
+        function setLocalizedStatusText(text) {
+            const statusEl = document.getElementById('statusText');
+            if (!statusEl) {
+                return;
+            }
+            if (!gamesHubTargetLocale || gamesHubTargetLocale.toLowerCase() === 'en-us') {
+                statusEl.textContent = text;
+                return;
+            }
+            translateGamesHubRuntimeLine(text).then((translated) => {
+                statusEl.textContent = translated;
+            }).catch(() => {
+                statusEl.textContent = text;
+            });
+        }
+
+        function applyGamesHubLocalization() {
+            const splashTitle = document.getElementById('games-splash-title');
+            if (splashTitle) {
+                splashTitle.textContent = getGamesHubLocalizedText('loadingGames', 'Loading Games...');
+            }
+
+            const pageTitle = document.getElementById('pageTitle');
+            if (pageTitle) {
+                pageTitle.textContent = `🎮 ${getGamesHubLocalizedText('gamesHubTitle', 'Games')}`;
+            }
+
+            const gameTitle = document.getElementById('gameTitle');
+            if (gameTitle) {
+                gameTitle.textContent = getGamesHubLocalizedText('menu20Questions', '20 Questions');
+            }
+
+            const statusText = document.getElementById('statusText');
+            if (statusText) {
+                statusText.textContent = getGamesHubLocalizedText('statusChooseHowToPlay', 'Choose how you want to play:');
+            }
+
+            const roleAsk = document.getElementById('role-ask-btn');
+            if (roleAsk) {
+                roleAsk.innerHTML = `<i class="fas fa-user-friends"></i>${getGamesHubLocalizedText('roleAsk', 'I ask the questions')}`;
+            }
+            const roleAnswer = document.getElementById('role-answer-btn');
+            if (roleAnswer) {
+                roleAnswer.innerHTML = `<i class="fas fa-lightbulb"></i>${getGamesHubLocalizedText('roleAnswer', 'They ask the questions')}`;
+            }
+
+            const categoryPerson = document.getElementById('category-person-btn');
+            if (categoryPerson) {
+                categoryPerson.innerHTML = `<i class="fas fa-user"></i>${getGamesHubLocalizedText('categoryPerson', 'Person')}`;
+            }
+            const categoryPlace = document.getElementById('category-place-btn');
+            if (categoryPlace) {
+                categoryPlace.innerHTML = `<i class="fas fa-map-marker-alt"></i>${getGamesHubLocalizedText('categoryPlace', 'Place')}`;
+            }
+            const categoryThing = document.getElementById('category-thing-btn');
+            if (categoryThing) {
+                categoryThing.innerHTML = `<i class="fas fa-cube"></i>${getGamesHubLocalizedText('categoryThing', 'Thing')}`;
+            }
+
+            const setText = (id, key, fallback) => {
+                const element = document.getElementById(id);
+                if (element) {
+                    element.textContent = getGamesHubLocalizedText(key, fallback);
+                }
+            };
+
+            setText('questions-asked-title', 'questionsAsked', 'Questions Asked:');
+            setText('listening-indicator-text', 'listening', 'Listening...');
+            setText('loading-state-text', 'generatingOptions', 'Generating options...');
+            setText('error-title', 'oops', 'Oops!');
+            setText('errorMessage', 'genericError', 'Something went wrong. Please try again.');
+            setText('ask-another-label', 'askAnotherQuestion', 'Ask Another Question');
+            setText('make-guess-label', 'makeGuess', 'Make a Guess');
+            setText('exit-game-label', 'exitGame', 'Exit Game');
+            setText('story-qa-title', 'storyQa', 'Story Q&A');
+            setText('saved-stories-title', 'savedStories', 'Saved Stories');
+            setText('story-detail-title', 'storyDetail', 'Story Detail');
+            setText('story-delete-modal-title', 'deleteStories', 'Delete Stories');
+            setText('storyDeleteModalMessage', 'selectStoriesToDelete', 'Select stories to delete.');
+            setText('storyStatusMessage', 'storyWakePrompt', 'Say the wake word to ask the next question or complete the story.');
+
+            const storyTitleInput = document.getElementById('storyTitleInput');
+            if (storyTitleInput) {
+                storyTitleInput.placeholder = getGamesHubLocalizedText('storyTitlePlaceholder', 'Story title');
+            }
+            const storyTextInput = document.getElementById('storyTextInput');
+            if (storyTextInput) {
+                storyTextInput.placeholder = getGamesHubLocalizedText('storyTextPlaceholder', 'Story text');
+            }
+            const storyIllustrationStatus = document.getElementById('storyIllustrationStatus');
+            if (storyIllustrationStatus && String(storyIllustrationStatus.textContent || '').trim().toLowerCase() === 'no illustration yet.') {
+                storyIllustrationStatus.textContent = getGamesHubLocalizedText('noIllustrationYet', 'No illustration yet.');
+            }
+
+            const setButtonLabel = (id, iconClass, key, fallback) => {
+                const button = document.getElementById(id);
+                if (button) {
+                    button.innerHTML = `<i class="${iconClass}"></i>${getGamesHubLocalizedText(key, fallback)}`;
+                }
+            };
+            setButtonLabel('story-read-again-btn', 'fas fa-volume-up', 'readAgain', 'Read Again');
+            setButtonLabel('story-export-audio-read-btn', 'fas fa-file-audio', 'exportAudio', 'Export Audio');
+            setButtonLabel('createIllustrationReadButton', 'fas fa-image', 'createIllustration', 'Create Illustration');
+            setButtonLabel('regenerateIllustrationReadButton', 'fas fa-sync', 'regenerateIllustration', 'Regenerate Illustration');
+            setButtonLabel('story-back-to-stories-btn', 'fas fa-arrow-left', 'backToStories', 'Back to Stories');
+            setButtonLabel('story-read-btn', 'fas fa-volume-up', 'readStory', 'Read Story');
+            setButtonLabel('story-export-audio-btn', 'fas fa-file-audio', 'exportAudio', 'Export Audio');
+            setButtonLabel('story-save-edits-btn', 'fas fa-save', 'saveEdits', 'Save Edits');
+            setButtonLabel('createIllustrationButton', 'fas fa-image', 'createIllustration', 'Create Illustration');
+            setButtonLabel('regenerateIllustrationButton', 'fas fa-sync', 'regenerateIllustration', 'Regenerate Illustration');
+            setButtonLabel('story-delete-btn', 'fas fa-trash', 'deleteStory', 'Delete Story');
+            setButtonLabel('story-back-to-builder-btn', 'fas fa-arrow-left', 'backToBuilder', 'Back to Builder');
+            setButtonLabel('storyDeleteStoriesButton', 'fas fa-trash', 'deleteStories', 'Delete Stories');
+            setButtonLabel('story-delete-modal-close-btn', 'fas fa-times', 'close', 'Close');
+
+            const cancelDeleteBtn = document.getElementById('story-delete-modal-cancel-btn');
+            if (cancelDeleteBtn) {
+                cancelDeleteBtn.textContent = getGamesHubLocalizedText('cancel', 'Cancel');
+            }
+            const confirmDeleteBtn = document.getElementById('storyConfirmDeleteButton');
+            if (confirmDeleteBtn) {
+                confirmDeleteBtn.textContent = getGamesHubLocalizedText('deleteSelected', 'Delete Selected');
+            }
+        }
 
         let storyState = {
             transcript: [],
@@ -769,6 +1016,8 @@
                 
                 // Load user settings for wake word
                 await loadUserSettings();
+
+                applyGamesHubLocalization();
                 
                 // Initialize speech recognition
                 initializeSpeechRecognition();
@@ -795,13 +1044,13 @@
             updateGridLayout();
             
             const gameButtons = [
-                { text: 'Home', onClick: () => window.location.href = useTapInterface ? '/static/tap_interface.html' : '/gridpage.html' },
-                { text: '20 Questions', onClick: () => startTwentyQuestions() },
-                { text: 'Guess Who', onClick: () => startGuessGame('who') },
-                { text: 'Guess Where', onClick: () => startGuessGame('where') },
-                { text: 'Guess What', onClick: () => startGuessGame('what') },
-                { text: 'Hangman', onClick: () => window.location.href = '/static/hangman.html' },
-                { text: 'Story Builder', onClick: () => startStoryBuilder() }
+                { text: getGamesHubLocalizedText('menuHome', 'Home'), onClick: () => window.location.href = useTapInterface ? '/static/tap_interface.html' : '/gridpage.html' },
+                { text: getGamesHubLocalizedText('menu20Questions', '20 Questions'), onClick: () => startTwentyQuestions() },
+                { text: getGamesHubLocalizedText('menuGuessWho', 'Guess Who'), onClick: () => startGuessGame('who') },
+                { text: getGamesHubLocalizedText('menuGuessWhere', 'Guess Where'), onClick: () => startGuessGame('where') },
+                { text: getGamesHubLocalizedText('menuGuessWhat', 'Guess What'), onClick: () => startGuessGame('what') },
+                { text: getGamesHubLocalizedText('menuHangman', 'Hangman'), onClick: () => window.location.href = '/static/hangman.html' },
+                { text: getGamesHubLocalizedText('menuStoryBuilder', 'Story Builder'), onClick: () => startStoryBuilder() }
             ];
             
             for (let idx = 0; idx < gameButtons.length; idx++) {
@@ -912,6 +1161,8 @@
         let ScanningOff = false; // Default
         let scanMode = 'auto'; // auto | step
         let waitForSwitchToScan = false; // Default
+        let playWaitForSwitchChime = false; // Optional page-ready chime while waiting for initial switch
+        let hasPlayedWaitForSwitchChime = false; // One-shot guard per page load
         let useTapInterface = false; // Whether user is using tap interface
         let selectedTtsVoiceName = 'en-US-Neural2-A';
         let configuredSpeechRateWpm = 170;
@@ -919,6 +1170,27 @@
         let waitingForInitialSwitch = false;
         let pendingScanContainerId = null;
         const GAMES_SWITCH_PROMPT_SHOWN_KEY = 'bravoSwitchPromptShown_games';
+        const WAIT_FOR_SWITCH_CHIME_URL = '/static/notification.mp3';
+
+        function playPageReadyChimeIfEnabled() {
+            if (!playWaitForSwitchChime || hasPlayedWaitForSwitchChime) {
+                return;
+            }
+
+            hasPlayedWaitForSwitchChime = true;
+            try {
+                const audio = new Audio(WAIT_FOR_SWITCH_CHIME_URL);
+                audio.preload = 'auto';
+                const playPromise = audio.play();
+                if (playPromise && typeof playPromise.catch === 'function') {
+                    playPromise.catch((error) => {
+                        console.warn('Games page-ready chime playback was blocked or failed:', error);
+                    });
+                }
+            } catch (error) {
+                console.warn('Unable to initialize games page-ready chime audio:', error);
+            }
+        }
         
         function updateGridLayout() {
             const gridContainer = document.getElementById('gridContainer');
@@ -1091,6 +1363,47 @@
                 const response = await authenticatedFetch('/api/settings');
                 if (response.ok) {
                     const settings = await response.json();
+                    gamesHubTargetLocale = String(settings?.userLanguage || 'en-US').trim() || 'en-US';
+                    gamesHubPartnerLocale = String(settings?.defaultPartnerLanguage || 'en-US').trim() || 'en-US';
+                    if (gamesHubTargetLocale.toLowerCase() !== 'en-us') {
+                        const pretranslated = settings?.specialPageTranslations?.games?.[gamesHubTargetLocale];
+                        const missingKeys = [];
+
+                        if (pretranslated && typeof pretranslated === 'object') {
+                            Object.keys(GAMES_HUB_UI_TEXT_DEFAULTS).forEach((key) => {
+                                const candidate = String(pretranslated[key] || '').trim();
+                                if (candidate) {
+                                    gamesHubUiText[key] = candidate;
+                                } else {
+                                    missingKeys.push(key);
+                                }
+                            });
+                        }
+
+                        if (missingKeys.length > 0) {
+                            const translateResponse = await authenticatedFetch('/api/translate-lines', {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({
+                                    lines: missingKeys.map((key) => GAMES_HUB_UI_TEXT_DEFAULTS[key]),
+                                    source_locale: 'en-US',
+                                    target_locale: gamesHubTargetLocale
+                                })
+                            });
+
+                            if (translateResponse.ok) {
+                                const payload = await translateResponse.json();
+                                const translatedLines = Array.isArray(payload.translated_lines) ? payload.translated_lines : [];
+                                missingKeys.forEach((key, index) => {
+                                    const translatedValue = String(translatedLines[index] || '').trim();
+                                    if (translatedValue) {
+                                        gamesHubUiText[key] = translatedValue;
+                                    }
+                                });
+                            }
+                        }
+                    }
+
                     gameState.wakeWord = (settings.wakeWordInterjection + ' ' + settings.wakeWordName).toLowerCase();
                     console.log('Wake word loaded:', gameState.wakeWord);
                     
@@ -1120,6 +1433,7 @@
                     scanMode = settings.scanMode === 'step' ? 'step' : 'auto';
                     console.log('scanMode loaded:', scanMode);
                     waitForSwitchToScan = settings.waitForSwitchToScan === true;
+                    playWaitForSwitchChime = settings.playWaitForSwitchChime === true;
                     console.log('waitForSwitchToScan loaded:', waitForSwitchToScan);
                     
                     // Load tap interface preference
@@ -1139,6 +1453,8 @@
                         enablePictograms = true;
                         console.log('Tap mode: forcing enablePictograms=true');
                     }
+
+                    applyGamesHubLocalization();
                 }
             } catch (error) {
                 console.error('Error loading user settings:', error);
@@ -1150,8 +1466,10 @@
                 ScanningOff = false;
                 scanMode = 'auto';
                 waitForSwitchToScan = false;
+                playWaitForSwitchChime = false;
                 selectedTtsVoiceName = 'en-US-Neural2-A';
                 configuredSpeechRateWpm = 170;
+                applyGamesHubLocalization();
             }
         }
 
@@ -1369,6 +1687,7 @@
                 pendingScanContainerId = containerId;
                 stopScanning();
                 console.log(`SCANNING: Waiting for switch press before scanning (${containerId})`);
+                playPageReadyChimeIfEnabled();
 
                 const hasShownPrompt = sessionStorage.getItem(GAMES_SWITCH_PROMPT_SHOWN_KEY) === 'true';
                 if (!hasShownPrompt) {
@@ -1651,7 +1970,8 @@
                         text: textToAnnounce,
                         routing_target: announcementType,
                         voice_name_override: voiceNameOverride || null,
-                        speech_rate_override: Number.isFinite(speechRateOverride) ? speechRateOverride : null
+                        speech_rate_override: Number.isFinite(speechRateOverride) ? speechRateOverride : null,
+                        language_code_override: (announcementType === 'system' && gamesHubPartnerLocale && gamesHubPartnerLocale.toLowerCase() !== 'en-us') ? gamesHubPartnerLocale : null
                     }),
                 });
 
@@ -1684,11 +2004,12 @@
 
         // Announce text using same system as gridpage.js
         async function announce(textToAnnounce, announcementType = "system", voiceNameOverride = null, speechRateOverride = null, progressCallback = null) {
-            console.log(`ANNOUNCE: QUEUING "${textToAnnounce.substring(0, 30)}..." (Type: ${announcementType})`);
+            const localizedText = await translateGamesHubRuntimeLine(textToAnnounce, gamesHubPartnerLocale);
+            console.log(`ANNOUNCE: QUEUING "${localizedText.substring(0, 30)}..." (Type: ${announcementType})`);
             
             return new Promise((resolve, reject) => {
                 announcementQueue.push({
-                    textToAnnounce,
+                    textToAnnounce: localizedText,
                     announcementType,
                     voiceNameOverride,
                     speechRateOverride,
@@ -1727,7 +2048,7 @@
             document.getElementById('twentyQuestionsGame').classList.remove('hidden');
             
             // Show role selection
-            document.getElementById('statusText').textContent = 'Choose how you want to play:';
+            setLocalizedStatusText(getGamesHubLocalizedText('statusChooseHowToPlay', 'Choose how you want to play:'));
             document.getElementById('roleSelection').classList.remove('hidden');
             
             announce("Let's play 20 questions!");
@@ -1956,7 +2277,8 @@
                 const titleFromInput = document.getElementById('storyTitleInput')?.value || '';
                 const textFromInput = document.getElementById('storyTextInput')?.value || '';
 
-                const selectedTitle = (fromDetailView ? titleFromInput : storyState.currentStoryTitle) || titleFromInput || storyState.currentStoryTitle || 'Untitled Story';
+                const untitledStory = getGamesHubLocalizedText('untitledStory', 'Untitled Story');
+                const selectedTitle = (fromDetailView ? titleFromInput : storyState.currentStoryTitle) || titleFromInput || storyState.currentStoryTitle || untitledStory;
                 const selectedText = (fromDetailView ? textFromInput : storyState.currentStoryText) || textFromInput || storyState.currentStoryText || '';
 
                 if (!String(selectedText).trim()) {
@@ -2012,6 +2334,78 @@
             }
         }
 
+        async function exportStoryPDF(fromDetailView = false) {
+            if (!storyState.selectedStoryId) {
+                showError('No story selected.');
+                return;
+            }
+
+            try {
+                const titleFromInput = document.getElementById('storyTitleInput')?.value || '';
+                const textFromInput = document.getElementById('storyTextInput')?.value || '';
+
+                const untitledStory = getGamesHubLocalizedText('untitledStory', 'Untitled Story');
+                const selectedTitle = (fromDetailView ? titleFromInput : storyState.currentStoryTitle) || titleFromInput || storyState.currentStoryTitle || untitledStory;
+                const selectedText = (fromDetailView ? textFromInput : storyState.currentStoryText) || textFromInput || storyState.currentStoryText || '';
+
+                if (!String(selectedText).trim()) {
+                    showError('Story text is empty. Add story text before exporting PDF.');
+                    return;
+                }
+
+                showLoading();
+                const response = await authenticatedFetch(`/api/games/story/${storyState.selectedStoryId}/export-pdf`, {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        title: selectedTitle,
+                        story_text: selectedText
+                    })
+                });
+
+                if (!response.ok) {
+                    let backendError = '';
+                    try {
+                        const errorData = await response.json();
+                        backendError = String(errorData?.error || errorData?.detail || '').trim();
+                    } catch (parseError) {
+                        backendError = '';
+                    }
+                    const combinedError = backendError
+                        ? `HTTP ${response.status}: ${backendError}`
+                        : `HTTP ${response.status}: ${response.statusText}`;
+                    throw new Error(combinedError);
+                }
+
+                const pdfBlob = await response.blob();
+                const contentDisposition = response.headers.get('Content-Disposition') || '';
+                const quotedFilenameMatch = contentDisposition.match(/filename="([^"]+)"/i);
+                const bareFilenameMatch = contentDisposition.match(/filename=([^;]+)/i);
+                const serverFilename = quotedFilenameMatch?.[1] || bareFilenameMatch?.[1]?.trim();
+                const filename = serverFilename || buildStoryPDFExportFilename(selectedTitle);
+
+                const blobUrl = URL.createObjectURL(pdfBlob);
+                const downloadLink = document.createElement('a');
+                downloadLink.href = blobUrl;
+                downloadLink.download = filename;
+                document.body.appendChild(downloadLink);
+                downloadLink.click();
+                downloadLink.remove();
+                URL.revokeObjectURL(blobUrl);
+
+                hideLoading();
+                setStoryStatusMessage(`Story PDF exported as ${filename}.`);
+            } catch (error) {
+                console.error('Error exporting story PDF:', error);
+                hideLoading();
+                showError(String(error?.message || 'Failed to export story PDF.'));
+            }
+        }
+
+        function buildStoryPDFExportFilename(title = '') {
+            const sanitized = String(title || 'story').replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '') || 'story';
+            return `${sanitized}.pdf`;
+        }
+
         function updateStoryBottomControls({ showDeleteStories = false } = {}) {
             const deleteBtn = document.getElementById('storyDeleteStoriesButton');
             if (deleteBtn) {
@@ -2021,31 +2415,33 @@
 
         function getStoryEntryOptions() {
             return [
-                { option: 'Go Back', summary: 'Go Back', action: 'story_entry_back' },
-                { option: 'Create a New Story', summary: 'Create New Story', action: 'story_entry_create' },
-                { option: 'Read an Existing Story', summary: 'Read Existing Story', action: 'story_entry_read' }
+                { option: getGamesHubLocalizedText('storyEntryGoBack', 'Go Back'), summary: getGamesHubLocalizedText('storyEntryGoBack', 'Go Back'), action: 'story_entry_back' },
+                { option: getGamesHubLocalizedText('storyEntryCreateNewStory', 'Create a New Story'), summary: getGamesHubLocalizedText('storyEntryCreateNewStory', 'Create New Story'), action: 'story_entry_create' },
+                { option: getGamesHubLocalizedText('storyEntryReadExistingStory', 'Read an Existing Story'), summary: getGamesHubLocalizedText('storyEntryReadExistingStory', 'Read Existing Story'), action: 'story_entry_read' }
             ];
         }
 
         function getReadExistingStoryOptions() {
+            const untitledStory = getGamesHubLocalizedText('untitledStory', 'Untitled Story');
+            const noSavedStoriesFound = getGamesHubLocalizedText('storyNoSavedStoriesFound', 'No saved stories found');
             const options = [
-                { option: 'Go Back', summary: 'Go Back', action: 'story_read_back' }
+                { option: getGamesHubLocalizedText('storyEntryGoBack', 'Go Back'), summary: getGamesHubLocalizedText('storyEntryGoBack', 'Go Back'), action: 'story_read_back' }
             ];
 
             storyState.stories.forEach((story) => {
                 options.push({
-                    option: story.title || 'Untitled Story',
-                    summary: story.title || 'Untitled Story',
+                    option: story.title || untitledStory,
+                    summary: story.title || untitledStory,
                     action: 'story_read_story',
                     storyId: story.id,
-                    storyTitle: story.title || 'Untitled Story'
+                    storyTitle: story.title || untitledStory
                 });
             });
 
             if (storyState.stories.length === 0) {
                 options.push({
-                    option: 'No saved stories found',
-                    summary: 'No Saved Stories',
+                    option: noSavedStoriesFound,
+                    summary: noSavedStoriesFound,
                     action: 'story_noop'
                 });
             }
@@ -2101,6 +2497,9 @@
 
         async function showExistingStoriesMenu() {
             stopListening();
+            interruptScanningAnnouncementPlayback();
+            clearStoryReadHighlight();
+            storyState.activeReadUtterance = null;
             closeStoryDeleteModal();
 
             storyState.view = 'read';
@@ -2118,7 +2517,7 @@
             displayStoryUserOptions(getReadExistingStoryOptions());
         }
 
-        async function readExistingStoryById(storyId, storyTitle = 'Untitled Story') {
+        async function readExistingStoryById(storyId, storyTitle = getGamesHubLocalizedText('untitledStory', 'Untitled Story')) {
             if (!storyId) {
                 showError('Story not found.');
                 await showExistingStoriesMenu();
@@ -2139,7 +2538,7 @@
 
                 const story = data.story;
                 storyState.selectedStoryId = story.id;
-                storyState.currentStoryTitle = story.title || storyTitle || 'Untitled Story';
+                storyState.currentStoryTitle = story.title || storyTitle || getGamesHubLocalizedText('untitledStory', 'Untitled Story');
                 storyState.currentStoryText = story.story_text || '';
                 syncStoryIllustrationFromStory(story);
 
@@ -2165,7 +2564,7 @@
         }
 
         async function readSelectedStoryAgain() {
-            const title = storyState.currentStoryTitle || 'Untitled Story';
+            const title = storyState.currentStoryTitle || getGamesHubLocalizedText('untitledStory', 'Untitled Story');
             const text = storyState.currentStoryText || '';
             await readStoryWithHighlight(title, text || 'This story is empty.');
             setStoryStatusMessage('Story loaded. You can read again, create an illustration, or go back to stories.');
@@ -2259,7 +2658,7 @@
                     });
 
                     const label = document.createElement('span');
-                    label.textContent = story.title || 'Untitled Story';
+                    label.textContent = story.title || getGamesHubLocalizedText('untitledStory', 'Untitled Story');
 
                     row.appendChild(checkbox);
                     row.appendChild(label);
@@ -2318,11 +2717,37 @@
         function setStoryStatusMessage(message, heardTranscript = '') {
             const statusEl = document.getElementById('storyStatusMessage');
             const transcriptEl = document.getElementById('storyHeardTranscript');
+            const statusText = String(message || '').trim();
+            const transcriptText = String(heardTranscript || '').trim();
+
             if (statusEl) {
-                statusEl.textContent = message || '';
+                if (!statusText) {
+                    statusEl.textContent = '';
+                } else if (!gamesHubTargetLocale || gamesHubTargetLocale.toLowerCase() === 'en-us') {
+                    statusEl.textContent = statusText;
+                } else {
+                    translateGamesHubRuntimeLine(statusText).then((translated) => {
+                        statusEl.textContent = translated;
+                    }).catch(() => {
+                        statusEl.textContent = statusText;
+                    });
+                }
             }
             if (transcriptEl) {
-                transcriptEl.textContent = heardTranscript ? `Heard: ${heardTranscript}` : '';
+                if (!transcriptText) {
+                    transcriptEl.textContent = '';
+                } else {
+                    const transcriptSource = `Heard: ${transcriptText}`;
+                    if (!gamesHubTargetLocale || gamesHubTargetLocale.toLowerCase() === 'en-us') {
+                        transcriptEl.textContent = transcriptSource;
+                    } else {
+                        translateGamesHubRuntimeLine(transcriptSource).then((translated) => {
+                            transcriptEl.textContent = translated;
+                        }).catch(() => {
+                            transcriptEl.textContent = transcriptSource;
+                        });
+                    }
+                }
             }
         }
 
@@ -2333,7 +2758,7 @@
                 return;
             }
 
-            titleEl.textContent = title || 'Untitled Story';
+            titleEl.textContent = title || getGamesHubLocalizedText('untitledStory', 'Untitled Story');
             textEl.innerHTML = '';
             storyState.readWordRanges = [];
             storyState.readWordWeightTotal = 0;
@@ -2690,7 +3115,7 @@
             showLoading();
 
             try {
-                const selectedTitle = (document.getElementById('storyTitleInput').value || storyState.currentStoryTitle || 'Untitled Story').trim();
+                const selectedTitle = (document.getElementById('storyTitleInput').value || storyState.currentStoryTitle || getGamesHubLocalizedText('untitledStory', 'Untitled Story')).trim();
 
                 const response = await authenticatedFetch('/api/games/story/finalize', {
                     method: 'POST',
@@ -2807,6 +3232,11 @@
                 button.className = 'game-button';
                 button.textContent = scanLabel;
                 button.dataset.scanLabel = scanLabel;
+                localizeGamesHubOptionLabel(scanLabel).then((localizedLabel) => {
+                    const finalLabel = localizedLabel || scanLabel;
+                    button.textContent = finalLabel;
+                    button.dataset.scanLabel = finalLabel;
+                }).catch(() => {});
                 button.onclick = () => selectStoryOption(isObj ? item : fullOptionText);
                 container.appendChild(button);
             });
@@ -3017,7 +3447,7 @@
                 const qa = storyState.transcript[i];
                 const item = document.createElement('div');
                 item.className = 'qa-item';
-                item.innerHTML = `<div class="qa-question">Q: ${qa.question || ''}</div><div class="qa-answer">A: ${qa.answer || ''}</div>`;
+                item.innerHTML = `<div class="qa-question">${getGamesHubLocalizedText('qPrefix', 'Q:')} ${qa.question || ''}</div><div class="qa-answer">${getGamesHubLocalizedText('aPrefix', 'A:')} ${qa.answer || ''}</div>`;
                 list.appendChild(item);
             }
         }
@@ -3044,7 +3474,7 @@
             if (!storyState.stories.length) {
                 const empty = document.createElement('div');
                 empty.className = 'story-helper-item';
-                empty.textContent = 'No saved stories yet.';
+                empty.textContent = getGamesHubLocalizedText('noSavedStoriesYet', 'No saved stories yet.');
                 container.appendChild(empty);
                 return;
             }
@@ -3053,7 +3483,7 @@
                 const button = document.createElement('button');
                 button.className = 'game-button';
                 button.dataset.scanLabel = story.title || 'Saved Story';
-                button.innerHTML = `<i class="fas fa-book-open"></i>${story.title || 'Untitled Story'}`;
+                button.innerHTML = `<i class="fas fa-book-open"></i>${story.title || getGamesHubLocalizedText('untitledStory', 'Untitled Story')}`;
                 button.onclick = () => openStoryDetail(story.id);
                 container.appendChild(button);
             });
@@ -3107,12 +3537,12 @@
                 showError('Story text is empty.');
                 return;
             }
-            storyState.currentStoryTitle = document.getElementById('storyTitleInput').value || storyState.currentStoryTitle || 'Untitled Story';
+            storyState.currentStoryTitle = document.getElementById('storyTitleInput').value || storyState.currentStoryTitle || getGamesHubLocalizedText('untitledStory', 'Untitled Story');
             storyState.currentStoryText = text;
             renderStoryIllustrationViews();
             document.getElementById('storyDetail').classList.add('hidden');
             document.getElementById('storyReadDisplay').classList.remove('hidden');
-            await readStoryWithHighlight(storyState.currentStoryTitle || 'Untitled Story', text);
+            await readStoryWithHighlight(storyState.currentStoryTitle || getGamesHubLocalizedText('untitledStory', 'Untitled Story'), text);
             document.getElementById('storyReadDisplay').classList.add('hidden');
             document.getElementById('storyDetail').classList.remove('hidden');
         }
@@ -3193,7 +3623,7 @@
                 // User will ask questions - skip category selection, go straight to ready
                 gameState.currentPhase = 'ready';
                 gameState.category = 'thing'; // Default to 'thing', LLM will ask "Is it a person?" etc.
-                document.getElementById('statusText').textContent = 'Say "ready" when you have selected something for me to guess';
+                setLocalizedStatusText(getGamesHubLocalizedText('statusSayReadySelected', 'Say "ready" when you have selected something for me to guess'));
                 announce('I will ask the questions, say "ready" when you have selected something for me to guess');
                 
                 // Start listening for "ready"
@@ -3204,7 +3634,7 @@
             } else {
                 // User will answer questions - show category selection with scanning (no listening)
                 gameState.currentPhase = 'category';
-                document.getElementById('statusText').textContent = 'What type of thing are you thinking of?';
+                setLocalizedStatusText(getGamesHubLocalizedText('statusWhatTypeThing', 'What type of thing are you thinking of?'));
                 
                 // Announce that Player 2 will ask questions
                 announce("Let's see if you can guess what I am thinking. Give me a moment to pick something");
@@ -3236,7 +3666,7 @@
                 // This path should not be reached since we skip category for 'ask' role
                 // But just in case, handle it
                 gameState.currentPhase = 'ready';
-                document.getElementById('statusText').textContent = 'Say "ready" when you have selected your ' + category;
+                setLocalizedStatusText(`${getGamesHubLocalizedText('statusSayReadySelectedYour', 'Say "ready" when you have selected your')} ${category}`);
                 announce('Say "ready" when you have selected your ' + category);
                 
                 // Start listening for "ready"
@@ -3254,7 +3684,7 @@
         // Proceed after user says "ready"
         async function proceedAfterReady() {
             gameState.currentPhase = 'playing';
-            document.getElementById('statusText').textContent = 'Let me think of some questions...';
+            setLocalizedStatusText(getGamesHubLocalizedText('statusThinkingQuestions', 'Let me think of some questions...'));
             
             // Generate first set of questions
             await loadQuestions();
@@ -3298,7 +3728,7 @@
             } catch (error) {
                 console.error('Error loading game options:', error);
                 hideLoading();
-                showError('Failed to load options. Please try again.');
+                showError(getGamesHubLocalizedText('failedLoadOptions', 'Failed to load options. Please try again.'));
             }
         }
 
@@ -3338,7 +3768,7 @@
             } catch (error) {
                 console.error('Error loading questions:', error);
                 hideLoading();
-                showError('Failed to load questions. Please try again.');
+                showError(getGamesHubLocalizedText('failedLoadQuestions', 'Failed to load questions. Please try again.'));
             }
         }
 
@@ -3372,7 +3802,7 @@
             } catch (error) {
                 console.error('Error loading guesses:', error);
                 hideLoading();
-                showError('Failed to load guesses. Please try again.');
+                showError(getGamesHubLocalizedText('failedLoadGuesses', 'Failed to load guesses. Please try again.'));
             }
         }
 
@@ -3412,10 +3842,26 @@
                 
                 if (type === 'question') {
                     button.innerHTML = `<i class="fas fa-question"></i>${optionLabel}`;
+                    localizeGamesHubOptionLabel(optionLabel).then((localizedLabel) => {
+                        const finalLabel = localizedLabel || optionLabel;
+                        button.dataset.scanLabel = finalLabel;
+                        button.innerHTML = `<i class="fas fa-question"></i>${finalLabel}`;
+                    }).catch(() => {});
                 } else if (type === 'guess') {
-                    button.innerHTML = `<i class="fas fa-lightbulb"></i>Is it ${option}?`;
+                    const guessLabel = `${getGamesHubLocalizedText('isItPrefix', 'Is it')} ${option}?`;
+                    button.innerHTML = `<i class="fas fa-lightbulb"></i>${guessLabel}`;
+                    localizeGamesHubOptionLabel(guessLabel).then((localizedLabel) => {
+                        const finalLabel = localizedLabel || guessLabel;
+                        button.dataset.scanLabel = finalLabel;
+                        button.innerHTML = `<i class="fas fa-lightbulb"></i>${finalLabel}`;
+                    }).catch(() => {});
                 } else if (type === 'select') {
                     button.innerHTML = `<i class="fas fa-star"></i>${option}`;
+                    localizeGamesHubOptionLabel(option).then((localizedLabel) => {
+                        const finalLabel = localizedLabel || option;
+                        button.dataset.scanLabel = finalLabel;
+                        button.innerHTML = `<i class="fas fa-star"></i>${finalLabel}`;
+                    }).catch(() => {});
                 }
                 
                 container.appendChild(button);
@@ -3425,7 +3871,7 @@
             const somethingElseButton = document.createElement('div');
             somethingElseButton.className = 'game-button';
             somethingElseButton.onclick = () => handleSomethingElse(type);
-            somethingElseButton.innerHTML = `<i class="fas fa-sync-alt"></i>Something Else`;
+            somethingElseButton.innerHTML = `<i class="fas fa-sync-alt"></i>${getGamesHubLocalizedText('somethingElse', 'Something Else')}`;
             container.appendChild(somethingElseButton);
             
             // Add "Exit Game" button
@@ -3434,16 +3880,16 @@
             exitButton.style.backgroundColor = '#dc2626';
             exitButton.style.color = 'white';
             exitButton.onclick = () => exitGame();
-            exitButton.innerHTML = `<i class="fas fa-times"></i>Exit Game`;
+            exitButton.innerHTML = `<i class="fas fa-times"></i>${getGamesHubLocalizedText('exitGame', 'Exit Game')}`;
             container.appendChild(exitButton);
             
             // Update status text based on type
             if (type === 'question') {
-                document.getElementById('statusText').textContent = `Questions remaining: ${gameState.maxQuestions - gameState.questionCount}`;
+                setLocalizedStatusText(`${getGamesHubLocalizedText('statusQuestionsRemaining', 'Questions remaining:')} ${gameState.maxQuestions - gameState.questionCount}`);
             } else if (type === 'guess') {
-                document.getElementById('statusText').textContent = `Guesses remaining: ${gameState.maxGuesses - gameState.guessCount}`;
+                setLocalizedStatusText(`${getGamesHubLocalizedText('statusGuessesRemaining', 'Guesses remaining:')} ${gameState.maxGuesses - gameState.guessCount}`);
             } else if (type === 'select') {
-                document.getElementById('statusText').textContent = `Choose your ${gameState.category}:`;
+                setLocalizedStatusText(`${getGamesHubLocalizedText('statusChooseYour', 'Choose your')} ${gameState.category}:`);
             }
             
             // Start scanning after options are displayed (no listening - user should scan/select)
@@ -3512,7 +3958,7 @@
             } catch (error) {
                 console.error('Error loading different options:', error);
                 hideLoading();
-                showError('Failed to load different options. Please try again.');
+                showError(getGamesHubLocalizedText('failedLoadDifferentOptions', 'Failed to load different options. Please try again.'));
             }
         }
 
@@ -3524,7 +3970,7 @@
             // Hide options
             document.getElementById('optionsSelection').classList.add('hidden');
             
-            document.getElementById('statusText').textContent = `I'm ready. To ask a question or make a guess, start with "${gameState.wakeWord}".`;
+            setLocalizedStatusText(`${getGamesHubLocalizedText('statusReadyWithWakeWord', 'I\'m ready. To ask a question or make a guess, start with')} "${gameState.wakeWord}".`);
             announce(`I'm ready. To ask a question or make a guess, start with ${gameState.wakeWord}.`);
             
             // Start listening for wake word
@@ -3733,8 +4179,7 @@
             } catch (error) {
                 console.error('Error loading response options:', error);
                 document.getElementById('loadingState').classList.add('hidden');
-                document.getElementById('errorState').classList.remove('hidden');
-                document.getElementById('errorMessage').textContent = 'Failed to generate response options. Try again.';
+                showError('Failed to generate response options. Try again.');
                 
                 // Retry after delay
                 setTimeout(() => {
@@ -3759,6 +4204,9 @@
                 // Handle both object format {text, answer_type} and string format
                 const displayText = option.text || option;
                 button.textContent = displayText;
+                localizeGamesHubOptionLabel(displayText).then((localizedText) => {
+                    button.textContent = localizedText || displayText;
+                }).catch(() => {});
                 button.onclick = () => selectResponseOption(option, index);
                 container.appendChild(button);
             });
@@ -3820,7 +4268,7 @@
                     // Player 2 will either ask another question or make a guess
                     gameState.currentPhase = 'awaiting_wake_word';
                     hideListening();
-                    document.getElementById('statusText').textContent = 'Listening for next question or guess...';
+                    setLocalizedStatusText(getGamesHubLocalizedText('statusListeningNext', 'Listening for next question or guess...'));
                     announce(`To ask another question or make a guess, start with ${gameState.wakeWord}.`);
                     showListening();
                     startListening();
@@ -3857,7 +4305,7 @@
                             // After incorrect guess, listen for Player 2's next question or guess
                             gameState.currentPhase = 'awaiting_wake_word';
                             hideListening();
-                            document.getElementById('statusText').textContent = 'Listening for next question or guess...';
+                            setLocalizedStatusText(getGamesHubLocalizedText('statusListeningNext', 'Listening for next question or guess...'));
                             announce(`To ask another question or make a guess, start with ${gameState.wakeWord}.`);
                             showListening();
                             startListening();
@@ -3886,7 +4334,7 @@
             gameState.currentPhase = 'action_selection';
             
             document.getElementById('actionButtons').classList.remove('hidden');
-            document.getElementById('statusText').textContent = 'What would you like to do next?';
+            setLocalizedStatusText(getGamesHubLocalizedText('statusWhatNext', 'What would you like to do next?'));
             
             // Start scanning for action buttons (no listening - user taps/uses switch)
             setTimeout(() => {
@@ -4055,7 +4503,7 @@
             document.getElementById('errorState').classList.add('hidden');
             
             // Show role selection
-            document.getElementById('statusText').textContent = 'Choose how you want to play:';
+            setLocalizedStatusText(getGamesHubLocalizedText('statusChooseHowToPlay', 'Choose how you want to play:'));
             document.getElementById('roleSelection').classList.remove('hidden');
             document.getElementById('gameCounter').textContent = '';
             
@@ -4133,7 +4581,16 @@
 
         // Show error
         function showError(message) {
-            document.getElementById('errorMessage').textContent = message;
+            const fallbackMessage = String(message || '').trim() || getGamesHubLocalizedText('genericError', 'Something went wrong. Please try again.');
+            if (!gamesHubTargetLocale || gamesHubTargetLocale.toLowerCase() === 'en-us') {
+                document.getElementById('errorMessage').textContent = fallbackMessage;
+            } else {
+                translateGamesHubRuntimeLine(fallbackMessage).then((translated) => {
+                    document.getElementById('errorMessage').textContent = translated;
+                }).catch(() => {
+                    document.getElementById('errorMessage').textContent = fallbackMessage;
+                });
+            }
             document.getElementById('errorState').classList.remove('hidden');
             
             // Hide error after 5 seconds

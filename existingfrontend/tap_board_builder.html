@@ -1,0 +1,1734 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tap Board Builder</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <script src="/static/admin_interface_navigation.js" defer></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #f3f4f6; color: #111827; }
+        #buttonGrid { display: grid; grid-template-columns: repeat(12, minmax(100px, 1fr)); gap: 8px; width: 100%; border: 1px solid #d1d5db; margin-top: 1rem; margin-bottom: 1rem; background-color: #f9fafb; overflow-x: auto; padding: 8px; }
+        .visual-button { border: 2px solid #d1d5db; border-radius: 8px; padding: 10px; display: flex; align-items: center; justify-content: center; background-color: white; min-height: 70px; cursor: pointer; transition: all 0.2s ease; font-size: 0.8rem; font-weight: 500; text-align: center; word-wrap: break-word; position: relative; }
+        .visual-button:hover { border-color: #3b82f6; box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); transform: translateY(-1px); }
+        .visual-button.undefined { background-color: #f9fafb; color: #6b7280; border-style: dashed; font-style: italic; }
+        .visual-button.has-content { background-color: #ffffff; color: #1f2937; border-color: #059669; }
+        .visual-button.has-navigation { background: linear-gradient(135deg, #fef3c7 0%, #fde68a 100%); border-color: #d97706; }
+        .visual-button.dragging { opacity: 0.5; transform: rotate(4deg); }
+        .visual-button.drop-target { border-color: #ef4444; border-width: 3px; background-color: #fef2f2; }
+        .button-indicator { position: absolute; top: 4px; right: 4px; width: 14px; height: 14px; border-radius: 50%; font-size: 8px; display: flex; align-items: center; justify-content: center; }
+        .indicator-nav { background-color: #d97706; color: white; }
+        .indicator-speech { background-color: #059669; color: white; }
+        .indicator-audio { background-color: #2563eb; color: white; }
+        .notification { position: fixed; top: 1rem; right: 1rem; z-index: 1000; border-radius: 8px; padding: 0.75rem 1rem; color: white; font-weight: 600; transform: translateX(140%); transition: transform 0.25s ease; }
+        .notification.show { transform: translateX(0); }
+        .notification.success { background: #16a34a; }
+        .notification.error { background: #dc2626; }
+        .readonly-overlay { position: absolute; inset: 0; background: rgba(255, 255, 255, 0.85); border: 2px dashed #f59e0b; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #92400e; font-weight: 600; font-size: 0.9rem; z-index: 20; }
+    </style>
+</head>
+<body>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+
+    <div class="page-banner flex flex-wrap items-center justify-between gap-3 bg-[#002244] text-[#FB4F14] px-4 py-2 shadow">
+        <div class="flex items-center gap-2">
+            <button onclick="window.navigateToHome ? window.navigateToHome() : window.location.href='tap_interface.html'" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100 focus:outline-none focus:ring-2 focus:ring-orange-500" title="Home">
+                <i class="fas fa-home"></i>
+            </button>
+            <h1 class="ml-2 text-xl font-semibold">Board Builder</h1>
+        </div>
+        <div class="admin-toolbar flex flex-wrap items-center gap-2">
+            <a href="admin_pages.html" title="Pages &amp; Buttons" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-th-large"></i></a>
+            <a href="admin_settings.html" title="Global Settings" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-cog"></i></a>
+            <a href="user_current_admin.html" title="User Current Location" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-map-marker-alt"></i></a>
+            <a href="user_info_admin.html" title="User Info &amp; Birthdays" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-info-circle"></i></a>
+            <a href="user_diary_admin.html" title="User Diary" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-book-open"></i></a>
+            <a href="audio_admin.html" title="Audio Devices" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-volume-up"></i></a>
+            <a href="favorites_admin.html" title="Event Sources" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-star"></i></a>
+            <a href="admin_audit_report.html" title="Activity Reports" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-clipboard-list"></i></a>
+            <span class="border-l border-white h-6 mx-1"></span>
+            <button id="switch-user-button" title="Switch User Profile" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-users"></i></button>
+            <button id="logout-button" title="Logout" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full transition-colors duration-200 text-base hover:bg-orange-100"><i class="fas fa-sign-out-alt"></i></button>
+            <button id="help-icon" title="Help" aria-label="Help" class="h-10 w-10 flex items-center justify-center text-[#FB4F14] bg-white rounded-full ml-2 transition-colors duration-200 text-base hover:bg-orange-100 focus:outline-none focus:ring-2 focus:ring-orange-500">
+                <i class="fas fa-question-circle"></i>
+            </button>
+        </div>
+    </div>
+
+    <div class="border-b border-gray-200 bg-white shadow-sm">
+        <div class="max-w-[1700px] mx-auto px-4 py-3 flex flex-wrap items-center gap-3">
+            <button onclick="window.location.href='tap_boards_menu_admin.html'" class="h-10 px-4 flex items-center justify-center text-[#FB4F14] bg-white border border-[#FB4F14] rounded-full transition-colors duration-200 text-sm hover:bg-orange-100" title="Open Boards Menu Admin">
+                <i class="fas fa-sitemap mr-2"></i>Boards Menu
+            </button>
+                <button id="saveBoardBtn" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"><i class="fas fa-save mr-1"></i>Save Board</button>
+                <button id="deleteBoardBtn" class="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"><i class="fas fa-trash mr-1"></i>Delete Board</button>
+                <button id="translateBoardBtn" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"><i class="fas fa-language mr-1"></i>Translate Board</button>
+                <button id="translateAllAiBoardsBtn" class="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"><i class="fas fa-globe mr-1"></i>Translate All AI Boards</button>
+        </div>
+    </div>
+
+    <main class="max-w-[1700px] mx-auto p-4">
+        <div class="bg-white p-4 border rounded-md mb-4">
+            <div class="flex flex-wrap gap-3 items-end">
+                <div class="min-w-[360px] flex-1">
+                    <div class="flex items-center gap-2 mb-1">
+                        <label for="selectBoard" class="block text-sm font-medium text-gray-700">Select Board</label>
+                        <button id="showMigrationOnlyBtn" type="button" class="text-xs px-2 py-1 bg-purple-100 text-purple-700 rounded hover:bg-purple-200 hidden" title="Show only boards created during migration that need configuration">Show Migration Boards</button>
+                    </div>
+                    <select id="selectBoard" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md"></select>
+                </div>
+                <div>
+                    <button id="createNewBoardBtn" class="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700"><i class="fas fa-plus mr-1"></i>Create New Board</button>
+                </div>
+                <div>
+                    <button id="openTouchChatMigrationBtn" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700"><i class="fas fa-file-import mr-1"></i>Migrate User Data</button>
+                </div>
+            </div>
+            <p class="text-sm text-gray-600 mt-3">Recommended workflow: build or edit boards here first, then open Boards Menu to decide how those boards appear in Tap Interface.</p>
+            <p id="readOnlyHint" class="text-sm text-amber-700 mt-2 hidden">This board is read-only because it is a standard legacy/system board.</p>
+        </div>
+
+        <form id="boardForm" class="mb-6 p-4 border rounded-md bg-white">
+            <h3 class="text-xl font-semibold mb-3">Board Details</h3>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label for="boardLabel" class="block text-sm font-medium text-gray-700">Display Name</label>
+                    <input type="text" id="boardLabel" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="e.g., Home, Food, Feelings">
+                </div>
+                <div>
+                    <label for="boardType" class="block text-sm font-medium text-gray-700">Board Mode</label>
+                    <select id="boardType" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+                        <option value="ai">AI-defined Board</option>
+                        <option value="static">Static Board</option>
+                        <option value="system">System Board</option>
+                    </select>
+                </div>
+            </div>
+
+            <div id="aiSettingsSection" class="mt-4">
+                <h4 class="font-semibold text-gray-800 mb-2">AI Settings</h4>
+                <div class="grid grid-cols-1 gap-3">
+                    <div>
+                        <label for="llmPrompt" class="block text-sm font-medium text-gray-700">LLM Prompt</label>
+                        <textarea id="llmPrompt" rows="3" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="Describe what the AI board should generate"></textarea>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <div>
+                            <label for="promptTopic" class="block text-sm font-medium text-gray-700">Prompt Topic</label>
+                            <input type="text" id="promptTopic" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md">
+                        </div>
+                        <div>
+                            <label for="promptExamples" class="block text-sm font-medium text-gray-700">Prompt Examples</label>
+                            <input type="text" id="promptExamples" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="Comma-separated">
+                        </div>
+                        <div>
+                            <label for="promptExclusions" class="block text-sm font-medium text-gray-700">Prompt Exclusions</label>
+                            <input type="text" id="promptExclusions" class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="Comma-separated">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="homeBoardAssignmentSection" class="mt-4 p-4 border border-amber-200 bg-amber-50 rounded-md">
+                <div class="flex flex-col md:flex-row md:items-start md:justify-between gap-3">
+                    <div>
+                        <h4 class="font-semibold text-gray-800">Home Board Assignment</h4>
+                        <p id="homeBoardCurrentStatus" class="text-sm text-gray-700 mt-1">Current Home Board: none selected</p>
+                        <p id="homeBoardChangeStatus" class="text-sm text-amber-700 mt-1 hidden"></p>
+                        <p class="text-xs text-gray-600 mt-2">Use this to choose which board opens first in Tap Interface.</p>
+                    </div>
+                    <label class="inline-flex items-center gap-2 text-sm font-medium text-gray-700">
+                        <input type="checkbox" id="setAsHomeBoard" class="h-4 w-4">
+                        Set this board as Home
+                    </label>
+                </div>
+            </div>
+        </form>
+
+        <section id="gridSection" class="bg-white p-4 border rounded-md relative">
+            <div class="flex flex-wrap items-center justify-between gap-2 mb-2">
+                <h3 class="text-xl font-semibold">Board Buttons (7 x 12 Grid)</h3>
+                <button id="aiBulkBuildBtn" class="px-4 py-2 bg-violet-600 text-white rounded-md hover:bg-violet-700"><i class="fas fa-wand-magic-sparkles mr-1"></i>AI Build Options</button>
+            </div>
+            <p class="text-gray-600 mb-3">Click any cell to define a button. Drag and drop to rearrange buttons.</p>
+            <div id="buttonGrid"></div>
+            <div id="gridReadOnlyOverlay" class="readonly-overlay hidden">Read-only board</div>
+        </section>
+    </main>
+
+    <div id="buttonEditorModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full hidden" style="z-index: 5000;">
+        <div class="relative top-20 mx-auto p-5 border w-11/12 max-w-4xl shadow-lg rounded-md bg-white">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-bold text-gray-900">Edit Button</h3>
+                <button id="closeButtonEditor" class="text-gray-400 hover:text-gray-600"><i class="fas fa-times text-xl"></i></button>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div>
+                    <div class="mb-4"><label for="buttonText" class="block text-sm font-medium text-gray-700 mb-2">Button Label</label><input type="text" id="buttonText" class="w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="Enter button text"></div>
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Button Image (Optional)</label>
+                        <div class="flex items-center space-x-3">
+                            <div id="assignedImagePreview" class="w-16 h-16 border-2 border-dashed border-gray-300 rounded-md flex items-center justify-center bg-gray-50 hidden"><img id="assignedImageThumb" class="w-full h-full object-cover rounded-md" alt="Selected image"></div>
+                            <div class="flex-1">
+                                <button type="button" id="browseImagesBtn" class="w-full px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"><i class="fas fa-image mr-2"></i>Browse Images</button>
+                                <button type="button" id="clearImageBtn" class="w-full px-3 py-2 bg-gray-500 text-white rounded-md hover:bg-gray-600 mt-2 hidden"><i class="fas fa-times mr-2"></i>Clear Image</button>
+                            </div>
+                        </div>
+                        <input type="hidden" id="assignedImageUrl" value="">
+                    </div>
+                    <div class="mb-4"><label for="speechText" class="block text-sm font-medium text-gray-700 mb-2">Announcement (Optional)</label><input type="text" id="speechText" class="w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="Announced out loud on selection"></div>
+                    <div class="mb-4">
+                        <label for="customAudioFile" class="block text-sm font-medium text-gray-700 mb-2">Custom Audio File (Optional)</label>
+                        <input type="file" id="customAudioFile" accept="audio/*" class="w-full px-3 py-2 border border-gray-300 rounded-md text-sm">
+                        <input type="hidden" id="customAudioFileUrl" value="">
+                        <div id="audioUploadStatus" class="text-xs mt-1 hidden"></div>
+                    </div>
+                    <div class="mb-4">
+                        <label for="afterSelection" class="block text-sm font-medium text-gray-700 mb-2">After Selection</label>
+                        <select id="afterSelection" class="w-full px-3 py-2 border border-gray-300 rounded-md">
+                            <option value="do_nothing">Do nothing (stay on current board)</option>
+                            <option value="navigate">Navigate to Target Board</option>
+                            <option value="use_ai">Use AI to generate next options</option>
+                        </select>
+                    </div>
+                    <div class="mb-4" id="targetBoardWrapper" style="display:none;"><label for="targetBoard" class="block text-sm font-medium text-gray-700 mb-2">Target Board</label><select id="targetBoard" class="w-full px-3 py-2 border border-gray-300 rounded-md"><option value="">-- Select board --</option></select></div>
+                    <div class="mb-4 hidden" id="temporaryNavigationWrapper">
+                        <label class="flex items-start">
+                            <input type="checkbox" id="temporaryNavigation" class="mr-2 mt-1">
+                            <span class="text-sm text-gray-700">
+                                <span class="font-medium">Temporary navigation (TouchChat visit)</span><br>
+                                <span class="text-xs text-gray-500">After selecting one option on the target board, return to this board.</span>
+                            </span>
+                        </label>
+                    </div>
+                    <div class="mb-4">
+                        <div><label for="buttonBgColor" class="block text-sm font-medium text-gray-700 mb-2">Background Color</label><select id="buttonBgColor" class="w-full px-3 py-2 border border-gray-300 rounded-md"><option value="#FFFFFF">Default</option><option value="#F9FAFB">Light Gray</option><option value="#FEF3C7">Light Yellow</option><option value="#D1FAE5">Light Green</option><option value="#DBEAFE">Light Blue</option><option value="#EDE9FE">Light Purple</option><option value="#FCE7F3">Light Pink</option><option value="#FEE2E2">Light Red</option><option value="#FFF7ED">Light Orange</option><option value="#059669">Green</option><option value="#2563EB">Blue</option><option value="#7C3AED">Purple</option><option value="#DB2777">Pink</option><option value="#DC2626">Red</option><option value="#D97706">Orange/Amber</option><option value="#1F2937">Dark Gray</option><option value="#000000">Black</option></select></div>
+                    </div>
+                    <div class="mb-4"><label class="flex items-center"><input type="checkbox" id="buttonHidden" class="mr-2"><span class="text-sm font-medium text-gray-700">Hide this button</span></label></div>
+                </div>
+                <div>
+                    <h4 class="text-sm font-medium text-gray-700 mb-2">Button Preview</h4>
+                    <div id="buttonPreview" class="border-2 border-dashed border-gray-300 rounded-md p-4 text-center min-h-[100px] flex items-center justify-center"><span class="text-gray-500">Button preview will appear here</span></div>
+                    <div class="mt-4"><h4 class="text-sm font-medium text-gray-700 mb-2">Configuration Summary</h4><div id="configSummary" class="bg-gray-50 p-3 rounded-md text-sm"><div><strong>Position:</strong> <span id="positionInfo">-</span></div><div><strong>Type:</strong> <span id="buttonTypeInfo">-</span></div><div><strong>Action:</strong> <span id="actionInfo">-</span></div><div id="modifierInfoRow" class="hidden mt-2 pt-2 border-t border-gray-200"><div class="text-xs font-semibold text-purple-700 mb-1">Modifier State (TouchChat)</div><div><strong>Triggers modifier:</strong> <span id="modifierTriggerInfo">-</span></div><div id="modifierVariantsWrapper"><strong>Alternate states:</strong><ul id="modifierVariantsList" class="ml-4 mt-1 list-disc text-xs text-gray-600"></ul></div></div></div></div>
+                </div>
+            </div>
+            <div class="flex justify-end space-x-3 mt-6"><button id="clearButtonBtn" class="px-4 py-2 bg-gray-500 text-white rounded-md hover:bg-gray-600">Clear Button</button><button id="cancelButtonEdit" class="px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400">Cancel</button><button id="saveButtonEdit" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Save Button</button></div>
+        </div>
+    </div>
+
+    <div id="imagePickerModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full hidden" style="z-index: 5100;">
+        <div class="relative top-8 mx-auto p-5 border w-11/12 max-w-6xl shadow-lg rounded-md bg-white">
+            <div class="flex justify-between items-center mb-4"><h3 class="text-lg font-bold text-gray-900">Browse Images</h3><button id="closeImagePicker" class="text-gray-400 hover:text-gray-600"><i class="fas fa-times text-xl"></i></button></div>
+            <div class="mb-4 flex gap-2"><input id="imageSearchInput" type="text" class="flex-1 px-3 py-2 border border-gray-300 rounded-md" placeholder="Search images..."><button id="imageSearchBtn" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Search</button><button id="clearImageSearch" class="px-4 py-2 bg-gray-500 text-white rounded-md hover:bg-gray-600">Clear</button></div>
+            <div class="mb-2 flex items-center justify-between text-sm text-gray-600"><div id="imageResultsInfo">Loading...</div><div class="flex items-center gap-2"><button id="imagePrevPage" class="px-2 py-1 bg-gray-200 rounded disabled:opacity-50">Prev</button><span id="imagePageInfo">Page 1 of 1</span><button id="imageNextPage" class="px-2 py-1 bg-gray-200 rounded disabled:opacity-50">Next</button></div></div>
+            <div id="imageLoadingIndicator" class="hidden text-center py-4 text-gray-500"><i class="fas fa-spinner fa-spin mr-2"></i>Loading...</div>
+            <div id="imageGrid" class="grid grid-cols-6 gap-3 max-h-[420px] overflow-y-auto"></div>
+            <div class="flex justify-end gap-2 mt-4"><button id="cancelImageSelection" class="px-4 py-2 bg-gray-300 rounded-md">Cancel</button><button id="selectImageBtn" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700" disabled>Select Image</button></div>
+        </div>
+    </div>
+
+    <div id="aiBulkBuilderModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full hidden" style="z-index: 5200;">
+        <div class="relative top-10 mx-auto p-5 border w-11/12 max-w-4xl shadow-lg rounded-md bg-white">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-bold text-gray-900">AI Build Board Options</h3>
+                <button id="closeAIBulkBuilder" class="text-gray-400 hover:text-gray-600"><i class="fas fa-times text-xl"></i></button>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div class="md:col-span-2">
+                    <label for="aiBulkPrompt" class="block text-sm font-medium text-gray-700 mb-2">Prompt</label>
+                    <textarea id="aiBulkPrompt" rows="3" class="w-full px-3 py-2 border border-gray-300 rounded-md" placeholder="Example: Generate common food choices for lunch"></textarea>
+                </div>
+                <div>
+                    <label for="aiBulkTotalOptions" class="block text-sm font-medium text-gray-700 mb-2">Total Options</label>
+                    <input type="number" id="aiBulkTotalOptions" min="1" max="84" value="24" class="w-full px-3 py-2 border border-gray-300 rounded-md">
+                </div>
+                <div>
+                    <label for="aiBulkOptionsPerRow" class="block text-sm font-medium text-gray-700 mb-2">Options Per Row</label>
+                    <input type="number" id="aiBulkOptionsPerRow" min="1" max="12" value="12" class="w-full px-3 py-2 border border-gray-300 rounded-md">
+                </div>
+                <div>
+                    <label for="aiBulkAfterSelection" class="block text-sm font-medium text-gray-700 mb-2">Default After Selection</label>
+                    <select id="aiBulkAfterSelection" class="w-full px-3 py-2 border border-gray-300 rounded-md">
+                        <option value="do_nothing">Do nothing (default)</option>
+                        <option value="use_ai">Use AI</option>
+                        <option value="navigate">Navigate to Target Board</option>
+                    </select>
+                </div>
+                <div id="aiBulkTargetBoardWrapper" class="hidden">
+                    <label for="aiBulkTargetBoard" class="block text-sm font-medium text-gray-700 mb-2">Target Board</label>
+                    <select id="aiBulkTargetBoard" class="w-full px-3 py-2 border border-gray-300 rounded-md"><option value="">-- Select board --</option></select>
+                </div>
+                <div>
+                    <label for="aiBulkBgColor" class="block text-sm font-medium text-gray-700 mb-2">Background Color</label>
+                    <select id="aiBulkBgColor" class="w-full px-3 py-2 border border-gray-300 rounded-md"><option value="#FFFFFF">Default</option><option value="#F9FAFB">Light Gray</option><option value="#FEF3C7">Light Yellow</option><option value="#D1FAE5">Light Green</option><option value="#DBEAFE">Light Blue</option><option value="#EDE9FE">Light Purple</option><option value="#FCE7F3">Light Pink</option><option value="#FEE2E2">Light Red</option><option value="#FFF7ED">Light Orange</option><option value="#059669">Green</option><option value="#2563EB">Blue</option><option value="#7C3AED">Purple</option><option value="#DB2777">Pink</option><option value="#DC2626">Red</option><option value="#D97706">Orange/Amber</option><option value="#1F2937">Dark Gray</option><option value="#000000">Black</option></select>
+                </div>
+            </div>
+
+            <div class="mt-4">
+                <div class="flex items-center justify-between">
+                    <h4 class="text-sm font-semibold text-gray-800">Preview</h4>
+                    <span id="aiBulkPreviewMeta" class="text-xs text-gray-500"></span>
+                </div>
+                <div id="aiBulkPreviewList" class="mt-2 max-h-52 overflow-y-auto border border-gray-200 rounded-md p-3 text-sm text-gray-700 bg-gray-50">No preview generated yet.</div>
+            </div>
+
+            <div class="flex justify-end gap-2 mt-5">
+                <button id="aiBulkPreviewBtn" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">Preview</button>
+                <button id="aiBulkApplyBtn" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700" disabled>OK</button>
+                <button id="aiBulkCancelBtn" class="px-4 py-2 bg-gray-300 text-gray-700 rounded-md hover:bg-gray-400">Cancel</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="touchchatMigrationModal" class="fixed inset-0 bg-gray-900 bg-opacity-60 overflow-y-auto h-full w-full hidden" style="z-index: 5300;">
+        <div class="relative top-5 mx-auto border w-11/12 max-w-7xl shadow-lg rounded-md bg-white">
+            <div class="flex justify-between items-center border-b px-4 py-3">
+                <h3 class="text-lg font-bold text-gray-900">AAC Migration</h3>
+                <button id="closeTouchChatMigrationModal" class="text-gray-400 hover:text-gray-600"><i class="fas fa-times text-xl"></i></button>
+            </div>
+            <iframe id="touchchatMigrationFrame" src="about:blank" class="w-full" style="height: 78vh; border: 0;" title="AAC Migration"></iframe>
+        </div>
+    </div>
+
+    <div id="notification" class="notification"></div>
+
+    <div id="translateBoardModal" class="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full hidden" style="z-index: 5300;">
+        <div class="relative top-20 mx-auto p-5 border w-11/12 max-w-4xl shadow-lg rounded-md bg-white">
+            <div class="flex justify-between items-center mb-4">
+                <h3 class="text-lg font-bold text-gray-900">Translate Board Labels</h3>
+                <button id="closeTranslateModal" class="text-gray-400 hover:text-gray-600"><i class="fas fa-times text-xl"></i></button>
+            </div>
+            <div class="mb-4">
+                <label class="block text-sm font-medium text-gray-700 mb-2">Target Language</label>
+                <select id="translateTargetLanguage" class="w-full px-3 py-2 border border-gray-300 rounded-md">
+                    <option value="">Select language...</option>
+                    <option value="es">Spanish</option>
+                    <option value="fr">French</option>
+                    <option value="de">German</option>
+                    <option value="it">Italian</option>
+                    <option value="pt">Portuguese</option>
+                    <option value="ru">Russian</option>
+                    <option value="ja">Japanese</option>
+                    <option value="zh">Chinese (Simplified)</option>
+                    <option value="ar">Arabic</option>
+                    <option value="ko">Korean</option>
+                </select>
+            </div>
+            <div id="translateResultsContainer" class="bg-gray-50 p-4 rounded-md max-h-[400px] overflow-y-auto hidden">
+                <h4 class="text-sm font-semibold mb-3">Translations:</h4>
+                <div id="translateResults"></div>
+            </div>
+            <div id="translateLoadingSpinner" class="text-center py-4 hidden">
+                <i class="fas fa-spinner fa-spin mr-2"></i>Translating...
+            </div>
+            <div class="flex justify-end gap-2 mt-4">
+                <button id="cancelTranslateModal" class="px-4 py-2 bg-gray-300 rounded-md hover:bg-gray-400">Close</button>
+                <button id="performTranslationBtn" class="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700" disabled>Translate Current Board</button>
+                <button id="performTranslateAllAiBoardsBtn" class="px-4 py-2 bg-indigo-600 text-white rounded-md hover:bg-indigo-700" disabled>Translate All AI Boards</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const GRID_ROWS = 7, GRID_COLS = 12;
+        let authToken = null, currentAacUserId = null;
+        let allBoards = [], boardSettings = {}, currentBoardData = null, currentEditingButton = null, draggedButton = null;
+        let selectedImageUrl = null, currentImageSearch = '', currentImagePage = 0, totalImagePages = 0, allImages = [];
+        let aiBulkPreviewOptions = [];
+        let showMigrationBoardsOnly = false;
+
+        document.addEventListener('DOMContentLoaded', () => {
+            setupEventListeners();
+            initializeFirebaseAndAuth();
+        });
+
+        function setupEventListeners() {
+            document.getElementById('selectBoard').addEventListener('change', handleBoardSelected);
+            document.getElementById('createNewBoardBtn').addEventListener('click', createNewBoardDraft);
+            document.getElementById('openTouchChatMigrationBtn').addEventListener('click', openTouchChatMigrationModal);
+            document.getElementById('closeTouchChatMigrationModal').addEventListener('click', closeTouchChatMigrationModal);
+            document.getElementById('switch-user-button').addEventListener('click', () => {
+                window.location.href = 'auth.html';
+            });
+            document.getElementById('logout-button').addEventListener('click', async () => {
+                try {
+                    await firebase.auth().signOut();
+                } catch (error) {
+                    console.error('Logout failed:', error);
+                }
+                window.location.href = 'auth.html';
+            });
+            document.getElementById('saveBoardBtn').addEventListener('click', saveBoard);
+            document.getElementById('deleteBoardBtn').addEventListener('click', deleteBoard);
+            document.getElementById('boardType').addEventListener('change', updateBoardModeUI);
+            document.getElementById('translateBoardBtn').addEventListener('click', openTranslateModal);
+            document.getElementById('translateAllAiBoardsBtn').addEventListener('click', openTranslateModal);
+            document.getElementById('closeTranslateModal').addEventListener('click', closeTranslateModal);
+            document.getElementById('cancelTranslateModal').addEventListener('click', closeTranslateModal);
+            document.getElementById('performTranslationBtn').addEventListener('click', performBoardTranslation);
+            document.getElementById('performTranslateAllAiBoardsBtn').addEventListener('click', performAllAiBoardsTranslation);
+            document.getElementById('setAsHomeBoard').addEventListener('change', refreshHomeBoardAssignmentUI);
+            document.getElementById('boardLabel').addEventListener('input', refreshHomeBoardAssignmentUI);
+            document.getElementById('translateTargetLanguage').addEventListener('change', () => {
+                const hasLocale = !!document.getElementById('translateTargetLanguage').value;
+                document.getElementById('performTranslationBtn').disabled = !hasLocale;
+                document.getElementById('performTranslateAllAiBoardsBtn').disabled = !hasLocale;
+            });
+            document.getElementById('aiBulkBuildBtn').addEventListener('click', openAIBulkBuilderModal);
+            document.getElementById('closeButtonEditor').addEventListener('click', closeButtonEditor);
+            document.getElementById('cancelButtonEdit').addEventListener('click', closeButtonEditor);
+            document.getElementById('saveButtonEdit').addEventListener('click', saveButtonEdit);
+            document.getElementById('clearButtonBtn').addEventListener('click', clearCurrentButton);
+            document.getElementById('showMigrationOnlyBtn').addEventListener('click', toggleMigrationBoardsFilter);
+            ['buttonText', 'speechText', 'targetBoard', 'buttonHidden', 'assignedImageUrl', 'customAudioFileUrl', 'buttonBgColor', 'temporaryNavigation'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) { el.addEventListener('input', updateButtonPreview); el.addEventListener('change', updateButtonPreview); }
+            });
+            document.getElementById('afterSelection').addEventListener('change', () => {
+                const val = document.getElementById('afterSelection').value;
+                document.getElementById('targetBoardWrapper').style.display = val === 'navigate' ? '' : 'none';
+                document.getElementById('temporaryNavigationWrapper').classList.toggle('hidden', val !== 'navigate');
+                if (val !== 'navigate') {
+                    document.getElementById('temporaryNavigation').checked = false;
+                }
+                updateButtonPreview();
+            });
+            document.getElementById('customAudioFile').addEventListener('change', uploadButtonAudioFile);
+            document.getElementById('browseImagesBtn').addEventListener('click', openImagePicker);
+            document.getElementById('clearImageBtn').addEventListener('click', clearAssignedImage);
+            document.getElementById('closeImagePicker').addEventListener('click', closeImagePicker);
+            document.getElementById('cancelImageSelection').addEventListener('click', closeImagePicker);
+            document.getElementById('selectImageBtn').addEventListener('click', selectAssignedImage);
+            document.getElementById('imageSearchBtn').addEventListener('click', searchImages);
+            document.getElementById('clearImageSearch').addEventListener('click', clearImageSearch);
+            document.getElementById('imagePrevPage').addEventListener('click', () => navigateImagePage(-1));
+            document.getElementById('imageNextPage').addEventListener('click', () => navigateImagePage(1));
+            document.getElementById('imageSearchInput').addEventListener('keypress', (e) => { if (e.key === 'Enter') searchImages(); });
+            document.getElementById('closeAIBulkBuilder').addEventListener('click', closeAIBulkBuilderModal);
+            document.getElementById('aiBulkCancelBtn').addEventListener('click', closeAIBulkBuilderModal);
+            document.getElementById('aiBulkPreviewBtn').addEventListener('click', previewAIBulkOptions);
+            document.getElementById('aiBulkApplyBtn').addEventListener('click', applyAIBulkOptions);
+            document.getElementById('aiBulkAfterSelection').addEventListener('change', handleAIBulkAfterSelectionChange);
+
+            window.addEventListener('message', (event) => {
+                if (!event || !event.data || typeof event.data !== 'object') return;
+                if (event.data.type === 'touchchat-migration-complete') {
+                    loadBoards().then(() => {
+                        if (currentBoardData && currentBoardData.id) {
+                            const boardStillExists = allBoards.some(b => b.id === currentBoardData.id);
+                            if (boardStillExists) {
+                                document.getElementById('selectBoard').value = currentBoardData.id;
+                                handleBoardSelected();
+                            }
+                        }
+                    }).catch((err) => console.warn('Reload boards after migration failed', err));
+                }
+            });
+        }
+
+        async function initializeFirebaseAndAuth() {
+            const configResponse = await fetch('/api/frontend-config');
+            const configData = await configResponse.json();
+            const firebaseConfig = configData.firebase_config || configData;
+            if (!firebaseConfig || !firebaseConfig.apiKey) throw new Error('Missing Firebase config');
+            if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+            firebase.auth().onAuthStateChanged(async (user) => {
+                if (!user) { window.location.href = '/auth.html?redirect=' + encodeURIComponent(window.location.pathname); return; }
+                currentAacUserId = sessionStorage.getItem('currentAacUserId');
+                if (!currentAacUserId) { window.location.href = 'auth.html'; return; }
+                authToken = await user.getIdToken();
+                await loadBoards();
+                const params = new URLSearchParams(window.location.search);
+                const boardId = params.get('board_id');
+                if (boardId && allBoards.some(b => b.id === boardId)) { document.getElementById('selectBoard').value = boardId; handleBoardSelected(); }
+                else if (allBoards.length > 0) {
+                    const firstEditable = allBoards.find(b => !isBoardReadOnly(b));
+                    document.getElementById('selectBoard').value = firstEditable ? firstEditable.id : allBoards[0].id;
+                    handleBoardSelected();
+                }
+            });
+        }
+
+        function getAuthHeaders(contentType = 'application/json') {
+            const headers = {};
+            if (contentType) headers['Content-Type'] = contentType;
+            if (authToken) headers['Authorization'] = 'Bearer ' + authToken;
+            if (currentAacUserId) headers['X-User-ID'] = currentAacUserId;
+            const adminTargetAccountId = sessionStorage.getItem('adminTargetAccountId');
+            if (adminTargetAccountId) headers['X-Admin-Target-Account'] = adminTargetAccountId;
+            return headers;
+        }
+
+        async function loadBoards() {
+            const response = await fetch('/api/tap-interface/boards', { headers: getAuthHeaders() });
+            if (!response.ok) throw new Error('Failed to load boards');
+            const data = await response.json();
+            allBoards = Array.isArray(data.boards) ? data.boards : [];
+            boardSettings = data.board_settings || {};
+            populateBoardDropdown();
+        }
+
+        function getBoardsSortedByLabel(boards) {
+            if (!Array.isArray(boards)) return [];
+            return [...boards].sort((a, b) => {
+                const aLabel = String((a && (a.label || a.id)) || '').trim().toLowerCase();
+                const bLabel = String((b && (b.label || b.id)) || '').trim().toLowerCase();
+                return aLabel.localeCompare(bLabel);
+            });
+        }
+
+        function populateBoardDropdown() {
+            const select = document.getElementById('selectBoard');
+            const currentValue = select.value;
+            select.innerHTML = '<option value="">-- Select Board --</option>';
+            const editableBoards = allBoards.filter(board => !isBoardReadOnly(board));
+            const migrationBoards = editableBoards.filter(board => board.created_during_migration && Array.isArray(board.buttons) && board.buttons.length === 0);
+            const filterBtn = document.getElementById('showMigrationOnlyBtn');
+            filterBtn.classList.toggle('hidden', migrationBoards.length === 0);
+            const boardsToShow = getBoardsSortedByLabel(showMigrationBoardsOnly ? migrationBoards : editableBoards);
+            boardsToShow.forEach(board => {
+                const option = document.createElement('option');
+                option.value = board.id;
+                const tags = [];
+                if (board.id === boardSettings.home_board_id) tags.push('home');
+                if (board.created_during_migration && Array.isArray(board.buttons) && board.buttons.length === 0) tags.push('migration - needs config');
+                option.textContent = `${board.label || board.id} (${board.board_type || 'ai'})${tags.length ? ' [' + tags.join(', ') + ']' : ''}`;
+                select.appendChild(option);
+            });
+            if (currentValue && boardsToShow.some(b => b.id === currentValue)) {
+                select.value = currentValue;
+            } else if (boardsToShow.length > 0) {
+                select.value = boardsToShow[0].id;
+            }
+        }
+
+        function toggleMigrationBoardsFilter() {
+            showMigrationBoardsOnly = !showMigrationBoardsOnly;
+            const btn = document.getElementById('showMigrationOnlyBtn');
+            btn.textContent = showMigrationBoardsOnly ? 'Show All Boards' : 'Show Migration Boards';
+            btn.classList.toggle('bg-purple-200', showMigrationBoardsOnly);
+            btn.classList.toggle('bg-purple-100', !showMigrationBoardsOnly);
+            btn.classList.toggle('text-purple-900', showMigrationBoardsOnly);
+            btn.classList.toggle('text-purple-700', !showMigrationBoardsOnly);
+            populateBoardDropdown();
+            handleBoardSelected();
+        }
+
+        function isBoardReadOnly(board) {
+            if (!board) return false;
+            const source = String(board.source || '').toLowerCase();
+            const boardType = String(board.board_type || '').toLowerCase();
+            return source === 'legacy_category' || boardType === 'system';
+        }
+
+        function handleBoardSelected() {
+            const boardId = document.getElementById('selectBoard').value;
+            if (!boardId) { currentBoardData = null; clearBoardForm(); return; }
+            const board = allBoards.find(b => b.id === boardId);
+            if (!board) return;
+            currentBoardData = JSON.parse(JSON.stringify(board));
+            bindBoardToForm();
+            renderButtonGrid();
+            updateBoardModeUI();
+            applyReadOnlyState();
+        }
+
+        function clearBoardForm() {
+            currentBoardData = null;
+            document.getElementById('boardLabel').value = '';
+            document.getElementById('boardType').value = 'ai';
+            document.getElementById('llmPrompt').value = '';
+            document.getElementById('promptTopic').value = '';
+            document.getElementById('promptExamples').value = '';
+            document.getElementById('promptExclusions').value = '';
+            document.getElementById('setAsHomeBoard').checked = false;
+            document.getElementById('buttonGrid').innerHTML = '';
+            document.getElementById('readOnlyHint').classList.add('hidden');
+            document.getElementById('gridReadOnlyOverlay').classList.add('hidden');
+            refreshHomeBoardAssignmentUI();
+        }
+
+        function createNewBoardDraft() {
+            currentBoardData = { id: '', label: 'New Board', board_type: 'static', source: 'custom', owner_scope: 'user', hidden: false, llm_prompt: '', prompt_topic: '', prompt_examples: '', prompt_exclusions: '', static_options: null, buttons: [] };
+            document.getElementById('selectBoard').value = '';
+            bindBoardToForm();
+            renderButtonGrid();
+            updateBoardModeUI();
+            applyReadOnlyState();
+        }
+
+        function getCurrentHomeBoardLabel() {
+            const homeBoardId = String(boardSettings?.home_board_id || '').trim();
+            if (!homeBoardId) return '';
+            const homeBoard = Array.isArray(allBoards) ? allBoards.find(board => String(board?.id || '') === homeBoardId) : null;
+            return String(homeBoard?.label || homeBoardId).trim();
+        }
+
+        function refreshHomeBoardAssignmentUI() {
+            const currentStatusEl = document.getElementById('homeBoardCurrentStatus');
+            const changeStatusEl = document.getElementById('homeBoardChangeStatus');
+            const setAsHomeEl = document.getElementById('setAsHomeBoard');
+            if (!currentStatusEl || !changeStatusEl || !setAsHomeEl) return;
+
+            const currentHomeId = String(boardSettings?.home_board_id || '').trim();
+            const currentHomeLabel = getCurrentHomeBoardLabel();
+            const selectedBoardId = String(currentBoardData?.id || '').trim();
+            const selectedBoardLabel = String(document.getElementById('boardLabel')?.value || currentBoardData?.label || 'this board').trim() || 'this board';
+
+            currentStatusEl.textContent = currentHomeLabel
+                ? `Current Home Board: ${currentHomeLabel}`
+                : 'Current Home Board: none selected';
+
+            const isCurrentlyHome = !!selectedBoardId && selectedBoardId === currentHomeId;
+            if (setAsHomeEl.checked) {
+                if (isCurrentlyHome) {
+                    changeStatusEl.textContent = 'This board is already set as Home.';
+                } else if (currentHomeLabel) {
+                    changeStatusEl.textContent = `Saving will replace "${currentHomeLabel}" with "${selectedBoardLabel}" as Home.`;
+                } else {
+                    changeStatusEl.textContent = `Saving will set "${selectedBoardLabel}" as the Home board.`;
+                }
+                changeStatusEl.classList.remove('hidden');
+            } else {
+                changeStatusEl.classList.add('hidden');
+                changeStatusEl.textContent = '';
+            }
+        }
+
+        function bindBoardToForm() {
+            if (!currentBoardData) return;
+            document.getElementById('boardLabel').value = currentBoardData.label || '';
+            const bt = String(currentBoardData.board_type || 'ai').toLowerCase();
+            if (bt === 'static') document.getElementById('boardType').value = 'static';
+            else if (bt === 'system') document.getElementById('boardType').value = 'system';
+            else document.getElementById('boardType').value = 'ai';
+            document.getElementById('llmPrompt').value = currentBoardData.llm_prompt || '';
+            document.getElementById('promptTopic').value = currentBoardData.prompt_topic || '';
+            document.getElementById('promptExamples').value = currentBoardData.prompt_examples || '';
+            document.getElementById('promptExclusions').value = currentBoardData.prompt_exclusions || '';
+            document.getElementById('setAsHomeBoard').checked = (currentBoardData.id && currentBoardData.id === boardSettings.home_board_id);
+            refreshHomeBoardAssignmentUI();
+        }
+
+        function updateBoardModeUI() {
+            const boardType = document.getElementById('boardType').value;
+            const aiSection = document.getElementById('aiSettingsSection');
+            const gridSection = document.getElementById('gridSection');
+            if (boardType === 'ai') { aiSection.classList.remove('hidden'); gridSection.classList.add('hidden'); }
+            else { aiSection.classList.add('hidden'); gridSection.classList.remove('hidden'); }
+            // Re-render so click/drag listeners match the current board type.
+            if (currentBoardData) renderButtonGrid();
+        }
+
+        function applyReadOnlyState() {
+            const isReadOnly = currentBoardData && isBoardReadOnly(currentBoardData);
+            document.getElementById('readOnlyHint').classList.toggle('hidden', !isReadOnly);
+            document.getElementById('gridReadOnlyOverlay').classList.toggle('hidden', !isReadOnly);
+            document.getElementById('saveBoardBtn').disabled = !!isReadOnly;
+            document.getElementById('deleteBoardBtn').disabled = !!isReadOnly;
+            ['boardLabel', 'boardType', 'llmPrompt', 'promptTopic', 'promptExamples', 'promptExclusions', 'setAsHomeBoard'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) el.disabled = !!isReadOnly;
+            });
+            refreshHomeBoardAssignmentUI();
+        }
+
+        function findButtonAtPosition(row, col) {
+            if (!currentBoardData || !Array.isArray(currentBoardData.buttons)) return null;
+            return currentBoardData.buttons.find(btn => Number(btn.row) === row && Number(btn.col) === col);
+        }
+
+        function renderButtonGrid() {
+            const grid = document.getElementById('buttonGrid');
+            grid.innerHTML = '';
+            if (!currentBoardData) return;
+            for (let row = 0; row < GRID_ROWS; row++) {
+                for (let col = 0; col < GRID_COLS; col++) {
+                    const buttonDiv = document.createElement('div');
+                    buttonDiv.className = 'visual-button';
+                    buttonDiv.dataset.row = String(row);
+                    buttonDiv.dataset.col = String(col);
+                    const buttonData = findButtonAtPosition(row, col);
+                    if (buttonData && buttonData.label) {
+                        buttonDiv.classList.add('has-content');
+                        if (buttonData.after_selection === 'navigate' || buttonData.action_type === 'navigate') buttonDiv.classList.add('has-navigation');
+                        if (buttonData.background_color && buttonData.background_color !== '#FFFFFF') { buttonDiv.style.backgroundColor = buttonData.background_color; }
+                        if (buttonData.text_color && buttonData.text_color !== '#000000') { buttonDiv.style.color = buttonData.text_color; }
+                        if (buttonData.image_url) {
+                            buttonDiv.style.backgroundImage = `url('${buttonData.image_url}')`;
+                            buttonDiv.style.backgroundSize = 'cover';
+                            buttonDiv.style.backgroundPosition = 'center';
+                            buttonDiv.style.color = 'white';
+                            buttonDiv.style.textShadow = '1px 1px 2px rgba(0,0,0,0.8)';
+                            buttonDiv.innerHTML = `<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(0,0,0,0.65);padding:4px;font-size:12px;">${escapeHtml(buttonData.label)}</div>`;
+                        } else buttonDiv.textContent = buttonData.label;
+                        if (buttonData.after_selection === 'navigate' || buttonData.action_type === 'navigate') {
+                            const i = document.createElement('div');
+                            i.className = 'button-indicator indicator-nav';
+                            if (buttonData.temporary_navigation) {
+                                i.textContent = '↩';
+                                i.title = 'Temporary navigation (return after one selection)';
+                            } else {
+                                i.textContent = '→';
+                                i.title = 'Navigates to board';
+                            }
+                            buttonDiv.appendChild(i);
+                        }
+                        else if (buttonData.after_selection === 'use_ai') { const i = document.createElement('div'); i.className = 'button-indicator'; i.style.cssText = 'background:#7c3aed;color:white;'; i.textContent = '✦'; i.title = 'AI generates next options'; buttonDiv.appendChild(i); }
+                        else if (buttonData.action_type === 'audio') { const i = document.createElement('div'); i.className = 'button-indicator indicator-audio'; i.textContent = '♪'; i.title = 'Plays custom audio'; buttonDiv.appendChild(i); }
+                        else if (buttonData.speech_text) { const i = document.createElement('div'); i.className = 'button-indicator indicator-speech'; i.textContent = 'S'; i.title = 'Has speech text'; buttonDiv.appendChild(i); }
+                    } else { buttonDiv.textContent = 'Undefined'; buttonDiv.classList.add('undefined'); }
+                    if (!isBoardReadOnly(currentBoardData) && document.getElementById('boardType').value !== 'ai') {
+                        buttonDiv.addEventListener('click', () => openButtonEditor(row, col));
+                        buttonDiv.draggable = true;
+                        buttonDiv.addEventListener('dragstart', handleDragStart);
+                        buttonDiv.addEventListener('dragover', handleDragOver);
+                        buttonDiv.addEventListener('drop', handleDrop);
+                        buttonDiv.addEventListener('dragend', handleDragEnd);
+                    }
+                    grid.appendChild(buttonDiv);
+                }
+            }
+        }
+
+        function handleDragStart(e) { draggedButton = { row: parseInt(e.target.dataset.row, 10), col: parseInt(e.target.dataset.col, 10) }; e.target.classList.add('dragging'); }
+        function handleDragOver(e) { e.preventDefault(); e.target.classList.add('drop-target'); }
+        function handleDrop(e) { e.preventDefault(); e.target.classList.remove('drop-target'); if (!draggedButton) return; const targetRow = parseInt(e.target.dataset.row, 10); const targetCol = parseInt(e.target.dataset.col, 10); if (Number.isNaN(targetRow) || Number.isNaN(targetCol)) return; if (draggedButton.row === targetRow && draggedButton.col === targetCol) return; swapButtons(draggedButton.row, draggedButton.col, targetRow, targetCol); renderButtonGrid(); }
+        function handleDragEnd(e) { e.target.classList.remove('dragging'); document.querySelectorAll('.drop-target').forEach(el => el.classList.remove('drop-target')); draggedButton = null; }
+
+        function swapButtons(fromRow, fromCol, toRow, toCol) {
+            if (!currentBoardData || !Array.isArray(currentBoardData.buttons)) return;
+            const fromButton = findButtonAtPosition(fromRow, fromCol);
+            const toButton = findButtonAtPosition(toRow, toCol);
+            currentBoardData.buttons = currentBoardData.buttons.filter(btn => { const r = Number(btn.row); const c = Number(btn.col); return !(r === fromRow && c === fromCol) && !(r === toRow && c === toCol); });
+            if (fromButton) { fromButton.row = toRow; fromButton.col = toCol; currentBoardData.buttons.push(fromButton); }
+            if (toButton) { toButton.row = fromRow; toButton.col = fromCol; currentBoardData.buttons.push(toButton); }
+        }
+
+        function populateTargetBoardDropdown(selectedValue = '') {
+            const select = document.getElementById('targetBoard');
+            select.innerHTML = '<option value="">No board navigation</option>';
+            const sortedBoards = getBoardsSortedByLabel(allBoards);
+            sortedBoards.forEach(board => { const option = document.createElement('option'); option.value = board.id; option.textContent = board.label || board.id; if (board.id === selectedValue) option.selected = true; select.appendChild(option); });
+        }
+
+        function openButtonEditor(row, col) {
+            currentEditingButton = { row, col };
+            const buttonData = findButtonAtPosition(row, col) || { id: '', label: '', row, col, speech_text: null, after_selection: 'do_nothing', target_board_id: null, temporary_navigation: false, custom_audio_file: null, image_url: null, background_color: '#FFFFFF', text_color: '#000000', hidden: false };
+            document.getElementById('buttonText').value = buttonData.label || '';
+            document.getElementById('speechText').value = buttonData.speech_text || '';
+            document.getElementById('buttonHidden').checked = !!buttonData.hidden;
+            document.getElementById('assignedImageUrl').value = buttonData.image_url || '';
+            document.getElementById('customAudioFileUrl').value = buttonData.custom_audio_file || '';
+            document.getElementById('buttonBgColor').value = buttonData.background_color || '#FFFFFF';
+            // Derive after_selection from stored field or legacy action_type
+            let afterSel = buttonData.after_selection || (buttonData.action_type === 'navigate' ? 'navigate' : 'do_nothing');
+            document.getElementById('afterSelection').value = afterSel;
+            document.getElementById('targetBoardWrapper').style.display = afterSel === 'navigate' ? '' : 'none';
+            document.getElementById('temporaryNavigationWrapper').classList.toggle('hidden', afterSel !== 'navigate');
+            document.getElementById('temporaryNavigation').checked = (afterSel === 'navigate') && !!buttonData.temporary_navigation;
+            populateTargetBoardDropdown(buttonData.target_board_id || '');
+            updateAssignedImagePreview(buttonData.image_url || '');
+            const audioStatus = document.getElementById('audioUploadStatus');
+            if (buttonData.custom_audio_file) { audioStatus.className = 'text-xs mt-1 text-green-600'; audioStatus.textContent = 'Audio file assigned'; audioStatus.classList.remove('hidden'); }
+            else audioStatus.classList.add('hidden');
+            document.getElementById('positionInfo').textContent = `Row ${row + 1}, Column ${col + 1}`;
+            // Modifier state info (read-only, from TouchChat import)
+            const modifierInfoRow = document.getElementById('modifierInfoRow');
+            const hasModifier = buttonData.modifier_trigger_id || (buttonData.modifier_variants && Object.keys(buttonData.modifier_variants).length > 0);
+            if (hasModifier) {
+                modifierInfoRow.classList.remove('hidden');
+                document.getElementById('modifierTriggerInfo').textContent = buttonData.modifier_trigger_id ? `modifier ${buttonData.modifier_trigger_id}` : 'No';
+                const variantsList = document.getElementById('modifierVariantsList');
+                variantsList.innerHTML = '';
+                const variants = buttonData.modifier_variants || {};
+                Object.entries(variants).forEach(([modId, v]) => {
+                    const li = document.createElement('li');
+                    const triggerText = v.modifier_trigger_id ? ` → triggers modifier ${v.modifier_trigger_id}` : '';
+                    li.textContent = `Modifier ${modId}: "${v.label || ''}"`  + (v.speech_text && v.speech_text !== v.label ? ` (says "${v.speech_text}")` : '') + triggerText;
+                    variantsList.appendChild(li);
+                });
+                document.getElementById('modifierVariantsWrapper').classList.toggle('hidden', Object.keys(variants).length === 0);
+            } else {
+                modifierInfoRow.classList.add('hidden');
+            }
+            updateButtonPreview();
+            document.getElementById('buttonEditorModal').classList.remove('hidden');
+        }
+
+        function closeButtonEditor() { document.getElementById('buttonEditorModal').classList.add('hidden'); currentEditingButton = null; }
+        function saveButtonEdit() {
+            if (!currentEditingButton || !currentBoardData) return;
+            const label = document.getElementById('buttonText').value.trim();
+            const speechText = document.getElementById('speechText').value.trim();
+            const afterSelection = document.getElementById('afterSelection').value;
+            const targetBoard = afterSelection === 'navigate' ? document.getElementById('targetBoard').value.trim() : '';
+            const temporaryNavigation = (afterSelection === 'navigate') && document.getElementById('temporaryNavigation').checked;
+            const customAudio = document.getElementById('customAudioFileUrl').value.trim();
+            const imageUrl = document.getElementById('assignedImageUrl').value.trim();
+            const bgColor = document.getElementById('buttonBgColor').value.trim() || '#FFFFFF';
+            const existingButton = findButtonAtPosition(currentEditingButton.row, currentEditingButton.col);
+            const textColor = (existingButton && existingButton.text_color) ? existingButton.text_color : '#000000';
+            const modifierTriggerId = existingButton ? (existingButton.modifier_trigger_id ?? null) : null;
+            const modifierVariants = (existingButton && existingButton.modifier_variants && typeof existingButton.modifier_variants === 'object')
+                ? existingButton.modifier_variants
+                : {};
+            const hidden = document.getElementById('buttonHidden').checked;
+            currentBoardData.buttons = (currentBoardData.buttons || []).filter(btn => { const r = Number(btn.row); const c = Number(btn.col); return !(r === currentEditingButton.row && c === currentEditingButton.col); });
+            if (label || speechText || targetBoard || customAudio || imageUrl) {
+                const actionType = customAudio ? 'audio' : 'announce';
+                currentBoardData.buttons.push({ id: `btn_${currentEditingButton.row}_${currentEditingButton.col}`, label: label || `Button ${currentEditingButton.row + 1}-${currentEditingButton.col + 1}`, row: currentEditingButton.row, col: currentEditingButton.col, speech_text: speechText || null, modifier_trigger_id: modifierTriggerId, modifier_variants: modifierVariants, after_selection: afterSelection, action_type: actionType, target_board_id: targetBoard || null, temporary_navigation: temporaryNavigation, custom_audio_file: customAudio || null, special_function: null, image_url: imageUrl || null, background_color: bgColor, text_color: textColor, hidden });
+            }
+            renderButtonGrid();
+            closeButtonEditor();
+        }
+
+        function clearCurrentButton() {
+            if (!currentEditingButton || !currentBoardData) return;
+            currentBoardData.buttons = (currentBoardData.buttons || []).filter(btn => { const r = Number(btn.row); const c = Number(btn.col); return !(r === currentEditingButton.row && c === currentEditingButton.col); });
+            renderButtonGrid();
+            closeButtonEditor();
+        }
+
+        function updateButtonPreview() {
+            const preview = document.getElementById('buttonPreview');
+            const text = document.getElementById('buttonText').value.trim();
+            const speechText = document.getElementById('speechText').value.trim();
+            const targetBoard = document.getElementById('targetBoard').value.trim();
+            const customAudio = document.getElementById('customAudioFileUrl').value.trim();
+            const imageUrl = document.getElementById('assignedImageUrl').value.trim();
+            const bgColor = document.getElementById('buttonBgColor').value || '#FFFFFF';
+            if (text) {
+                let html = `<div class="visual-button has-content" style="background-color:${bgColor};">`;
+                if (imageUrl) {
+                    html += `<div style="position: relative; width: 100%; height: 80px; background-image: url('${imageUrl}'); background-size: cover; background-position: center; border-radius: 6px;">`;
+                    html += `<div style="position: absolute; bottom: 0; left: 0; right: 0; background: rgba(0,0,0,0.7); color: white; padding: 4px; font-size: 12px; text-align: center;">${escapeHtml(text)}</div>`;
+                    html += '</div>';
+                } else html += escapeHtml(text);
+                html += '</div>';
+                preview.innerHTML = html;
+            } else preview.innerHTML = '<div class="visual-button undefined">Undefined</div>';
+            const afterSelection = document.getElementById('afterSelection').value;
+            const temporaryNavigation = document.getElementById('temporaryNavigation').checked;
+            const actionText = afterSelection === 'navigate'
+                ? (temporaryNavigation ? 'Navigate to Target Board, then return after one selection' : 'Navigate to Target Board')
+                : afterSelection === 'use_ai'
+                    ? 'Use AI to generate next options'
+                    : 'Do nothing (stay on current board)';
+            document.getElementById('buttonTypeInfo').textContent = afterSelection;
+            document.getElementById('actionInfo').textContent = actionText;
+        }
+
+        function openAIBulkBuilderModal() {
+            if (!currentBoardData) { showNotification('Select or create a board first', 'error'); return; }
+            if (isBoardReadOnly(currentBoardData)) { showNotification('This board is read-only', 'error'); return; }
+            if (document.getElementById('boardType').value === 'ai') { showNotification('Switch Board Mode to Static to build button options', 'error'); return; }
+            aiBulkPreviewOptions = [];
+            document.getElementById('aiBulkPreviewList').textContent = 'No preview generated yet.';
+            document.getElementById('aiBulkPreviewMeta').textContent = '';
+            document.getElementById('aiBulkApplyBtn').disabled = true;
+            populateAIBulkTargetBoardDropdown();
+            handleAIBulkAfterSelectionChange();
+            document.getElementById('aiBulkBuilderModal').classList.remove('hidden');
+        }
+
+        function closeAIBulkBuilderModal() {
+            document.getElementById('aiBulkBuilderModal').classList.add('hidden');
+        }
+
+        function openTouchChatMigrationModal() {
+            const modal = document.getElementById('touchchatMigrationModal');
+            const iframe = document.getElementById('touchchatMigrationFrame');
+            iframe.src = 'touchchat_migration.html?v=' + Date.now();
+            modal.classList.remove('hidden');
+        }
+
+        function closeTouchChatMigrationModal() {
+            const modal = document.getElementById('touchchatMigrationModal');
+            const iframe = document.getElementById('touchchatMigrationFrame');
+            iframe.src = 'about:blank';
+            modal.classList.add('hidden');
+        }
+
+        function handleAIBulkAfterSelectionChange() {
+            const afterSelection = document.getElementById('aiBulkAfterSelection').value;
+            document.getElementById('aiBulkTargetBoardWrapper').classList.toggle('hidden', afterSelection !== 'navigate');
+        }
+
+        function populateAIBulkTargetBoardDropdown(selectedValue = '') {
+            const select = document.getElementById('aiBulkTargetBoard');
+            select.innerHTML = '<option value="">-- Select board --</option>';
+            const sortedBoards = getBoardsSortedByLabel(allBoards);
+            sortedBoards.forEach(board => {
+                const option = document.createElement('option');
+                option.value = board.id;
+                option.textContent = board.label || board.id;
+                if (board.id === selectedValue) option.selected = true;
+                select.appendChild(option);
+            });
+        }
+
+        function normalizeAIBulkGeneratedOptions(rawData, maxCount) {
+            let source = [];
+            
+            // Handle different response structures
+            if (Array.isArray(rawData)) {
+                source = rawData;
+            } else if (typeof rawData === 'object' && rawData !== null) {
+                // If it's an object, try to extract an array from it
+                // Look for common keys that might contain the array
+                const arrayKeys = ['options', 'data', 'response', 'items', 'choices'];
+                for (const key of arrayKeys) {
+                    if (Array.isArray(rawData[key])) {
+                        source = rawData[key];
+                        console.log(`Extracted array from key "${key}"`);
+                        break;
+                    }
+                }
+                // If still no array found, and there are values that are arrays, use the first one
+                if (source.length === 0) {
+                    for (const [key, value] of Object.entries(rawData)) {
+                        if (Array.isArray(value) && value.length > 0) {
+                            source = value;
+                            console.log(`Extracted array from dynamic key "${key}"`);
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            const seen = new Set();
+            const normalized = [];
+            source.forEach((item, idx) => {
+                const text = (typeof item === 'string')
+                    ? item.trim()
+                    : String(item?.option || item?.text || item?.summary || '').trim();
+                if (!text) {
+                    console.warn(`Option ${idx} has no text:`, item);
+                    return;
+                }
+                const key = text.toLowerCase();
+                if (seen.has(key)) {
+                    console.warn(`Duplicate option skipped: ${text}`);
+                    return;
+                }
+                seen.add(key);
+                normalized.push(text);
+            });
+            
+            console.log(`Normalized ${source.length} raw items → ${normalized.length} unique options (max: ${maxCount})`);
+            return normalized.slice(0, maxCount);
+        }
+
+        async function previewAIBulkOptions() {
+            const prompt = document.getElementById('aiBulkPrompt').value.trim();
+            const totalOptions = Math.min(84, Math.max(1, Number(document.getElementById('aiBulkTotalOptions').value) || 0));
+            const perRow = Math.min(12, Math.max(1, Number(document.getElementById('aiBulkOptionsPerRow').value) || 0));
+            if (!prompt) { showNotification('Enter a prompt first', 'error'); return; }
+            if (!totalOptions || !perRow) { showNotification('Enter valid option counts', 'error'); return; }
+
+            const previewList = document.getElementById('aiBulkPreviewList');
+            const previewMeta = document.getElementById('aiBulkPreviewMeta');
+            const previewBtn = document.getElementById('aiBulkPreviewBtn');
+            const applyBtn = document.getElementById('aiBulkApplyBtn');
+            previewList.textContent = 'Generating preview...';
+            previewMeta.textContent = '';
+            previewBtn.disabled = true;
+            applyBtn.disabled = true;
+
+            try {
+                const enhancedPrompt = `CRITICAL: Generate EXACTLY ${totalOptions} UNIQUE board button labels for AAC communication: ${prompt}\n\nREQUIREMENTS:\n1. Generate at least ${totalOptions} distinct, practical, usable options (NOT fewer)\n2. Each option should be unique - NO duplicates at all\n3. Each option under 5 words when possible, but prioritize clarity\n4. Return as JSON array of objects with an "option" key\n5. Each object MUST have at least an "option" key with the label text\n\nBE VERY EXPLICIT: If asked for ${totalOptions} options, return ${totalOptions} different options. Do not skimp on the count.\nReturn ONLY the JSON array - nothing else.`;
+                const response = await fetch('/llm', {
+                    method: 'POST',
+                    headers: getAuthHeaders(),
+                    body: JSON.stringify({ count: totalOptions, prompt: enhancedPrompt, response_format: 'json' }),
+                });
+                if (!response.ok) {
+                    const errText = await response.text();
+                    throw new Error(errText || `HTTP ${response.status}`);
+                }
+                const data = await response.json();
+                console.log('Raw LLM response:', data, 'Type:', typeof data, 'Is Array:', Array.isArray(data));
+                aiBulkPreviewOptions = normalizeAIBulkGeneratedOptions(data, totalOptions);
+                console.log('Normalized options:', aiBulkPreviewOptions, 'Count:', aiBulkPreviewOptions.length);
+                if (!aiBulkPreviewOptions.length) {
+                    previewList.textContent = 'No options returned. Try a different prompt.';
+                    showNotification('No preview options returned', 'error');
+                    return;
+                }
+                previewList.innerHTML = `<ol class="list-decimal ml-5 space-y-1">${aiBulkPreviewOptions.map(opt => `<li>${escapeHtml(opt)}</li>`).join('')}</ol>`;
+                previewMeta.textContent = `${aiBulkPreviewOptions.length} option(s), ${perRow} per row`;
+                applyBtn.disabled = false;
+            } catch (error) {
+                console.error(error);
+                previewList.textContent = 'Preview failed. Please try again.';
+                showNotification('Preview failed: ' + error.message, 'error');
+            } finally {
+                previewBtn.disabled = false;
+            }
+        }
+
+        function findFirstCompletelyEmptyRow(buttons) {
+            const list = Array.isArray(buttons) ? buttons : [];
+            for (let row = 0; row < GRID_ROWS; row++) {
+                const hasAny = list.some(btn => Number(btn.row) === row && !!String(btn.label || '').trim());
+                if (!hasAny) return row;
+            }
+            return -1;
+        }
+
+        function buildGeneratedButtonPayload(label, row, col, config) {
+            const actionType = config.afterSelection === 'navigate' ? 'navigate' : 'announce';
+            return {
+                id: `btn_${row}_${col}_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+                label,
+                row,
+                col,
+                speech_text: label,
+                after_selection: config.afterSelection,
+                action_type: actionType,
+                target_board_id: config.afterSelection === 'navigate' ? config.targetBoardId : null,
+                temporary_navigation: false,
+                custom_audio_file: null,
+                special_function: null,
+                image_url: null,
+                background_color: config.backgroundColor,
+                text_color: '#000000',
+                hidden: false,
+            };
+        }
+
+        function applyAIBulkOptions() {
+            if (!currentBoardData || isBoardReadOnly(currentBoardData)) return;
+            if (!aiBulkPreviewOptions.length) { showNotification('Preview options first', 'error'); return; }
+
+            const perRow = Math.min(12, Math.max(1, Number(document.getElementById('aiBulkOptionsPerRow').value) || 1));
+            const afterSelection = document.getElementById('aiBulkAfterSelection').value;
+            const targetBoardId = document.getElementById('aiBulkTargetBoard').value.trim();
+            const backgroundColor = document.getElementById('aiBulkBgColor').value.trim() || '#FFFFFF';
+            if (afterSelection === 'navigate' && !targetBoardId) {
+                showNotification('Select a target board for Navigate', 'error');
+                return;
+            }
+
+            const existingButtons = Array.isArray(currentBoardData.buttons) ? currentBoardData.buttons : [];
+            const hasExistingDefined = existingButtons.some(btn => !!String(btn.label || '').trim());
+            let mode = 'replace';
+            if (hasExistingDefined) {
+                const choice = window.prompt('Existing buttons found. Type "add" to add below existing rows, or "replace" to replace existing buttons.', 'add');
+                if (!choice) return;
+                const normalizedChoice = choice.trim().toLowerCase();
+                if (normalizedChoice !== 'add' && normalizedChoice !== 'replace') {
+                    showNotification('Please enter add or replace', 'error');
+                    return;
+                }
+                mode = normalizedChoice;
+            }
+
+            if (mode === 'replace') {
+                currentBoardData.buttons = [];
+            }
+
+            const workingButtons = Array.isArray(currentBoardData.buttons) ? currentBoardData.buttons : [];
+            const startRow = mode === 'add' ? findFirstCompletelyEmptyRow(workingButtons) : 0;
+            if (startRow < 0) {
+                showNotification('No empty row available to add options', 'error');
+                return;
+            }
+
+            const slots = [];
+            for (let row = startRow; row < GRID_ROWS; row++) {
+                for (let col = 0; col < perRow; col++) {
+                    const occupied = workingButtons.some(btn => Number(btn.row) === row && Number(btn.col) === col && !!String(btn.label || '').trim());
+                    if (!occupied) slots.push({ row, col });
+                }
+            }
+            if (!slots.length) {
+                showNotification('No space available for generated options', 'error');
+                return;
+            }
+
+            const applyCount = Math.min(aiBulkPreviewOptions.length, slots.length);
+            const bulkConfig = { afterSelection, targetBoardId, backgroundColor };
+            for (let i = 0; i < applyCount; i++) {
+                const slot = slots[i];
+                const label = aiBulkPreviewOptions[i];
+                workingButtons.push(buildGeneratedButtonPayload(label, slot.row, slot.col, bulkConfig));
+            }
+
+            currentBoardData.buttons = workingButtons;
+            renderButtonGrid();
+            closeAIBulkBuilderModal();
+            if (applyCount < aiBulkPreviewOptions.length) {
+                showNotification(`Applied ${applyCount} options (grid full)`, 'success');
+            } else {
+                showNotification(`Applied ${applyCount} options`, 'success');
+            }
+        }
+
+        async function saveBoard() {
+            if (!currentBoardData) { showNotification('Select or create a board first', 'error'); return; }
+            if (isBoardReadOnly(currentBoardData)) { showNotification('This board is read-only', 'error'); return; }
+            const boardType = document.getElementById('boardType').value;
+            const buttons = boardType === 'ai' ? [] : (currentBoardData.buttons || []);
+            const payload = {
+                label: document.getElementById('boardLabel').value.trim() || 'Untitled Board',
+                board_type: boardType,
+                owner_scope: 'user',
+                hidden: false,
+                llm_prompt: boardType === 'ai' ? (document.getElementById('llmPrompt').value.trim() || null) : null,
+                prompt_category: null,
+                prompt_topic: boardType === 'ai' ? (document.getElementById('promptTopic').value.trim() || null) : null,
+                prompt_examples: boardType === 'ai' ? (document.getElementById('promptExamples').value.trim() || null) : null,
+                prompt_exclusions: boardType === 'ai' ? (document.getElementById('promptExclusions').value.trim() || null) : null,
+                static_options: null,
+                special_function: null,
+                default_columns: 12,
+                max_rows: 7,
+                buttons: buttons,
+                set_as_home: !!document.getElementById('setAsHomeBoard').checked,
+                created_during_migration: (currentBoardData.created_during_migration && buttons.length === 0) ? true : false,
+            };
+            try {
+                let response;
+                if (currentBoardData.id) response = await fetch('/api/tap-interface/boards/' + encodeURIComponent(currentBoardData.id), { method: 'PUT', headers: getAuthHeaders(), body: JSON.stringify(payload) });
+                else response = await fetch('/api/tap-interface/boards', { method: 'POST', headers: getAuthHeaders(), body: JSON.stringify(payload) });
+                if (!response.ok) { const err = await response.json().catch(() => ({})); throw new Error(err.detail || `HTTP ${response.status}`); }
+                const body = await response.json();
+                boardSettings = body.board_settings || boardSettings;
+                await loadBoards();
+                if (body.board && body.board.id) { document.getElementById('selectBoard').value = body.board.id; handleBoardSelected(); }
+                showNotification('Board saved', 'success');
+            } catch (error) { console.error(error); showNotification('Save failed: ' + error.message, 'error'); }
+        }
+
+        async function deleteBoard() {
+            if (!currentBoardData || !currentBoardData.id) { showNotification('Select an existing board first', 'error'); return; }
+            if (isBoardReadOnly(currentBoardData)) { showNotification('This board is read-only', 'error'); return; }
+            if (!confirm(`Delete board "${currentBoardData.label || currentBoardData.id}"?`)) return;
+            try {
+                const response = await fetch('/api/tap-interface/boards/' + encodeURIComponent(currentBoardData.id), { method: 'DELETE', headers: getAuthHeaders(null) });
+                if (!response.ok) { const err = await response.json().catch(() => ({})); throw new Error(err.detail || `HTTP ${response.status}`); }
+                currentBoardData = null;
+                await loadBoards();
+                clearBoardForm();
+                showNotification('Board deleted', 'success');
+            } catch (error) { console.error(error); showNotification('Delete failed: ' + error.message, 'error'); }
+        }
+
+        function openTranslateModal() {
+            if (!currentBoardData) { showNotification('Select a board first', 'error'); return; }
+            document.getElementById('translateTargetLanguage').value = '';
+            document.getElementById('performTranslationBtn').disabled = true;
+            document.getElementById('translateResultsContainer').classList.add('hidden');
+            document.getElementById('translateLoadingSpinner').classList.add('hidden');
+            document.getElementById('translateResults').innerHTML = '';
+            document.getElementById('translateBoardModal').classList.remove('hidden');
+        }
+
+        function closeTranslateModal() {
+            document.getElementById('translateBoardModal').classList.add('hidden');
+        }
+
+        function getBoardTranslateTargetLocale() {
+            const raw = String(document.getElementById('translateTargetLanguage').value || '').trim().toLowerCase();
+            const localeMap = {
+                es: 'es-US',
+                fr: 'fr-FR',
+                de: 'de-DE',
+                it: 'it-IT',
+                pt: 'pt-BR',
+                ar: 'ar-XA',
+                ja: 'ja-JP',
+                zh: 'zh-CN',
+                ko: 'ko-KR',
+                ru: 'ru-RU',
+                en: 'en-US',
+            };
+            return localeMap[raw] || raw;
+        }
+
+        async function performBoardTranslation() {
+            const targetLanguage = getBoardTranslateTargetLocale();
+            if (!targetLanguage) { showNotification('Please select a language', 'error'); return; }
+            if (!currentBoardData) { showNotification('No board selected', 'error'); return; }
+            
+            document.getElementById('performTranslationBtn').disabled = true;
+            document.getElementById('translateLoadingSpinner').classList.remove('hidden');
+            document.getElementById('translateResultsContainer').classList.add('hidden');
+            
+            try {
+                // Collect all text that needs translation
+                const textsToTranslate = [];
+                const textMap = {}; // Map original text to metadata
+                
+                // Add board label
+                if (currentBoardData.label) {
+                    textsToTranslate.push(currentBoardData.label);
+                    textMap[currentBoardData.label] = { type: 'board_label', boardId: currentBoardData.id };
+                }
+                
+                // Add button labels and speech text
+                for (let row = 0; row < GRID_ROWS; row++) {
+                    for (let col = 0; col < GRID_COLS; col++) {
+                        const key = `${row},${col}`;
+                        const button = currentBoardData.buttons?.[key];
+                        if (button) {
+                            if (button.text) {
+                                const text = button.text;
+                                if (!textsToTranslate.includes(text)) textsToTranslate.push(text);
+                                if (!textMap[text]) textMap[text] = [];
+                                if (Array.isArray(textMap[text])) textMap[text].push({ type: 'button_text', position: key });
+                            }
+                            if (button.speech_text) {
+                                const text = button.speech_text;
+                                if (!textsToTranslate.includes(text)) textsToTranslate.push(text);
+                                if (!textMap[text]) textMap[text] = [];
+                                if (Array.isArray(textMap[text])) textMap[text].push({ type: 'speech_text', position: key });
+                            }
+                        }
+                    }
+                }
+                
+                if (textsToTranslate.length === 0) {
+                    showNotification('No text to translate', 'error');
+                    document.getElementById('translateLoadingSpinner').classList.add('hidden');
+                    document.getElementById('performTranslationBtn').disabled = false;
+                    return;
+                }
+                
+                // Call translation API
+                const response = await fetch('/api/translate-lines', {
+                    method: 'POST',
+                    headers: { ...getAuthHeaders(null), 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        lines: textsToTranslate,
+                        source_locale: null,
+                        target_locale: targetLanguage
+                    })
+                });
+                
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const payload = await response.json();
+                const translations = Array.isArray(payload?.translated_lines) ? payload.translated_lines : [];
+                
+                // Display results
+                displayTranslationResults(translations, textMap, targetLanguage);
+                document.getElementById('translateLoadingSpinner').classList.add('hidden');
+                document.getElementById('translateResultsContainer').classList.remove('hidden');
+            } catch (error) {
+                console.error(error);
+                showNotification('Translation failed: ' + error.message, 'error');
+                document.getElementById('translateLoadingSpinner').classList.add('hidden');
+            } finally {
+                document.getElementById('performTranslationBtn').disabled = false;
+            }
+        }
+
+        async function performAllAiBoardsTranslation() {
+            const targetLanguage = getBoardTranslateTargetLocale();
+            if (!targetLanguage) { showNotification('Please select a language', 'error'); return; }
+
+            const runAllBtn = document.getElementById('performTranslateAllAiBoardsBtn');
+            const runCurrentBtn = document.getElementById('performTranslationBtn');
+            const loadingSpinner = document.getElementById('translateLoadingSpinner');
+            const resultsContainer = document.getElementById('translateResultsContainer');
+            const resultsEl = document.getElementById('translateResults');
+
+            runAllBtn.disabled = true;
+            runCurrentBtn.disabled = true;
+            loadingSpinner.classList.remove('hidden');
+            resultsContainer.classList.add('hidden');
+
+            try {
+                const response = await fetch('/api/admin/translate-pages', {
+                    method: 'POST',
+                    headers: { ...getAuthHeaders(null), 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        source_locale: null,
+                        target_locale: targetLanguage,
+                        scope: 'tap_boards',
+                        page_name: null,
+                        include_display_name: false,
+                        include_button_text: false,
+                        include_speech_phrase: false,
+                        include_llm_query: true,
+                    }),
+                });
+
+                const payload = await response.json().catch(() => ({}));
+                if (!response.ok) {
+                    throw new Error(formatApiErrorDetail(payload, response.status));
+                }
+
+                const changed = Number(payload?.tap_boards_prompts_changed || payload?.strings_changed || 0);
+                const unique = Number(payload?.unique_strings || 0);
+                resultsEl.innerHTML = `
+                    <div class="mb-3 p-3 bg-indigo-50 border-l-4 border-indigo-500 rounded">
+                        <p class="font-semibold text-indigo-900 text-sm">Tap AI Boards Translation Complete</p>
+                        <p class="text-sm text-gray-700 mt-1">Target locale: <span class="font-medium">${escapeHtml(targetLanguage)}</span></p>
+                        <p class="text-sm text-gray-700">Unique prompts found: <span class="font-medium">${unique}</span></p>
+                        <p class="text-sm text-gray-700">Prompts updated: <span class="font-medium">${changed}</span></p>
+                    </div>
+                `;
+                resultsContainer.classList.remove('hidden');
+                showNotification(`Translated ${changed} AI board prompt(s)`, 'success');
+                await loadBoards();
+            } catch (error) {
+                console.error(error);
+                showNotification('Translate All AI Boards failed: ' + error.message, 'error');
+            } finally {
+                loadingSpinner.classList.add('hidden');
+                const hasLocale = !!document.getElementById('translateTargetLanguage').value;
+                runCurrentBtn.disabled = !hasLocale;
+                runAllBtn.disabled = !hasLocale;
+            }
+        }
+
+        function formatApiErrorDetail(payload, status) {
+            const detail = payload?.detail;
+            if (Array.isArray(detail)) {
+                const first = detail[0] || {};
+                const loc = Array.isArray(first.loc) ? first.loc.join('.') : 'request';
+                const msg = first.msg || 'Validation error';
+                return `${msg} (${loc})`;
+            }
+            if (detail && typeof detail === 'object') {
+                try {
+                    return JSON.stringify(detail);
+                } catch (_) {
+                    return `HTTP ${status}`;
+                }
+            }
+            if (typeof detail === 'string' && detail.trim()) {
+                return detail;
+            }
+            return `HTTP ${status}`;
+        }
+
+        function displayTranslationResults(translations, textMap, targetLanguage) {
+            const container = document.getElementById('translateResults');
+            let html = '';
+            
+            // Group translations by type
+            const boardLabelTrans = [];
+            const buttonTexts = {};
+            const speechTexts = {};
+            
+            const originalTexts = Object.keys(textMap);
+            translations.forEach((translated, index) => {
+                const originalText = originalTexts[index];
+                const items = originalText ? textMap[originalText] : null;
+                if (Array.isArray(items)) {
+                    items.forEach(item => {
+                        if (item.type === 'board_label') {
+                            boardLabelTrans.push({ original: originalText, translated });
+                        } else if (item.type === 'button_text') {
+                            if (!buttonTexts[item.position]) buttonTexts[item.position] = [];
+                            buttonTexts[item.position].push({ original: originalText, translated });
+                        } else if (item.type === 'speech_text') {
+                            if (!speechTexts[item.position]) speechTexts[item.position] = [];
+                            speechTexts[item.position].push({ original: originalText, translated });
+                        }
+                    });
+                } else if (items && items.type === 'board_label') {
+                    boardLabelTrans.push({ original: originalText, translated });
+                }
+            });
+            
+            // Render board label
+            if (boardLabelTrans.length > 0) {
+                html += `<div class="mb-4 p-3 bg-blue-50 border-l-4 border-blue-500 rounded">
+                    <p class="font-semibold text-blue-900 text-sm mb-2">Board Label:</p>
+                    ${boardLabelTrans.map(t => `<div class="text-sm">
+                        <span class="text-gray-600">EN:</span> ${t.original}<br>
+                        <span class="text-blue-600 font-semibold">${targetLanguage.toUpperCase()}:</span> ${t.translated}
+                    </div>`).join('')}
+                </div>`;
+            }
+            
+            // Render button translations
+            let buttonCount = 0;
+            for (const [position, texts] of Object.entries(buttonTexts)) {
+                if (texts.length > 0) {
+                    if (buttonCount === 0) html += `<div class="mb-4"><p class="font-semibold text-gray-800 text-sm mb-2">Button Labels:</p>`;
+                    buttonCount++;
+                    html += `<div class="text-sm mb-2 p-2 bg-gray-100 rounded">
+                        <span class="text-gray-600 font-medium">${position}:</span><br>
+                        ${texts.map(t => `<span class="text-gray-600">EN:</span> ${t.original}<br><span class="text-green-600 font-semibold">${targetLanguage.toUpperCase()}:</span> ${t.translated}`).join('<br>')}
+                    </div>`;
+                }
+            }
+            if (buttonCount > 0) html += `</div>`;
+            
+            // Render speech text translations
+            let speechCount = 0;
+            for (const [position, texts] of Object.entries(speechTexts)) {
+                if (texts.length > 0) {
+                    if (speechCount === 0) html += `<div class="mb-4"><p class="font-semibold text-gray-800 text-sm mb-2">Speech Announcements:</p>`;
+                    speechCount++;
+                    html += `<div class="text-sm mb-2 p-2 bg-gray-100 rounded">
+                        <span class="text-gray-600 font-medium">${position}:</span><br>
+                        ${texts.map(t => `<span class="text-gray-600">EN:</span> ${t.original}<br><span class="text-purple-600 font-semibold">${targetLanguage.toUpperCase()}:</span> ${t.translated}`).join('<br>')}
+                    </div>`;
+                }
+            }
+            if (speechCount > 0) html += `</div>`;
+            
+            container.innerHTML = html;
+        }
+        async function uploadButtonAudioFile(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+            const status = document.getElementById('audioUploadStatus');
+            status.className = 'text-xs mt-1 text-blue-600';
+            status.textContent = 'Uploading audio file...';
+            status.classList.remove('hidden');
+            try {
+                const formData = new FormData();
+                formData.append('file', file);
+                const response = await fetch('/api/admin/upload-button-audio', { method: 'POST', headers: getAuthHeaders(null), body: formData });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const result = await response.json();
+                document.getElementById('customAudioFileUrl').value = result.audio_url;
+                status.className = 'text-xs mt-1 text-green-600';
+                status.textContent = `Audio uploaded: ${file.name}`;
+                updateButtonPreview();
+            } catch (error) {
+                console.error(error);
+                status.className = 'text-xs mt-1 text-red-600';
+                status.textContent = 'Audio upload failed';
+                document.getElementById('customAudioFileUrl').value = '';
+            }
+        }
+
+        function updateAssignedImagePreview(imageUrl) {
+            const preview = document.getElementById('assignedImagePreview');
+            const thumb = document.getElementById('assignedImageThumb');
+            const clearBtn = document.getElementById('clearImageBtn');
+            if (imageUrl) { preview.classList.remove('hidden'); clearBtn.classList.remove('hidden'); thumb.src = imageUrl; thumb.alt = 'Assigned image'; }
+            else { preview.classList.add('hidden'); clearBtn.classList.add('hidden'); thumb.src = ''; thumb.alt = ''; }
+        }
+
+        function clearAssignedImage() { document.getElementById('assignedImageUrl').value = ''; updateAssignedImagePreview(''); updateButtonPreview(); }
+        function openImagePicker() { selectedImageUrl = null; document.getElementById('selectImageBtn').disabled = true; document.getElementById('imagePickerModal').classList.remove('hidden'); loadImages(); }
+        function closeImagePicker() { document.getElementById('imagePickerModal').classList.add('hidden'); document.getElementById('imageSearchInput').value = ''; currentImageSearch = ''; currentImagePage = 0; selectedImageUrl = null; }
+
+        async function loadImages(searchTerm = '', page = 0) {
+            const loadingIndicator = document.getElementById('imageLoadingIndicator');
+            const imageGrid = document.getElementById('imageGrid');
+            const resultsInfo = document.getElementById('imageResultsInfo');
+            const pageInfo = document.getElementById('imagePageInfo');
+            const prevBtn = document.getElementById('imagePrevPage');
+            const nextBtn = document.getElementById('imageNextPage');
+            try {
+                loadingIndicator.classList.remove('hidden');
+                imageGrid.innerHTML = '';
+                const params = new URLSearchParams({ page: String(page), limit: '48' });
+                if (searchTerm) params.append('search', searchTerm);
+                const response = await fetch('/api/admin/images/browse?' + params.toString(), { method: 'GET', headers: getAuthHeaders(null) });
+                if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                const data = await response.json();
+                allImages = data.images || [];
+                currentImagePage = data.page || 0;
+                totalImagePages = data.total_pages || 0;
+                resultsInfo.textContent = `Showing ${allImages.length} of ${data.total_count || 0} images`;
+                pageInfo.textContent = `Page ${currentImagePage + 1} of ${Math.max(totalImagePages, 1)}`;
+                prevBtn.disabled = currentImagePage <= 0;
+                nextBtn.disabled = currentImagePage >= totalImagePages - 1;
+                renderImageGrid();
+            } catch (error) {
+                console.error(error);
+                resultsInfo.textContent = 'Error loading images';
+                imageGrid.innerHTML = '<div class="col-span-full text-center text-red-500 py-8">Failed to load images.</div>';
+            } finally {
+                loadingIndicator.classList.add('hidden');
+            }
+        }
+
+        function renderImageGrid() {
+            const imageGrid = document.getElementById('imageGrid');
+            imageGrid.innerHTML = '';
+            allImages.forEach(image => {
+                const imageCard = document.createElement('div');
+                imageCard.className = 'relative cursor-pointer border-2 border-transparent hover:border-blue-500 rounded-md overflow-hidden bg-gray-100';
+                imageCard.onclick = () => selectImageInGrid(image.image_url, imageCard);
+                const displayName = image.subconcept || image.concept || 'Image';
+                imageCard.innerHTML = `<img src="${image.image_url}" alt="${escapeHtml(displayName)}" class="w-full h-20 object-cover" loading="lazy"><div class="absolute bottom-0 left-0 right-0 bg-black bg-opacity-50 text-white text-xs p-1 truncate">${escapeHtml(displayName)}</div>`;
+                imageGrid.appendChild(imageCard);
+            });
+        }
+
+        function selectImageInGrid(imageUrl, cardElement) {
+            document.querySelectorAll('#imageGrid > div').forEach(card => { card.classList.remove('border-blue-500', 'bg-blue-50'); card.classList.add('border-transparent'); });
+            cardElement.classList.remove('border-transparent');
+            cardElement.classList.add('border-blue-500', 'bg-blue-50');
+            selectedImageUrl = imageUrl;
+            document.getElementById('selectImageBtn').disabled = false;
+        }
+
+        function selectAssignedImage() { if (!selectedImageUrl) return; document.getElementById('assignedImageUrl').value = selectedImageUrl; updateAssignedImagePreview(selectedImageUrl); updateButtonPreview(); closeImagePicker(); }
+        function searchImages() { currentImageSearch = document.getElementById('imageSearchInput').value.trim(); currentImagePage = 0; loadImages(currentImageSearch, 0); }
+        function clearImageSearch() { document.getElementById('imageSearchInput').value = ''; currentImageSearch = ''; currentImagePage = 0; loadImages('', 0); }
+        function navigateImagePage(direction) { const newPage = currentImagePage + direction; if (newPage >= 0 && newPage < totalImagePages) { currentImagePage = newPage; loadImages(currentImageSearch, newPage); } }
+
+        function showNotification(message, type) {
+            const notification = document.getElementById('notification');
+            notification.textContent = message;
+            notification.className = `notification ${type} show`;
+            setTimeout(() => notification.classList.remove('show'), 2500);
+        }
+
+        function escapeHtml(value) { return String(value || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#039;'); }
+    </script>
+
+    <!-- Help Modal -->
+    <div id="help-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white p-8 rounded-2xl shadow-2xl w-[90vw] h-[90vh] max-w-5xl max-h-[90vh] mx-2 relative flex flex-col">
+            <button id="help-modal-close" class="absolute top-4 right-6 text-gray-500 hover:text-red-500 text-3xl font-bold focus:outline-none" aria-label="Close Help">&times;</button>
+            <div class="mb-2">
+                <h2 class="text-2xl font-bold text-gray-800">Help &amp; User Guide</h2>
+            </div>
+            <div id="help-modal-content" class="overflow-y-auto flex-1 px-0 py-0">
+                <div id="help-loading" class="text-center text-gray-400">Loading help...</div>
+            </div>
+            <div class="mt-4 text-center">
+                <button onclick="openBoardBuilderContactModal()" class="inline-block text-green-700 font-semibold underline hover:text-green-900">Contact Support</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Contact Support Modal -->
+    <div id="contact-modal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+        <div class="bg-white p-8 rounded-2xl shadow-2xl w-[90vw] max-w-md mx-2 relative flex flex-col">
+            <button id="contact-modal-close" class="absolute top-4 right-6 text-gray-500 hover:text-red-500 text-3xl font-bold focus:outline-none" aria-label="Close Contact">&times;</button>
+            <h3 class="text-lg font-semibold mb-4">Contact Support</h3>
+            <form id="contact-support-form" class="space-y-2" method="POST" action="https://formspree.io/f/myzpzero">
+                <input type="text" name="name" placeholder="Your Name" class="w-full px-3 py-2 border border-gray-300 rounded-md" required>
+                <input type="email" name="email" placeholder="Your Email" class="w-full px-3 py-2 border border-gray-300 rounded-md" required>
+                <textarea name="message" placeholder="How can we help you?" class="w-full px-3 py-2 border border-gray-300 rounded-md" rows="3" required></textarea>
+                <button type="submit" class="w-full bg-green-600 text-white py-2 rounded-md hover:bg-green-700">Send to Support</button>
+            </form>
+            <div id="bb-support-success" class="hidden text-green-600 mt-2">Thank you! Your message has been sent.</div>
+            <div id="bb-support-error" class="hidden text-red-600 mt-2">There was an error. Please try again or email admin@talkwithbravo.com.</div>
+        </div>
+    </div>
+
+    <script>
+    // --- Board Builder Help Modal ---
+    (function () {
+        const helpIcon = document.getElementById('help-icon');
+        const helpModal = document.getElementById('help-modal');
+        const helpModalClose = document.getElementById('help-modal-close');
+        const helpModalContent = document.getElementById('help-modal-content');
+        const helpLoading = document.getElementById('help-loading');
+        const contactModal = document.getElementById('contact-modal');
+        const contactModalClose = document.getElementById('contact-modal-close');
+
+        helpIcon.addEventListener('click', openHelpModal);
+        helpModalClose.addEventListener('click', closeHelpModal);
+        contactModalClose.addEventListener('click', () => contactModal.classList.add('hidden'));
+        helpModal.addEventListener('click', (e) => { if (e.target === helpModal) closeHelpModal(); });
+        contactModal.addEventListener('click', (e) => { if (e.target === contactModal) contactModal.classList.add('hidden'); });
+        document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeHelpModal(); contactModal.classList.add('hidden'); } });
+
+        document.getElementById('contact-support-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const data = new FormData(e.target);
+            try {
+                const res = await fetch(e.target.action, { method: 'POST', body: data, headers: { Accept: 'application/json' } });
+                if (res.ok) { document.getElementById('bb-support-success').classList.remove('hidden'); e.target.reset(); }
+                else { document.getElementById('bb-support-error').classList.remove('hidden'); }
+            } catch { document.getElementById('bb-support-error').classList.remove('hidden'); }
+        });
+
+        function openHelpModal() {
+            helpModal.classList.remove('hidden');
+            helpLoading.style.display = 'none';
+            helpModalContent.innerHTML = buildBoardBuilderGuide();
+        }
+
+        function closeHelpModal() { helpModal.classList.add('hidden'); }
+
+        window.openBoardBuilderContactModal = function () { closeHelpModal(); contactModal.classList.remove('hidden'); };
+
+        window.toggleBBGuideDetails = function (element) {
+            const details = element.querySelector('.guide-details');
+            const icon = element.querySelector('.fa-chevron-down');
+            if (details.classList.contains('hidden')) {
+                details.classList.remove('hidden');
+                if (icon) icon.style.transform = 'rotate(180deg)';
+            } else {
+                details.classList.add('hidden');
+                if (icon) icon.style.transform = 'rotate(0deg)';
+            }
+        };
+
+        function guideItem(iconClass, iconColor, title, detailsHtml, accentColor) {
+            return `
+            <div class="admin-guide-item cursor-pointer" onclick="toggleBBGuideDetails(this)">
+                <div class="flex items-start p-3 bg-gray-50 rounded-lg hover:bg-gray-100 transition">
+                    <div class="flex-shrink-0 mt-1"><i class="${iconClass} ${iconColor} text-lg"></i></div>
+                    <div class="ml-3 flex-1">
+                        <div class="flex items-center justify-between">
+                            <div class="font-semibold text-gray-900">${title}</div>
+                            <i class="fas fa-chevron-down text-gray-400 transition-transform"></i>
+                        </div>
+                        <div class="guide-details hidden mt-2">
+                            <div class="text-sm text-gray-700 space-y-2">${detailsHtml}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+        }
+
+        function buildBoardBuilderGuide() {
+            return `
+            <div class="p-6">
+                <div class="mb-6 bg-gradient-to-r from-indigo-50 to-blue-50 p-4 rounded-lg border-l-4 border-indigo-500">
+                    <h3 class="text-lg font-bold text-indigo-900 mb-2">
+                        <i class="fas fa-table-cells-large text-indigo-600 mr-2"></i>Board Builder Guide
+                    </h3>
+                    <p class="text-sm text-gray-700">
+                        The Board Builder lets you create and manage static or AI-powered communication boards.
+                        Click any section below to learn more.
+                    </p>
+                </div>
+
+                <div class="space-y-3">
+
+                    ${guideItem('fas fa-list', 'text-indigo-600', 'Selecting &amp; Creating Boards', `
+                        <p><strong>Purpose:</strong> Choose an existing board to edit, or create a brand-new one.</p>
+                        <div class="bg-indigo-50 border-l-4 border-indigo-500 p-3 rounded">
+                            <p class="text-sm font-semibold text-indigo-900 mb-1">What You Can Do:</p>
+                            <ul class="text-xs text-gray-700 ml-4 space-y-1">
+                                <li>• <strong>Select Board:</strong> Use the dropdown to switch between existing boards</li>
+                                <li>• <strong>Create New Board:</strong> Click <em>Create New Board</em> to start fresh</li>
+                                <li>• <strong>Migrate User Data:</strong> Import boards from TouchChat or other AAC devices</li>
+                                <li>• <strong>Set as Home Board:</strong> Mark the board that appears first in Tap Interface</li>
+                            </ul>
+                        </div>
+                        <div class="bg-yellow-50 border-l-4 border-yellow-500 p-3 rounded">
+                            <p class="text-xs text-gray-700"><strong>Tip:</strong> Migration boards appear with a purple "Show Migration Boards" filter button after importing from TouchChat.</p>
+                        </div>
+                    `)}
+
+                    ${guideItem('fas fa-sliders-h', 'text-blue-600', 'Board Details &amp; Mode', `
+                        <p><strong>Purpose:</strong> Set the board's display name and choose how it generates content.</p>
+                        <div class="bg-blue-50 border-l-4 border-blue-500 p-3 rounded">
+                            <p class="text-sm font-semibold text-blue-900 mb-1">Board Modes:</p>
+                            <ul class="text-xs text-gray-700 ml-4 space-y-1">
+                                <li>• <strong>Static Board:</strong> All buttons are manually defined — labels, speech, and navigation are fixed</li>
+                                <li>• <strong>AI-defined Board:</strong> Buttons are generated dynamically by AI based on your prompt. Supports topic, examples and exclusions</li>
+                                <li>• <strong>System Board:</strong> Read-only legacy/system boards — cannot be edited</li>
+                            </ul>
+                        </div>
+                        <div class="bg-gray-100 p-3 rounded">
+                            <p class="text-xs text-gray-700"><strong>Recommended:</strong> Use <em>Static</em> boards for core vocabulary. Use <em>AI-defined</em> boards for dynamic category browsing.</p>
+                        </div>
+                    `)}
+
+                    ${guideItem('fas fa-th', 'text-purple-600', 'Button Grid (7 × 12)', `
+                        <p><strong>Purpose:</strong> The grid shows every button slot on the board. Click any slot to edit it.</p>
+                        <div class="space-y-2">
+                            <div class="bg-gradient-to-r from-orange-100 to-orange-50 border-l-4 border-orange-500 p-3 rounded">
+                                <span class="font-semibold text-orange-900">🧭 Navigation buttons (amber/orange)</span>
+                                <p class="text-xs text-gray-700 mt-1">Navigates to another board when tapped.</p>
+                            </div>
+                            <div class="bg-gradient-to-r from-green-100 to-green-50 border-l-4 border-green-500 p-3 rounded">
+                                <span class="font-semibold text-green-900">💬 Speech buttons (green border)</span>
+                                <p class="text-xs text-gray-700 mt-1">Speaks a configured phrase or label text.</p>
+                            </div>
+                            <div class="bg-gray-100 border-l-4 border-gray-400 p-3 rounded">
+                                <span class="font-semibold text-gray-700">🫥 Empty / dashed slots</span>
+                                <p class="text-xs text-gray-600 mt-1">Unoccupied positions. Click to add a new button there.</p>
+                            </div>
+                        </div>
+                        <div class="bg-purple-50 border-l-4 border-purple-500 p-3 rounded">
+                            <p class="text-xs text-gray-700"><strong>Drag &amp; Drop:</strong> Drag any button to a new position to rearrange the layout.</p>
+                        </div>
+                    `)}
+
+                    ${guideItem('fas fa-edit', 'text-blue-600', 'Button Editor (side panel)', `
+                        <p><strong>Purpose:</strong> Click any grid slot to open the button editor on the right and configure all its properties.</p>
+                        <div class="bg-blue-50 border-l-4 border-blue-500 p-3 rounded">
+                            <p class="text-sm font-semibold text-blue-900 mb-1">Button Properties:</p>
+                            <ul class="text-xs text-gray-700 ml-4 space-y-1">
+                                <li>• <strong>Label Text:</strong> What appears on the button face</li>
+                                <li>• <strong>Speech Text:</strong> What Bravo speaks (defaults to label if blank)</li>
+                                <li>• <strong>Action Type:</strong> Announce, Navigate, or special function</li>
+                                <li>• <strong>Target Board:</strong> For navigation buttons — which board to open</li>
+                                <li>• <strong>Temporary Navigation:</strong> Return to current board after one selection on the target board</li>
+                                <li>• <strong>Image:</strong> Optional symbol or photo for the button</li>
+                                <li>• <strong>Background/Text Color:</strong> Custom button styling</li>
+                                <li>• <strong>Hidden:</strong> Hide from the user while keeping the button configured</li>
+                            </ul>
+                        </div>
+                    `)}
+
+                    ${guideItem('fas fa-wand-magic-sparkles', 'text-violet-600', 'AI Build Options', `
+                        <p><strong>Purpose:</strong> Automatically populate an entire board's button grid using AI, based on the board's topic.</p>
+                        <div class="bg-violet-50 border-l-4 border-violet-500 p-3 rounded">
+                            <p class="text-sm font-semibold text-violet-900 mb-1">How it Works:</p>
+                            <ul class="text-xs text-gray-700 ml-4 space-y-1">
+                                <li>• Click <em>AI Build Options</em> on a static board</li>
+                                <li>• Describe the vocabulary topic (e.g., "morning routine", "emotions")</li>
+                                <li>• AI generates a full set of relevant button labels and speech text</li>
+                                <li>• Review and accept or refine the suggestions before saving</li>
+                            </ul>
+                        </div>
+                        <div class="bg-yellow-50 border-l-4 border-yellow-500 p-3 rounded">
+                            <p class="text-xs text-gray-700"><strong>Note:</strong> AI Build replaces the current grid contents. Save any important work first.</p>
+                        </div>
+                    `)}
+
+                    ${guideItem('fas fa-file-import', 'text-indigo-600', 'Migrate User Data (TouchChat)', `
+                        <p><strong>Purpose:</strong> Import boards and buttons from a TouchChat .ce export file.</p>
+                        <div class="bg-indigo-50 border-l-4 border-indigo-500 p-3 rounded">
+                            <p class="text-sm font-semibold text-indigo-900 mb-1">Steps:</p>
+                            <ol class="text-xs text-gray-700 ml-4 space-y-1 list-decimal">
+                                <li>Click <em>Migrate User Data</em> in the board selector toolbar</li>
+                                <li>Upload your TouchChat <code>.ce</code> or <code>.ce.zip</code> file</li>
+                                <li>Browse parsed boards and select which ones to import</li>
+                                <li>Choose <em>Full Cascade</em> to import an entire board tree at once</li>
+                                <li>After import, open <em>Boards Menu</em> to add imported boards to the navigation</li>
+                            </ol>
+                        </div>
+                        <div class="bg-amber-50 border-l-4 border-amber-500 p-3 rounded">
+                            <p class="text-xs text-gray-700"><strong>⚠️ Note:</strong> Temporary navigation, modifier variants, and board-link structure are all preserved during import.</p>
+                        </div>
+                    `)}
+
+                    ${guideItem('fas fa-save', 'text-red-600', 'Saving Your Work', `
+                        <div class="bg-red-50 border-l-4 border-red-500 p-4 rounded">
+                            <p class="text-sm font-bold text-red-900 mb-2">💾 Changes are NOT saved automatically!</p>
+                            <p class="text-xs text-gray-700 mb-2">Click <strong>Save Board</strong> in the top toolbar after making any changes to the grid or board details.</p>
+                            <div class="bg-white p-2 rounded mt-2">
+                                <p class="text-xs text-gray-700"><strong>What gets saved:</strong></p>
+                                <ul class="text-xs text-gray-600 ml-4 mt-1">
+                                    <li>• Board display name and mode</li>
+                                    <li>• All button labels, speech text, and targets</li>
+                                    <li>• Button positions (drag &amp; drop changes)</li>
+                                    <li>• AI prompt settings</li>
+                                    <li>• Hidden/visible status</li>
+                                </ul>
+                            </div>
+                        </div>
+                    `)}
+
+                </div>
+
+                <div class="mt-6 p-4 bg-gray-100 rounded-lg text-center">
+                    <p class="text-sm text-gray-600 mb-2">Need more help?</p>
+                    <button onclick="openBoardBuilderContactModal()" class="inline-block bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition">
+                        <i class="fas fa-envelope mr-2"></i>Contact Support
+                    </button>
+                </div>
+            </div>`;
+        }
+    })();
+    </script>
+</body>
+</html>

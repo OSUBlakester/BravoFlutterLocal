@@ -11,6 +11,7 @@
     <script src="/static/mood-selection.js" defer></script>
     <!-- Ensure admin_settings.js is loaded with defer -->
     <script src="/static/sight-word-service.js"></script>
+    <script src="/static/admin_interface_navigation.js" defer></script>
     <script src="/static/admin_settings.js" defer></script>
     <style>
         /* Custom base styles */
@@ -375,6 +376,63 @@
             </div>
         </div>
 
+        <!-- Language and Voices Section -->
+        <div class="bg-white p-6 rounded-lg shadow-lg mb-6">
+            <h2 class="text-2xl font-bold text-gray-800 mb-6 border-b border-gray-200 pb-3">
+                <i class="fas fa-globe mr-2 text-cyan-600"></i>Language and Voices
+            </h2>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- User Language -->
+                <div class="md:col-span-2">
+                    <label for="userLanguage" class="block text-lg font-medium text-gray-700 mb-2">User Language:</label>
+                    <select id="userLanguage" name="userLanguage" class="w-full max-w-xs"></select>
+                    <p class="text-xs text-gray-500 mt-1">Primary language for user-facing AI generation and on-screen content.</p>
+                </div>
+
+                <!-- Default Partner Language & Voice (Side-by-side) -->
+                <div>
+                    <label for="defaultPartnerLanguage" class="block text-lg font-medium text-gray-700 mb-2">Default Partner Language:</label>
+                    <select id="defaultPartnerLanguage" name="defaultPartnerLanguage" class="w-full"></select>
+                    <p class="text-xs text-gray-500 mt-1">Default language for wake word, questions, and spoken announcements.</p>
+                </div>
+                <div>
+                    <label for="defaultPartnerVoiceSelect" class="block text-lg font-medium text-gray-700 mb-2">Default Partner Voice:</label>
+                    <div class="flex gap-2">
+                        <select id="defaultPartnerVoiceSelect" name="defaultPartnerVoiceSelect" class="flex-1"></select>
+                        <button type="button" id="testDefaultPartnerVoiceButton" class="inline-flex items-center px-4 py-2 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold rounded-md transition-colors">
+                            <i class="fas fa-volume-up"></i>
+                        </button>
+                    </div>
+                    <p class="text-xs text-gray-500 mt-1">Voice options update based on selected language.</p>
+                </div>
+
+                <!-- Location Override Languages Table -->
+                <div class="md:col-span-2">
+                    <div class="flex justify-between items-center mb-3">
+                        <label class="block text-lg font-medium text-gray-700">Location Override Languages:</label>
+                        <button type="button" id="addLocationOverrideRowButton" class="inline-flex items-center gap-2 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold rounded-md transition-colors">
+                            <i class="fas fa-plus"></i> Add Row
+                        </button>
+                    </div>
+                    <p class="text-xs text-gray-500 mb-3">Each row specifies a language available for per-location override selection in Location Features.</p>
+                    <div class="overflow-x-auto">
+                        <table class="min-w-full border-collapse border border-gray-300 rounded">
+                            <thead>
+                                <tr class="bg-gray-100">
+                                    <th class="border border-gray-300 px-4 py-2 text-left font-semibold text-gray-700">Language</th>
+                                    <th class="border border-gray-300 px-4 py-2 text-left font-semibold text-gray-700">Voice</th>
+                                    <th class="border border-gray-300 px-4 py-2 text-center font-semibold text-gray-700" style="width: 140px;">Test / Delete</th>
+                                </tr>
+                            </thead>
+                            <tbody id="locationOverrideLanguagesTable">
+                                <!-- Table rows will be dynamically populated here -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- AI Settings Section -->
         <div class="bg-white p-6 rounded-lg shadow-lg mb-6">
             <h2 class="text-2xl font-bold text-gray-800 mb-6 border-b border-gray-200 pb-3">
@@ -391,7 +449,7 @@
                 </div>
                 <div>
                     <label for="LLMOptions" class="block text-lg font-medium text-gray-700 mb-2">Number of AI Options:</label>
-                    <input type="number" id="LLMOptions" name="LLMOptions" min="1" max="50" step="1" class="w-full max-w-xs" placeholder="e.g., 10">
+                    <input type="number" id="LLMOptions" name="LLMOptions" min="0" max="50" step="1" class="w-full max-w-xs" placeholder="e.g., 10">
                     <p class="text-xs text-gray-500 mt-1">Number of AI-generated options for Auditory Scanning pages and Quick Talk in Tap Interface</p>
                 </div>
                 <div>
@@ -435,22 +493,6 @@
                 </div>
             </div>
             
-            <div class="mt-6 pt-4 border-t border-gray-200">
-                <h4 class="text-lg font-semibold text-gray-700 mb-4">AI Provider Configuration</h4>
-                <div class="grid grid-cols-1 gap-4">
-                    <div>
-                        <label for="llmProvider" class="block text-sm font-medium text-gray-700 mb-2">AI Provider:</label>
-                        <select id="llmProvider" name="llmProvider" class="w-full" aria-describedby="llmProviderHelp">
-                            <option value="gemini" selected>Google Gemini</option>
-                            <option value="chatgpt">OpenAI ChatGPT</option>
-                        </select>
-                        <small id="llmProviderHelp" class="text-xs text-gray-500 mt-1 block">
-                            Choose your preferred AI provider. The specific models used are configured by your system administrator.
-                            Both providers offer high-quality responses with different strengths and capabilities.
-                        </small>
-                    </div>
-                </div>
-            </div>
         </div>
 
         <!-- Audio Settings Section -->
@@ -463,16 +505,6 @@
                     <label for="speechRate" class="block text-lg font-medium text-gray-700 mb-2">Announcement Speech Rate (WPM):</label>
                     <input type="number" id="speechRate" name="speechRate" min="100" max="300" step="10" class="w-full max-w-xs" placeholder="e.g., 180">
                     <p class="text-xs text-gray-500 mt-1">Words Per Minute for server-side announcements (e.g., 100-300, default ~180).</p>
-                </div>
-                <div class="md:col-span-2">
-                    <label for="ttsVoiceSelect" class="block text-lg font-medium text-gray-700 mb-2">Text to Speech Voice:</label>
-                    <select id="ttsVoiceSelect" name="ttsVoiceSelect" class="focus:ring-indigo-500 focus:border-indigo-500 block w-full rounded-md sm:text-sm border-gray-300 shadow-sm max-w-md">
-                        <option value="">Loading voices...</option>
-                    </select>
-                    <button type="button" id="testTtsVoiceButton" class="mt-3 inline-flex items-center px-6 py-2.5 border border-transparent text-sm font-semibold rounded-lg shadow-md text-white bg-gradient-to-r from-green-500 to-teal-600 hover:from-green-600 hover:to-teal-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 transition-all duration-200 hover:scale-105">
-                        <i class="fas fa-volume-up mr-2"></i>Test Voice
-                    </button>
-                    <p id="tts-voice-status" class="mt-2 text-sm text-gray-500"></p>
                 </div>
                 <div>
                     <label for="applicationVolume" class="block text-lg font-medium text-gray-700 mb-2">Application Volume:</label>
@@ -604,6 +636,73 @@
                     <input type="checkbox" id="waitForSwitchToScan" name="waitForSwitchToScan" class="mr-2 w-5 h-5">
                     <label for="waitForSwitchToScan" class="text-lg font-medium text-gray-700">Wait For Switch to Start Scanning</label>
                 </div>
+                <div class="flex items-center">
+                    <input type="checkbox" id="playWaitForSwitchChime" name="playWaitForSwitchChime" class="mr-2 w-5 h-5">
+                    <label for="playWaitForSwitchChime" class="text-lg font-medium text-gray-700">Page Ready Chime</label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Email Settings Section -->
+        <div class="bg-white p-6 rounded-lg shadow-lg mb-6">
+            <h2 class="text-2xl font-bold text-gray-800 mb-6 border-b border-gray-200 pb-3">
+                <i class="fas fa-envelope mr-2 text-blue-500"></i>Email Settings
+            </h2>
+
+            <!-- Gmail Connection -->
+            <div class="mb-6">
+                <h3 class="text-lg font-semibold text-gray-700 mb-3">Gmail Connection</h3>
+                <div class="flex items-center gap-3 mb-3">
+                    <span class="text-sm font-medium text-gray-600">Status:</span>
+                    <span id="email-provider-status" class="text-sm font-semibold text-gray-500">Checking…</span>
+                </div>
+                <div class="flex flex-wrap gap-3 mb-4">
+                    <button type="button" id="refreshEmailStatusButton"
+                        class="inline-flex items-center gap-2 px-4 py-2 rounded-lg border-2 border-gray-400 bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold text-sm shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-gray-400">
+                        <i class="fas fa-sync-alt"></i> Refresh Status
+                    </button>
+                    <button type="button" id="connectEmailButton"
+                        class="inline-flex items-center gap-2 px-5 py-2 rounded-lg border-2 border-green-600 bg-green-600 hover:bg-green-700 text-white font-semibold text-sm shadow-md transition-colors focus:outline-none focus:ring-2 focus:ring-green-500">
+                        <i class="fas fa-link"></i> Connect Gmail
+                    </button>
+                    <button type="button" id="disconnectEmailButton"
+                        class="inline-flex items-center gap-2 px-5 py-2 rounded-lg border-2 border-red-600 bg-white hover:bg-red-50 text-red-600 font-semibold text-sm shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-red-400">
+                        <i class="fas fa-unlink"></i> Disconnect Gmail
+                    </button>
+                </div>
+            </div>
+
+            <!-- Server Prerequisites -->
+            <div id="email-server-prereq" class="bg-amber-50 border border-amber-300 rounded-lg p-4 hidden">
+                <h4 class="text-sm font-bold text-amber-800 mb-2"><i class="fas fa-exclamation-triangle mr-1"></i>Server Setup Required</h4>
+                <p class="text-xs text-amber-700 mb-3">Before Gmail can be connected, the following environment variables must be set on the server:</p>
+                <ul class="text-xs text-amber-700 space-y-1 font-mono">
+                    <li><span class="font-bold">GOOGLE_OAUTH_CLIENT_ID</span> — Google Cloud OAuth 2.0 client ID</li>
+                    <li><span class="font-bold">GOOGLE_OAUTH_CLIENT_SECRET</span> — Google Cloud OAuth 2.0 client secret</li>
+                    <li><span class="font-bold">EMAIL_OAUTH_STATE_SECRET</span> — random secret string for state verification</li>
+                    <li><span class="font-bold">EMAIL_TOKEN_ENCRYPTION_KEY</span> — Fernet key (<code>python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"</code>)</li>
+                    <li><span class="font-bold">EMAIL_OAUTH_REDIRECT_URI</span> — (optional) defaults to <code>{origin}/api/email/oauth/callback</code></li>
+                </ul>
+                <p class="text-xs text-amber-700 mt-3">Add these to your <code>.env</code> file or Cloud Run environment variables, then restart the server.</p>
+            </div>
+        </div>
+
+        <!-- Profile Transfer -->
+        <div class="bg-white p-6 rounded-lg shadow-lg mb-6">
+            <h2 class="text-2xl font-bold text-gray-800 mb-4 border-b border-gray-200 pb-3">
+                <i class="fas fa-file-export mr-2 text-indigo-600"></i>Profile Settings Transfer
+            </h2>
+            <p class="text-sm text-gray-600 mb-4">
+                Export this profile's settings to a JSON file, then import that file into another profile/account.
+            </p>
+            <div class="flex flex-wrap gap-3">
+                <button type="button" id="exportProfileSettingsButton" class="inline-flex items-center gap-2 px-5 py-2 rounded-lg border-2 border-indigo-600 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-sm shadow-md transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-400">
+                    <i class="fas fa-download"></i> Export Profile Settings
+                </button>
+                <button type="button" id="importProfileSettingsButton" class="inline-flex items-center gap-2 px-5 py-2 rounded-lg border-2 border-emerald-600 bg-white hover:bg-emerald-50 text-emerald-700 font-semibold text-sm shadow-sm transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-400">
+                    <i class="fas fa-upload"></i> Import Profile Settings
+                </button>
+                <input type="file" id="importProfileSettingsFileInput" accept="application/json,.json" class="hidden">
             </div>
         </div>
 
@@ -884,7 +983,6 @@
                                         <p><strong>Enable Mood Selection:</strong> Shows a mood selection screen at session start to personalize AI responses based on the user's current emotional state.</p>
                                         <p><strong>Location:</strong> Set the 2-letter country code (e.g., US, UK, CA) to provide location-relevant information.</p>
                                         <p><strong>Vocabulary Level:</strong> Controls the complexity of AI-generated vocabulary (Emergent = basic words, Functional = practical daily vocabulary, Developing = academic terms, Proficient = sophisticated language).</p>
-                                        <p><strong>AI Provider:</strong> Choose between Google Gemini or OpenAI ChatGPT for AI-generated responses.</p>
                                     </div>
                                 </div>
                             </div>
@@ -968,10 +1066,12 @@
                                 </div>
                                 <div class="guide-details hidden mt-2">
                                     <div class="text-sm text-gray-700 space-y-2">
+                                        <p><strong>Scanning Mode:</strong> Choose how scanning advances. <strong>Auto</strong> moves through options automatically based on scan speed. <strong>Step</strong> advances one option per switch activation.</p>
                                         <p><strong>Auditory Scan Speed:</strong> Time in milliseconds between button highlights during scanning. Lower = faster, higher = slower.</p>
                                         <p><strong>Scan Loop Limit:</strong> Number of complete scan cycles before pausing (0 = unlimited, 1-10 = limited cycles).</p>
                                         <p><strong>Disable Auditory Scanning:</strong> Turns off automatic scanning completely. User must manually navigate buttons.</p>
                                         <p><strong>Wait For Switch to Start Scanning:</strong> When enabled, scanning will not begin automatically. User must press their switch to start scanning on initial page load. After first press, scanning continues normally.</p>
+                                        <p><strong>Page Ready Chime:</strong> When enabled, a chime will play after a page has been loaded and is waiting for the switch to begin scanning.</p>
                                         <div class="bg-orange-50 border-l-4 border-orange-500 p-3 rounded">
                                             <p class="text-xs text-gray-700"><strong>💡 Tip:</strong> Start with slower scan speeds and gradually increase as the user becomes more comfortable with the interface.</p>
                                         </div>
@@ -1229,22 +1329,6 @@
                     if (select) select.classList.remove('guide-highlight-target');
                 }
             },
-            {
-                title: 'AI Provider',
-                content: 'Choose between Google Gemini or OpenAI ChatGPT for AI responses. Both provide high-quality results with different strengths.',
-                highlight: '#llmProvider',
-                action: function() {
-                    const select = document.getElementById('llmProvider');
-                    if (select) {
-                        select.classList.add('guide-highlight-target');
-                        select.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                    }
-                },
-                cleanup: function() {
-                    const select = document.getElementById('llmProvider');
-                    if (select) select.classList.remove('guide-highlight-target');
-                }
-            }
         ]
     };
     
@@ -1268,20 +1352,20 @@
                 }
             },
             {
-                title: 'Text to Speech Voice',
-                content: 'Select the voice used for speaking text. Test different voices to find the most natural-sounding option. Click "Test Voice" to hear a sample.',
-                highlight: '#ttsVoiceSelect',
+                title: 'Default Partner Voice',
+                content: 'Select the voice used for spoken partner announcements. Test different voices to find the best fit.',
+                highlight: '#defaultPartnerVoiceSelect',
                 action: function() {
-                    const select = document.getElementById('ttsVoiceSelect');
-                    const container = select?.closest('.flex.rounded-md');
+                    const select = document.getElementById('defaultPartnerVoiceSelect');
+                    const container = select?.closest('div');
                     if (container) {
                         container.classList.add('guide-highlight-target');
                         container.scrollIntoView({ behavior: 'smooth', block: 'center' });
                     }
                 },
                 cleanup: function() {
-                    const select = document.getElementById('ttsVoiceSelect');
-                    const container = select?.closest('.flex.rounded-md');
+                    const select = document.getElementById('defaultPartnerVoiceSelect');
+                    const container = select?.closest('div');
                     if (container) container.classList.remove('guide-highlight-target');
                 }
             },
@@ -1454,6 +1538,22 @@
         id: 'scanning',
         steps: [
             {
+                title: 'Scanning Mode',
+                content: 'Choose how scanning advances. Auto moves through options automatically based on scan speed. Step advances one option each time the switch is activated.',
+                highlight: '#scanMode',
+                action: function() {
+                    const select = document.getElementById('scanMode');
+                    if (select) {
+                        select.classList.add('guide-highlight-target');
+                        select.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }
+                },
+                cleanup: function() {
+                    const select = document.getElementById('scanMode');
+                    if (select) select.classList.remove('guide-highlight-target');
+                }
+            },
+            {
                 title: 'Auditory Scan Speed',
                 content: 'Time in milliseconds between button highlights during scanning. Lower values = faster scanning, higher values = slower. Start slow and increase speed as user becomes comfortable.',
                 highlight: '#scanDelay',
@@ -1517,6 +1617,24 @@
                 },
                 cleanup: function() {
                     const checkbox = document.getElementById('waitForSwitchToScan');
+                    const container = checkbox?.closest('.flex.items-center');
+                    if (container) container.classList.remove('guide-highlight-target');
+                }
+            },
+            {
+                title: 'Page Ready Chime',
+                content: 'When enabled, a chime will play after a page has been loaded and is waiting for the switch to begin scanning.',
+                highlight: '#playWaitForSwitchChime',
+                action: function() {
+                    const checkbox = document.getElementById('playWaitForSwitchChime');
+                    const container = checkbox?.closest('.flex.items-center');
+                    if (container) {
+                        container.classList.add('guide-highlight-target');
+                        container.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }
+                },
+                cleanup: function() {
+                    const checkbox = document.getElementById('playWaitForSwitchChime');
                     const container = checkbox?.closest('.flex.items-center');
                     if (container) container.classList.remove('guide-highlight-target');
                 }
@@ -2223,9 +2341,9 @@
                             </div>
                         `,
                         action: function() {
-                            const voiceSelect = document.getElementById('ttsVoiceSelect');
+                            const voiceSelect = document.getElementById('defaultPartnerVoiceSelect');
                             if (voiceSelect) {
-                                const container = voiceSelect.closest('div.md\\:col-span-2');
+                                const container = voiceSelect.closest('div');
                                 if (container) {
                                     container.classList.add('guide-highlight-target');
                                     container.scrollIntoView({ behavior: 'smooth', block: 'center' });
@@ -2259,7 +2377,7 @@
                 ]
             },
             'configure-scanning-speed': {
-                title: 'Configure Scanning Speed',
+                title: 'Configure Scanning Mode & Speed',
                 steps: [
                     {
                         title: 'Unlock Admin Toolbar',
@@ -2304,7 +2422,7 @@
                         title: 'Find Scanning Settings',
                         icon: 'fa-tachometer-alt',
                         content: `
-                            <p class="text-gray-700 mb-3">Scroll to the Auditory Scanning Settings section.</p>
+                            <p class="text-gray-700 mb-3">Scroll to the Auditory Scanning Settings section where Scanning Mode, Scan Speed, and Loop Limit are configured.</p>
                             <div class="bg-orange-50 border-l-4 border-orange-500 p-3 mb-3">
                                 <p class="text-sm"><i class="fas fa-info-circle text-orange-600 mr-2"></i>Look for the <strong>Auditory Scanning Settings</strong> <i class="fas fa-search text-orange-600"></i> heading</p>
                             </div>
@@ -2317,6 +2435,33 @@
                                     header.scrollIntoView({ behavior: 'smooth', block: 'start' });
                                     header.classList.add('guide-highlight-target');
                                     break;
+                                }
+                            }
+                        },
+                        cleanup: function() {
+                            document.querySelectorAll('.guide-highlight-target').forEach(el => {
+                                el.classList.remove('guide-highlight-target');
+                            });
+                        }
+                    },
+                    {
+                        title: 'Set Scanning Mode',
+                        icon: 'fa-random',
+                        content: `
+                            <p class="text-gray-700 mb-3">Choose how scanning advances using the <strong>Scanning Mode</strong> setting.</p>
+                            <div class="bg-indigo-50 border-l-4 border-indigo-500 p-3 mb-3">
+                                <p class="text-sm mb-2"><i class="fas fa-info-circle text-indigo-600 mr-2"></i><strong>Mode Options:</strong></p>
+                                <p class="text-xs ml-5"><strong>Auto</strong> = scanning advances automatically based on scan speed</p>
+                                <p class="text-xs ml-5"><strong>Step</strong> = scanning advances one item per switch activation</p>
+                            </div>
+                        `,
+                        action: function() {
+                            const scanModeSelect = document.getElementById('scanMode');
+                            if (scanModeSelect) {
+                                const container = scanModeSelect.closest('div');
+                                if (container) {
+                                    container.classList.add('guide-highlight-target');
+                                    container.scrollIntoView({ behavior: 'smooth', block: 'center' });
                                 }
                             }
                         },
@@ -3480,6 +3625,12 @@
             if (lastStep.cleanup) {
                 lastStep.cleanup();
             }
+
+            // Ensure task index reflects the actual guide that just completed
+            const completedTaskIndex = this.setupTasks.findIndex(t => t.id === this.currentTask);
+            if (completedTaskIndex !== -1) {
+                this.currentSetupTaskIndex = completedTaskIndex;
+            }
             
             // Clear active guide from localStorage
             localStorage.removeItem('activeGuide');
@@ -3627,11 +3778,11 @@
             },
             {
                 id: 'configure-scanning-speed',
-                title: 'Configure Scanning Speed',
+                title: 'Configure Scanning Mode & Speed',
                 icon: 'fa-tachometer-alt',
                 color: 'yellow',
-                description: 'Control how quickly buttons are highlighted during scanning',
-                details: 'Set scan speed delay and loop limit for Auditory Scanning mode'
+                description: 'Set scanning mode and timing behavior for scanning navigation',
+                details: 'Choose Auto or Step mode, then set scan speed delay and loop limit for Auditory Scanning'
             },
             {
                 id: 'create-user-narrative',

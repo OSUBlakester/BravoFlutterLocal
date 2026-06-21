@@ -398,7 +398,9 @@ function getTapConversationContextText() {
     }
     
     if (Array.isArray(tapFollowUpConversation.selectedPhrases) && tapFollowUpConversation.selectedPhrases.length > 0) {
-        const phrasesText = tapFollowUpConversation.selectedPhrases.join(' → ');
+        // Keep prompt size bounded for follow-up generation latency.
+        const recentPhrases = tapFollowUpConversation.selectedPhrases.slice(-4);
+        const phrasesText = recentPhrases.join(' → ');
         parts.push(`User has said: "${phrasesText}"`);
     }
     
@@ -450,10 +452,6 @@ function normalizeTapLlmOptions(rawItems) {
 }
 
 function buildFollowUpPromptForTap(excludedOptionsText = '') {
-    const summaryInstruction = SummaryOff
-        ? 'The "summary" key should contain the exact same FULL text as the "option" key.'
-        : 'If the generated option is more than 5 words, the "summary" key should be a 3-5 word abbreviation of each option, including the exact key words from the option. If the option is 5 words or less, the "summary" key should contain the exact same FULL text as the "option" key.';
-
     const conversationContext = getTapConversationContextText();
     const selectedPhrases = Array.isArray(tapFollowUpConversation.selectedPhrases)
         ? tapFollowUpConversation.selectedPhrases
@@ -535,9 +533,9 @@ RULES FOR GENERATION:
 
 ${latestFocusLine}
 ${exclusionLine}
-Return ONLY a JSON list where each item has "option", "summary", and "keywords" keys.
-The "option" key should contain the FULL option text.
-${summaryInstruction}
-The "keywords" key should contain 3-5 words that match available symbols. Use these available descriptive words: good, great, happy, sad, angry, excited, tired, hungry, thirsty, hot, cold, big, small, fast, slow, easy, hard, fun, work, play, eat, drink, sleep, walk, run, read, write, look, listen, talk, help, love, like, want, need, more, less, yes, no, stop, go, come, here, there, up, down, in, out, on, off, open, close, new, old, clean, dirty, quiet, loud, light, dark. Focus on concrete, simple words rather than complex descriptives.
+${typeof getTapLanguageDirective === 'function' ? getTapLanguageDirective() : ''}
+Return ONLY a valid JSON array of strings with exactly ${LLMOptions} items.
+Each string should be a full option the user can speak next.
+Do not return objects, keys, markdown, or commentary.
 `;
 }

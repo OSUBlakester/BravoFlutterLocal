@@ -12,6 +12,9 @@ let currentAacUserId = null;
 let defaultDelay = 3500;
 let scanMode = 'auto';
 let waitForSwitchToScan = false;
+let playWaitForSwitchChime = false;
+let hasPlayedWaitForSwitchChime = false;
+const WAIT_FOR_SWITCH_CHIME_URL = '/static/notification.mp3';
 let scanningInterval = null;
 let currentlyScannedButton = null;
 let currentButtonIndex = -1;
@@ -32,9 +35,12 @@ let categoryNavigationStack = [];
 let currentNumberRange = null;
 let currentNumberPageOffset = 0;
 let currentNumberBase = 0;
+let currentSomethingElseStartsWithLetter = '';
 let lastAnnouncedSpellingWord = '';
 let availableCompletedSpellingWord = '';
 let spellingPriorityMode = 'none';
+let spellingPredictionRequestToken = 0;
+const SOMETHING_ELSE_LETTER_MODAL_ID = 'something-else-letter-modal';
 
 let announcementQueue = [];
 let isAnnouncingNow = false;
@@ -47,6 +53,122 @@ let lastScanPromptTime = 0;
 let scanCycleCount = 0;
 let scanLoopLimit = 0;
 let isPausedFromScanLimit = false;
+let userLanguageLocale = 'en-US';
+let defaultPartnerLanguageLocale = 'en-US';
+const categoryLabelTranslationCache = new Map();
+
+const LOCALE_LABEL_TO_TAG = {
+    'english (us)': 'en-US',
+    'spanish (us)': 'es-US',
+    'french (france)': 'fr-FR',
+    'german (germany)': 'de-DE',
+    'italian (italy)': 'it-IT',
+    'portuguese (brazil)': 'pt-BR',
+    'arabic': 'ar-XA'
+};
+
+function normalizeLocaleTag(value) {
+    if (typeof value !== 'string') return '';
+    const trimmed = value.trim();
+    if (!trimmed) return '';
+
+    const labelMatch = LOCALE_LABEL_TO_TAG[trimmed.toLowerCase()];
+    if (labelMatch) return labelMatch;
+
+    const cleaned = trimmed.replace(/_/g, '-');
+    const localeMatch = cleaned.match(/^([a-zA-Z]{2})(?:-([a-zA-Z]{2,3}))?$/);
+    if (!localeMatch) return '';
+
+    const lang = localeMatch[1].toLowerCase();
+    const region = localeMatch[2] ? localeMatch[2].toUpperCase() : '';
+    return region ? `${lang}-${region}` : lang;
+}
+
+function getEffectivePartnerLanguage() {
+    return normalizeLocaleTag(defaultPartnerLanguageLocale) || 'en-US';
+}
+
+function getEffectiveUserLanguage() {
+    return normalizeLocaleTag(userLanguageLocale) || 'en-US';
+}
+
+function walkCategoryNodes(nodes, visitor) {
+    const queue = Array.isArray(nodes) ? [...nodes] : [];
+    while (queue.length > 0) {
+        const node = queue.shift();
+        if (!node || typeof node !== 'object') continue;
+        visitor(node);
+        const children = Array.isArray(node.children) ? node.children : [];
+        children.forEach((child) => queue.push(child));
+    }
+}
+
+async function localizeCategoryTreeLabels(rootNodes) {
+    const locale = getEffectiveUserLanguage();
+    if (!locale || locale.toLowerCase().startsWith('en')) {
+        return;
+    }
+
+    const labelsToTranslate = [];
+    const seen = new Set();
+
+    walkCategoryNodes(rootNodes, (node) => {
+        const label = String(node.label || '').trim();
+        if (!label) return;
+        if (categoryLabelTranslationCache.has(label)) {
+            node.displayLabel = categoryLabelTranslationCache.get(label);
+            return;
+        }
+        const dedupeKey = label.toLowerCase();
+        if (!seen.has(dedupeKey)) {
+            seen.add(dedupeKey);
+            labelsToTranslate.push(label);
+        }
+    });
+
+    if (labelsToTranslate.length === 0) {
+        return;
+    }
+
+    try {
+        const response = await authenticatedFetch('/api/translate-lines', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                lines: labelsToTranslate,
+                source_locale: 'en-US',
+                target_locale: locale
+            })
+        });
+
+        if (!response.ok) {
+            return;
+        }
+
+        const payload = await response.json();
+        const translatedLines = Array.isArray(payload.translated_lines) ? payload.translated_lines : [];
+        labelsToTranslate.forEach((label, index) => {
+            const translated = String(translatedLines[index] || '').trim();
+            if (translated) {
+                categoryLabelTranslationCache.set(label, translated);
+            }
+        });
+
+        walkCategoryNodes(rootNodes, (node) => {
+            const label = String(node.label || '').trim();
+            if (!label) return;
+            const translated = String(categoryLabelTranslationCache.get(label) || '').trim();
+            node.displayLabel = translated || label;
+        });
+    } catch (error) {
+        console.warn('Failed to localize category labels:', error);
+    }
+}
+
+function getCategoryDisplayLabel(node) {
+    if (!node || typeof node !== 'object') return '';
+    return String(node.displayLabel || node.label || '').trim();
+}
 
 function interruptScanningAnnouncementPlayback() {
     announcementQueue = [];
@@ -100,6 +222,15 @@ const toolPanelSection = document.getElementById('tool-panel-section');
 const categoryPanel = document.getElementById('category-panel');
 const lettersPanel = document.getElementById('letters-panel');
 const toolPanelTitle = document.getElementById('tool-panel-title');
+
+function getComposeLocalizedText(key, fallback) {
+    const body = document.body;
+    if (!body || !body.dataset) {
+        return fallback;
+    }
+    const candidate = String(body.dataset[key] || '').trim();
+    return candidate || fallback;
+}
 
 // ============================================================
 // Compose Session Helpers
@@ -193,8 +324,11 @@ async function loadSettings() {
         defaultDelay = settings.scanDelay || 3500;
         scanMode = settings.scanMode === 'step' ? 'step' : 'auto';
         waitForSwitchToScan = settings.waitForSwitchToScan === true;
+        playWaitForSwitchChime = settings.playWaitForSwitchChime === true;
         spellLetterOrder = typeof settings.spellLetterOrder === 'string' ? settings.spellLetterOrder : 'alphabetical';
         LLMOptions = settings.LLMOptions || 10;
+        userLanguageLocale = normalizeLocaleTag(settings.userLanguage) || 'en-US';
+        defaultPartnerLanguageLocale = normalizeLocaleTag(settings.defaultPartnerLanguage) || 'en-US';
         if (typeof settings.scanLoopLimit === 'number' && !Number.isNaN(settings.scanLoopLimit)) {
             scanLoopLimit = Math.max(0, Math.min(10, parseInt(settings.scanLoopLimit, 10)));
         } else {
@@ -205,6 +339,24 @@ async function loadSettings() {
         }
     } catch (error) {
         console.error('Failed to load settings:', error);
+    }
+}
+
+function playPageReadyChimeIfEnabled() {
+    if (!playWaitForSwitchChime || hasPlayedWaitForSwitchChime) return;
+
+    hasPlayedWaitForSwitchChime = true;
+    try {
+        const audio = new Audio(WAIT_FOR_SWITCH_CHIME_URL);
+        audio.preload = 'auto';
+        const playPromise = audio.play();
+        if (playPromise && typeof playPromise.catch === 'function') {
+            playPromise.catch((error) => {
+                console.warn('Compose page-ready chime playback was blocked or failed:', error);
+            });
+        }
+    } catch (error) {
+        console.warn('Unable to initialize compose page-ready chime audio:', error);
     }
 }
 
@@ -286,6 +438,7 @@ async function announce(textToAnnounce, announcementType = 'system', recordHisto
                 body: JSON.stringify({
                     text,
                     routing_target: target === 'personal' ? 'personal' : 'system',
+                    language_code_override: target === 'system' ? getEffectivePartnerLanguage() : undefined,
                     use_system_voice: useSystemVoiceForRequest === true
                 })
             });
@@ -305,6 +458,57 @@ async function announce(textToAnnounce, announcementType = 'system', recordHisto
 
 async function speak(textToSpeak) {
     return announce(textToSpeak, 'personal', false, false);
+}
+
+async function translateLineBetweenLocales(text, sourceLocaleRaw, targetLocaleRaw) {
+    const cleanText = String(text || '').trim();
+    if (!cleanText) return cleanText;
+
+    const sourceLocale = String(sourceLocaleRaw || '').trim() || undefined;
+    const targetLocale = String(targetLocaleRaw || '').trim() || undefined;
+    if (!targetLocale) return cleanText;
+    if (sourceLocale && sourceLocale.toLowerCase() === targetLocale.toLowerCase()) {
+        return cleanText;
+    }
+
+    try {
+        const response = await authenticatedFetch('/api/translate-lines', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                lines: [cleanText],
+                source_locale: sourceLocale,
+                target_locale: targetLocale,
+            }),
+        });
+
+        if (!response.ok) {
+            return cleanText;
+        }
+
+        const payload = await response.json();
+        const translated = Array.isArray(payload.translated_lines) ? payload.translated_lines[0] : '';
+        const normalized = String(translated || '').trim();
+        return normalized || cleanText;
+    } catch (error) {
+        console.warn('Failed to translate line between locales:', error);
+        return cleanText;
+    }
+}
+
+async function translateLineToPartnerLanguage(text) {
+    const cleanText = String(text || '').trim();
+    if (!cleanText) return cleanText;
+    const targetLocale = getEffectivePartnerLanguage();
+    const sourceLocale = String(userLanguageLocale || 'en-US').trim() || 'en-US';
+    return translateLineBetweenLocales(cleanText, sourceLocale, targetLocale);
+}
+
+async function announcePartnerFacingOutput(sourceText, recordHistory = false, showSplash = true) {
+    const cleanSource = String(sourceText || '').trim();
+    if (!cleanSource) return;
+    const translatedForPartner = await translateLineToPartnerLanguage(cleanSource);
+    await announce(translatedForPartner, 'system', recordHistory, showSplash);
 }
 
 async function cleanupTextValue(text) {
@@ -367,6 +571,10 @@ function updateBuildSpaceInput() {
     currentWordInput.value = getCombinedBuildText();
 }
 
+function invalidateSpellingPredictionRequests() {
+    spellingPredictionRequestToken += 1;
+}
+
 function setBuildSpaceText(text) {
     currentBuildSpaceText = typeof text === 'string' ? text : '';
     updateBuildSpaceInput();
@@ -387,6 +595,7 @@ function appendWordToBuildSpace(word) {
 async function clearBuildSpace() {
     currentBuildSpaceText = '';
     currentSpellingWord = '';
+    invalidateSpellingPredictionRequests();
     lastAnnouncedSpellingWord = '';
     availableCompletedSpellingWord = '';
     updateBuildSpaceInput();
@@ -415,6 +624,7 @@ function removeLastWordUnit(text) {
 async function backspaceCurrentWord() {
     if (currentSpellingWord.length > 0) {
         currentSpellingWord = '';
+        invalidateSpellingPredictionRequests();
         lastAnnouncedSpellingWord = '';
         availableCompletedSpellingWord = '';
         updateBuildSpaceInput();
@@ -442,6 +652,7 @@ async function backspaceCurrentWord() {
 
 function clearCurrentSpellingWord() {
     currentSpellingWord = '';
+    invalidateSpellingPredictionRequests();
     lastAnnouncedSpellingWord = '';
     availableCompletedSpellingWord = '';
     updateBuildSpaceInput();
@@ -503,6 +714,7 @@ function exitCreation() {
     if (currentSpellingWord) {
         appendWordToBuildSpace(currentSpellingWord);
         currentSpellingWord = '';
+        invalidateSpellingPredictionRequests();
     }
     syncBuildSpaceToComposeSession();
     window.location.href = '/static/gridpage.html?compose_finalize=1';
@@ -511,18 +723,18 @@ function exitCreation() {
 async function readCreation() {
     const text = getCombinedBuildText().trim();
     if (!text) {
-        await announce('Creation is empty.', 'system', false, true);
+        await announcePartnerFacingOutput('Creation is empty.', false, true);
         return;
     }
     stopAuditoryScanning();
-    await announce(text, 'system', false, true);
+    await announcePartnerFacingOutput(text, false, true);
     restartScanning(250, true);
 }
 
 async function aiEditCreation() {
     const text = getCombinedBuildText().trim();
     if (!text) {
-        await announce('Creation is empty.', 'system', false, true);
+        await announcePartnerFacingOutput('Creation is empty.', false, true);
         return;
     }
 
@@ -530,13 +742,14 @@ async function aiEditCreation() {
     try {
         const cleaned = await cleanupTextValue(text);
         currentSpellingWord = '';
+        invalidateSpellingPredictionRequests();
         setBuildSpaceText(cleaned);
         syncBuildSpaceToComposeSession();
         await refreshSuggestedWords();
-        await announce(cleaned || 'Creation is empty.', 'system', false, true);
+        await announcePartnerFacingOutput(cleaned || 'Creation is empty.', false, true);
     } catch (error) {
         console.error('AI edit failed:', error);
-        await announce('Unable to AI edit right now.', 'system', false, true);
+        await announcePartnerFacingOutput('Unable to AI edit right now.', false, true);
     }
     restartScanning(250, true);
 }
@@ -544,7 +757,7 @@ async function aiEditCreation() {
 async function newRow() {
     const text = getCombinedBuildText().trimEnd();
     if (!text) {
-        await announce('Creation is empty.', 'system', false, true);
+        await announcePartnerFacingOutput('Creation is empty.', false, true);
         return;
     }
 
@@ -559,16 +772,17 @@ async function newRow() {
             : `${finalizedLine}\n`;
 
         currentSpellingWord = '';
+        invalidateSpellingPredictionRequests();
         setBuildSpaceText(rebuiltText);
         currentCategory = null;
         setActiveCategoryButton('General');
         setActiveTool(null);
         syncBuildSpaceToComposeSession();
         await refreshSuggestedWords();
-        await announce('Started new row.', 'system', false, true);
+        await announcePartnerFacingOutput('Started new row.', false, true);
     } catch (error) {
         console.error('New row failed:', error);
-        await announce('Unable to start a new row right now.', 'system', false, true);
+        await announcePartnerFacingOutput('Unable to start a new row right now.', false, true);
     }
 
     restartScanning(250, true);
@@ -634,7 +848,7 @@ function updateCategoryPanelHeading() {
         toolPanelTitle.textContent = 'Word Categories';
         return;
     }
-    const pathLabel = categoryNavigationStack.map((node) => node.label).join(' / ');
+    const pathLabel = categoryNavigationStack.map((node) => getCategoryDisplayLabel(node) || String(node.label || '')).join(' / ');
     toolPanelTitle.textContent = `Word Categories — ${pathLabel}`;
 }
 
@@ -681,6 +895,15 @@ function renderNumbersToolPanel() {
     categoryGridEl.innerHTML = '';
     updateCategoryPanelHeading();
 
+    const goBackLabel = getComposeLocalizedText('composeGoBack', 'Go Back');
+    const goBackButton = document.createElement('button');
+    goBackButton.className = 'category-btn compose-button';
+    goBackButton.textContent = goBackLabel;
+    goBackButton.addEventListener('click', () => {
+        closeActiveTool();
+    });
+    categoryGridEl.appendChild(goBackButton);
+
     buildNumberRanges(1000).forEach((range) => {
         const btn = document.createElement('button');
         btn.className = 'category-btn compose-button';
@@ -700,7 +923,7 @@ function renderNumbersToolPanel() {
     NUMBER_TOOL_EXPANSIONS.forEach((increment) => {
         const addButton = document.createElement('button');
         addButton.className = 'category-btn compose-button';
-        addButton.textContent = `Add ${increment.toLocaleString()}`;
+        addButton.textContent = `+ ${increment.toLocaleString()}`;
         addButton.addEventListener('click', () => {
             currentNumberBase += increment;
             currentNumberRange = null;
@@ -713,7 +936,7 @@ function renderNumbersToolPanel() {
 
     const resetButton = document.createElement('button');
     resetButton.className = 'category-btn compose-button';
-    resetButton.textContent = 'Reset to 0';
+    resetButton.textContent = '↺ 0';
     resetButton.addEventListener('click', () => {
         currentNumberBase = 0;
         currentNumberRange = null;
@@ -722,14 +945,6 @@ function renderNumbersToolPanel() {
         restartScanningInSection('tool-panel', 150);
     });
     categoryGridEl.appendChild(resetButton);
-
-    const goBackButton = document.createElement('button');
-    goBackButton.className = 'category-btn compose-button';
-    goBackButton.textContent = 'Go Back';
-    goBackButton.addEventListener('click', () => {
-        closeActiveTool();
-    });
-    categoryGridEl.appendChild(goBackButton);
 }
 
 function setActiveCategoryButton(label) {
@@ -741,16 +956,17 @@ function setActiveCategoryButton(label) {
 function updateWordsSectionTitle() {
     const wordsTitleEl = document.getElementById('words-section-title');
     if (!wordsTitleEl) return;
+    const suggestedWordsLabel = getComposeLocalizedText('composeSuggestedWords', 'Suggested Words');
     if (currentNumberRange) {
         const pageValues = getCurrentNumberPageValues();
         if (pageValues.length > 0) {
-            wordsTitleEl.textContent = `Words — ${pageValues[0]}-${pageValues[pageValues.length - 1]}`;
+            wordsTitleEl.textContent = `${suggestedWordsLabel} - ${pageValues[0]}-${pageValues[pageValues.length - 1]}`;
             return;
         }
-        wordsTitleEl.textContent = `Words — ${currentNumberRange.label}`;
+        wordsTitleEl.textContent = `${suggestedWordsLabel} - ${currentNumberRange.label}`;
         return;
     }
-    wordsTitleEl.textContent = currentCategory ? `Words — ${currentCategory.label}` : 'Suggested Words';
+    wordsTitleEl.textContent = currentCategory ? `${suggestedWordsLabel} - ${currentCategory.label}` : suggestedWordsLabel;
 }
 
 function setActiveTool(toolName) {
@@ -855,6 +1071,7 @@ async function loadCategories() {
         const config = await response.json();
         const buttons = Array.isArray(config.buttons) ? config.buttons : [];
         topLevelCategories = buttons.filter(shouldIncludeCategoryNode);
+        await localizeCategoryTreeLabels(topLevelCategories);
         categoryNavigationStack = [];
         renderCurrentCategoryPanel();
     } catch (error) {
@@ -898,8 +1115,12 @@ function renderCategoryFallback() {
         { label: 'Describe', prompt_category: 'describe', children: [] },
         { label: 'Animals', prompt_category: 'animals', children: [] }
     ];
-    categoryNavigationStack = [];
-    renderCurrentCategoryPanel();
+    localizeCategoryTreeLabels(topLevelCategories)
+        .catch((error) => console.warn('Failed to localize fallback categories:', error))
+        .finally(() => {
+            categoryNavigationStack = [];
+            renderCurrentCategoryPanel();
+        });
 }
 
 function renderCurrentCategoryPanel() {
@@ -908,6 +1129,21 @@ function renderCurrentCategoryPanel() {
 
     categoryGridEl.innerHTML = '';
     updateCategoryPanelHeading();
+
+    const goBackLabel = getComposeLocalizedText('composeGoBack', 'Go Back');
+    const goBackButton = document.createElement('button');
+    goBackButton.className = 'category-btn compose-button';
+    goBackButton.textContent = goBackLabel;
+    goBackButton.addEventListener('click', () => {
+        if (parentNode) {
+            categoryNavigationStack.pop();
+            renderCurrentCategoryPanel();
+            restartScanningInSection('tool-panel', 150);
+            return;
+        }
+        closeActiveTool();
+    });
+    categoryGridEl.appendChild(goBackButton);
 
     if (!parentNode) {
         const generalButton = document.createElement('button');
@@ -925,8 +1161,9 @@ function renderCurrentCategoryPanel() {
     } else {
         const allParentButton = document.createElement('button');
         allParentButton.className = 'category-btn compose-button';
-        allParentButton.textContent = `All ${parentNode.label}`;
-        allParentButton.dataset.categoryLabel = parentNode.label || '';
+        const parentLabel = getCategoryDisplayLabel(parentNode) || String(parentNode.label || '');
+        allParentButton.textContent = `All ${parentLabel}`;
+        allParentButton.dataset.categoryLabel = parentLabel || '';
         allParentButton.addEventListener('click', async () => {
             await selectCategory(parentNode);
         });
@@ -934,10 +1171,11 @@ function renderCurrentCategoryPanel() {
     }
 
     categories.forEach((cat) => {
+        const displayLabel = getCategoryDisplayLabel(cat) || String(cat.label || cat);
         const btn = document.createElement('button');
         btn.className = 'category-btn compose-button';
-        btn.textContent = cat.label || cat;
-        btn.dataset.categoryLabel = cat.label || cat;
+        btn.textContent = displayLabel;
+        btn.dataset.categoryLabel = displayLabel;
         btn.dataset.promptCategory = cat.prompt_category || (cat.label || cat).toLowerCase();
         btn.addEventListener('click', async () => {
             if (canDrillIntoCategory(cat)) {
@@ -951,36 +1189,23 @@ function renderCurrentCategoryPanel() {
         categoryGridEl.appendChild(btn);
     });
 
-    const goBackButton = document.createElement('button');
-    goBackButton.className = 'category-btn compose-button';
-    goBackButton.textContent = parentNode ? 'Back' : 'Go Back';
-    goBackButton.addEventListener('click', () => {
-        if (parentNode) {
-            categoryNavigationStack.pop();
-            renderCurrentCategoryPanel();
-            restartScanningInSection('tool-panel', 150);
-            return;
-        }
-        closeActiveTool();
-    });
-    categoryGridEl.appendChild(goBackButton);
-
     setActiveCategoryButton(currentCategory ? currentCategory.label : 'General');
 }
 
 async function selectCategory(cat) {
     const label = cat.label || String(cat);
+    const displayLabel = getCategoryDisplayLabel(cat) || label;
     const promptCategory = cat.prompt_category || label.toLowerCase();
     const llmPrompt = String(cat.llm_prompt || '').trim();
     const wordsPrompt = String(cat.words_prompt || '').trim();
 
     currentCategory = {
-        label,
+        label: displayLabel,
         promptCategory,
         llmPrompt,
         wordsPrompt
     };
-    setActiveCategoryButton(label);
+    setActiveCategoryButton(displayLabel);
     updateWordsSectionTitle();
     document.getElementById('choose-word-section')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 
@@ -1111,8 +1336,20 @@ async function requestCategoryWords(category, customPrompt, fallbackWords = []) 
     return requestCategoryWordsWithExclusions(category, customPrompt, fallbackWords, []);
 }
 
-async function requestCategoryWordsWithExclusions(category, customPrompt, fallbackWords = [], excludeWords = []) {
+async function requestCategoryWordsWithExclusions(category, customPrompt, fallbackWords = [], excludeWords = [], requestOptions = {}) {
+    const startsWithLetter = String(requestOptions?.startsWithLetter || '').trim();
+    const requestedOptionCount = startsWithLetter
+        ? Math.min(50, Math.max(24, Math.max(1, LLMOptions) * 4))
+        : Math.max(1, LLMOptions);
     const buildSpaceContent = getCombinedBuildText().trim();
+    const basePrompt = String(customPrompt || '').trim();
+    const promptWithLetterConstraint = startsWithLetter
+        ? `${basePrompt}\n\nSTARTING LETTER REQUIREMENT:\n- Every option text must begin with '${startsWithLetter}' (case-insensitive).\n- Do not return options that start with any other letter.`
+        : basePrompt;
+
+    const filteredFallbackWords = startsWithLetter
+        ? fallbackWords.filter((word) => startsWithLetterFilter(word, startsWithLetter))
+        : fallbackWords;
 
     try {
         const response = await authenticatedFetch('/api/freestyle/category-words', {
@@ -1120,34 +1357,40 @@ async function requestCategoryWordsWithExclusions(category, customPrompt, fallba
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 category,
+                max_options: requestedOptionCount,
                 build_space_content: buildSpaceContent,
                 exclude_words: excludeWords,
-                custom_prompt: customPrompt
+                custom_prompt: promptWithLetterConstraint
             })
         });
         if (!response.ok) {
-            currentPredictions = fallbackWords;
+            currentPredictions = filteredFallbackWords;
             renderWordPredictions();
             return false;
         }
         const data = await response.json();
         const rawWords = data.words || [];
-        const nextWords = rawWords
+        const parsedWords = rawWords
             .map((w) => (typeof w === 'object' && w.text ? w.text : w))
             .filter((w) => typeof w === 'string' && w.trim() !== '')
-            .slice(0, Math.max(1, LLMOptions));
-        currentPredictions = nextWords.length > 0 ? nextWords : fallbackWords;
+            .slice(0, requestedOptionCount);
+
+        const nextWords = startsWithLetter
+            ? parsedWords.filter((word) => startsWithLetterFilter(word, startsWithLetter)).slice(0, Math.max(1, LLMOptions))
+            : parsedWords.slice(0, Math.max(1, LLMOptions));
+
+        currentPredictions = nextWords.length > 0 ? nextWords : filteredFallbackWords;
         renderWordPredictions();
         return nextWords.length > 0;
     } catch (error) {
         console.error('Error loading category words:', error);
-        currentPredictions = fallbackWords;
+        currentPredictions = filteredFallbackWords;
         renderWordPredictions();
         return false;
     }
 }
 
-async function loadGeneralWords(excludeWords = [], fallbackWordsOverride = null) {
+async function loadGeneralWords(excludeWords = [], fallbackWordsOverride = null, requestOptions = {}) {
     const fallbackWords = isStartingNewSentence()
         ? getSentenceStarterFallbackWords()
         : ['I', 'want', 'to', 'go', 'more', 'help', 'with', 'and', 'the', 'it']
@@ -1156,13 +1399,14 @@ async function loadGeneralWords(excludeWords = [], fallbackWordsOverride = null)
         'general',
         getContextFreeGeneralPrompt(),
         fallbackWordsOverride || fallbackWords,
-        excludeWords
+        excludeWords,
+        requestOptions
     );
 }
 
-async function loadCategoryWords(categorySelection, excludeWords = [], fallbackWordsOverride = null) {
+async function loadCategoryWords(categorySelection, excludeWords = [], fallbackWordsOverride = null, requestOptions = {}) {
     if (!categorySelection) {
-        return loadGeneralWords(excludeWords, fallbackWordsOverride);
+        return loadGeneralWords(excludeWords, fallbackWordsOverride, requestOptions);
     }
 
     const fallbackWords = fallbackWordsOverride || getCategoryFallbackWords(categorySelection);
@@ -1171,7 +1415,8 @@ async function loadCategoryWords(categorySelection, excludeWords = [], fallbackW
         categorySelection.promptCategory,
         buildCategorySpecificPrompt(categorySelection),
         fallbackWords,
-        excludeWords
+        excludeWords,
+        requestOptions
     );
 }
 
@@ -1221,11 +1466,134 @@ async function refreshSuggestedWords() {
         return null;
     }
     if (currentCategory) {
-        await loadCategoryWords(currentCategory);
+        await loadCategoryWords(
+            currentCategory,
+            [],
+            null,
+            currentSomethingElseStartsWithLetter
+                ? { startsWithLetter: currentSomethingElseStartsWithLetter }
+                : {}
+        );
         return null;
     }
-    await loadGeneralWords();
+    await loadGeneralWords(
+        [],
+        null,
+        currentSomethingElseStartsWithLetter
+            ? { startsWithLetter: currentSomethingElseStartsWithLetter }
+            : {}
+    );
     return null;
+}
+
+function getSomethingElseLetterOrder() {
+    if (spellLetterOrder === 'qwerty') {
+        return ['Q', 'W', 'E', 'R', 'T', 'Y', 'U', 'I', 'O', 'P', 'A', 'S', 'D', 'F', 'G', 'H', 'J', 'K', 'L', 'Z', 'X', 'C', 'V', 'B', 'N', 'M'];
+    }
+    return Array.from({ length: 26 }, (_, index) => String.fromCharCode(65 + index));
+}
+
+function startsWithLetterFilter(word, selectedLetter) {
+    const trimmedWord = String(word || '').trim();
+    if (!trimmedWord || !selectedLetter) return false;
+    const normalizedStart = trimmedWord.replace(/^[^a-zA-Z]+/, '');
+    return normalizedStart.toLowerCase().startsWith(String(selectedLetter).toLowerCase());
+}
+
+function ensureSomethingElseLetterModal() {
+    let modal = document.getElementById(SOMETHING_ELSE_LETTER_MODAL_ID);
+    if (modal) return modal;
+
+    modal = document.createElement('div');
+    modal.id = SOMETHING_ELSE_LETTER_MODAL_ID;
+    modal.className = 'something-else-modal hidden';
+
+    const dialog = document.createElement('div');
+    dialog.className = 'something-else-modal-dialog';
+
+    const title = document.createElement('h3');
+    title.className = 'something-else-modal-title';
+    title.textContent = 'Something Else A-Z';
+
+    const helperText = document.createElement('p');
+    helperText.className = 'something-else-modal-helper';
+    helperText.textContent = 'Pick a starting letter for new suggestions.';
+
+    const letterGrid = document.createElement('div');
+    letterGrid.id = 'something-else-letter-grid';
+    letterGrid.className = 'something-else-letter-grid';
+
+    const goBackButton = document.createElement('button');
+    goBackButton.id = 'something-else-go-back-btn';
+    goBackButton.className = 'something-else-go-back-btn compose-button';
+    goBackButton.textContent = 'Go Back';
+    goBackButton.addEventListener('click', () => {
+        closeSomethingElseLetterModal(true);
+    });
+
+    dialog.appendChild(title);
+    dialog.appendChild(helperText);
+    dialog.appendChild(letterGrid);
+    dialog.appendChild(goBackButton);
+    modal.appendChild(dialog);
+
+    modal.addEventListener('click', (event) => {
+        if (event.target === modal) {
+            closeSomethingElseLetterModal(true);
+        }
+    });
+
+    document.body.appendChild(modal);
+    return modal;
+}
+
+function renderSomethingElseLetterButtons() {
+    const modal = ensureSomethingElseLetterModal();
+    const letterGrid = modal.querySelector('#something-else-letter-grid');
+    if (!letterGrid) return;
+
+    letterGrid.innerHTML = '';
+    getSomethingElseLetterOrder().forEach((letter) => {
+        const button = document.createElement('button');
+        button.className = 'something-else-letter-btn compose-button';
+        button.textContent = letter;
+        button.dataset.letter = letter;
+        button.addEventListener('click', async () => {
+            await loadSomethingElseOptionsByLetter(letter);
+        });
+        letterGrid.appendChild(button);
+    });
+}
+
+function openSomethingElseLetterModal() {
+    if (currentSpellingWord) {
+        announce('Something Else A-Z is not available while spelling.', 'system', false, true)
+            .catch((error) => console.error('Failed to announce spelling restriction:', error));
+        restartScanning(250, false);
+        return;
+    }
+
+    if (currentNumberRange) {
+        announce('Something Else A-Z is not available in numbers mode.', 'system', false, true)
+            .catch((error) => console.error('Failed to announce numbers restriction:', error));
+        restartScanning(250, false);
+        return;
+    }
+
+    renderSomethingElseLetterButtons();
+    const modal = ensureSomethingElseLetterModal();
+    modal.classList.remove('hidden');
+    focusWordOptionsScanning(120);
+}
+
+function closeSomethingElseLetterModal(resumeScan = false) {
+    const modal = document.getElementById(SOMETHING_ELSE_LETTER_MODAL_ID);
+    if (!modal) return;
+    modal.classList.add('hidden');
+
+    if (resumeScan) {
+        focusWordOptionsScanning(120);
+    }
 }
 
 async function loadSomethingElseOptions() {
@@ -1257,9 +1625,22 @@ async function loadSomethingElseOptions() {
 
     let didLoadNewWords = false;
     if (currentCategory) {
-        didLoadNewWords = await loadCategoryWords(currentCategory, existingOptions, existingOptions);
+        didLoadNewWords = await loadCategoryWords(
+            currentCategory,
+            existingOptions,
+            existingOptions,
+            currentSomethingElseStartsWithLetter
+                ? { startsWithLetter: currentSomethingElseStartsWithLetter }
+                : {}
+        );
     } else {
-        didLoadNewWords = await loadGeneralWords(existingOptions, existingOptions);
+        didLoadNewWords = await loadGeneralWords(
+            existingOptions,
+            existingOptions,
+            currentSomethingElseStartsWithLetter
+                ? { startsWithLetter: currentSomethingElseStartsWithLetter }
+                : {}
+        );
     }
 
     if (!didLoadNewWords) {
@@ -1269,9 +1650,63 @@ async function loadSomethingElseOptions() {
     focusWordOptionsScanning(150);
 }
 
+async function loadSomethingElseOptionsByLetter(selectedLetter) {
+    const letter = String(selectedLetter || '').trim().toUpperCase();
+    if (!letter) {
+        closeSomethingElseLetterModal(true);
+        return;
+    }
+
+    currentSomethingElseStartsWithLetter = letter;
+
+    closeSomethingElseLetterModal(false);
+    stopAuditoryScanning();
+
+    const existingOptions = currentPredictions
+        .map((word) => String(word || '').trim())
+        .filter(Boolean);
+
+    let didLoadNewWords = false;
+    if (currentCategory) {
+        didLoadNewWords = await loadCategoryWords(
+            currentCategory,
+            existingOptions,
+            existingOptions,
+            { startsWithLetter: letter }
+        );
+    } else {
+        didLoadNewWords = await loadGeneralWords(
+            existingOptions,
+            existingOptions,
+            { startsWithLetter: letter }
+        );
+    }
+
+    if (!didLoadNewWords) {
+        await announce(`I could not find other options starting with ${letter}.`, 'system', false, true);
+    }
+
+    focusWordOptionsScanning(150);
+}
+
 function renderWordPredictions() {
     predictionsGrid.classList.toggle('numbers-mode', Boolean(currentNumberRange));
     predictionsGrid.innerHTML = '';
+
+    const goBackLabel = getComposeLocalizedText('composeGoBack', 'Go Back');
+    const somethingElseLabel = getComposeLocalizedText('composeSomethingElse', 'Something Else');
+    const somethingElseAzLabel = getComposeLocalizedText('composeSomethingElseAz', 'Something Else A-Z');
+
+    const goBackButton = document.createElement('button');
+    goBackButton.className = 'prediction-btn compose-button';
+    goBackButton.textContent = goBackLabel;
+    goBackButton.dataset.standardOption = 'true';
+    goBackButton.dataset.standardOptionType = 'go-back';
+    goBackButton.addEventListener('click', () => {
+        restartScanning(120, true);
+    });
+    predictionsGrid.appendChild(goBackButton);
+
     currentPredictions.forEach((word) => {
         const button = document.createElement('button');
         button.className = 'prediction-btn compose-button';
@@ -1283,22 +1718,24 @@ function renderWordPredictions() {
     if (!currentSpellingWord) {
         const somethingElseButton = document.createElement('button');
         somethingElseButton.className = 'prediction-btn compose-button';
-        somethingElseButton.textContent = 'Something Else';
+        somethingElseButton.textContent = somethingElseLabel;
         somethingElseButton.dataset.standardOption = 'true';
+        somethingElseButton.dataset.standardOptionType = 'something-else';
         somethingElseButton.addEventListener('click', async () => {
             await loadSomethingElseOptions();
         });
         predictionsGrid.appendChild(somethingElseButton);
-    }
 
-    const goBackButton = document.createElement('button');
-    goBackButton.className = 'prediction-btn compose-button';
-    goBackButton.textContent = 'Go Back';
-    goBackButton.dataset.standardOption = 'true';
-    goBackButton.addEventListener('click', () => {
-        restartScanning(120, true);
-    });
-    predictionsGrid.appendChild(goBackButton);
+        const somethingElseAZButton = document.createElement('button');
+        somethingElseAZButton.className = 'prediction-btn compose-button';
+        somethingElseAZButton.textContent = somethingElseAzLabel;
+        somethingElseAZButton.dataset.standardOption = 'true';
+        somethingElseAZButton.dataset.standardOptionType = 'something-else-az';
+        somethingElseAZButton.addEventListener('click', () => {
+            openSomethingElseLetterModal();
+        });
+        predictionsGrid.appendChild(somethingElseAZButton);
+    }
 
     const totalButtons = predictionsGrid.querySelectorAll('.prediction-btn').length;
     const wordGridColumns = Math.max(4, Math.ceil(totalButtons / 2));
@@ -1309,7 +1746,7 @@ function renderWordPredictions() {
 
 async function handlePredictionClick(word) {
     stopAuditoryScanning();
-    await announce(word, 'system', false, true);
+    await announcePartnerFacingOutput(word, false, true);
     appendWordToBuildSpace(word);
     clearCurrentSpellingWord();
     updateLetterAvailability('');
@@ -1320,6 +1757,7 @@ async function handlePredictionClick(word) {
     currentCategory = null;
     currentNumberRange = null;
     currentNumberPageOffset = 0;
+    currentSomethingElseStartsWithLetter = '';
     setActiveCategoryButton('General');
     updateWordsSectionTitle();
 
@@ -1395,6 +1833,17 @@ function renderSpellingActionButtons() {
 
     const actionRowIndex = getSpellingActionRowIndex();
 
+    const goBackButton = document.createElement('button');
+    goBackButton.className = 'letter-btn compose-button';
+    goBackButton.textContent = 'Go Back';
+    goBackButton.dataset.standardOption = 'true';
+    goBackButton.dataset.rowIndex = '-1';
+    goBackButton.style.order = '999';
+    goBackButton.addEventListener('click', () => {
+        closeActiveTool();
+    });
+    alphabetGrid.appendChild(goBackButton);
+
     if (availableCompletedSpellingWord) {
         const chooseWordButton = document.createElement('button');
         chooseWordButton.className = 'letter-btn compose-button';
@@ -1409,16 +1858,6 @@ function renderSpellingActionButtons() {
         });
         alphabetGrid.appendChild(chooseWordButton);
     }
-
-    const goBackButton = document.createElement('button');
-    goBackButton.className = 'letter-btn compose-button';
-    goBackButton.textContent = 'Go Back';
-    goBackButton.dataset.standardOption = 'true';
-    goBackButton.dataset.rowIndex = String(actionRowIndex);
-    goBackButton.addEventListener('click', () => {
-        closeActiveTool();
-    });
-    alphabetGrid.appendChild(goBackButton);
 }
 
 async function chooseCurrentSpellingWord() {
@@ -1429,7 +1868,7 @@ async function chooseCurrentSpellingWord() {
     }
 
     stopAuditoryScanning();
-    await announce(chosenWord, 'system', false, true);
+    await announcePartnerFacingOutput(chosenWord, false, true);
 
     const nextText = currentBuildSpaceText
         ? /[\s\n]$/.test(currentBuildSpaceText)
@@ -1438,6 +1877,7 @@ async function chooseCurrentSpellingWord() {
         : `${chosenWord} `;
 
     currentSpellingWord = '';
+    invalidateSpellingPredictionRequests();
     lastAnnouncedSpellingWord = '';
     availableCompletedSpellingWord = '';
     setBuildSpaceText(nextText);
@@ -1448,11 +1888,17 @@ async function chooseCurrentSpellingWord() {
     restartScanning(250, true);
 }
 
-async function handleLetterClick(letter) {
-    currentSpellingWord += letter.toLowerCase();
-    updateBuildSpaceInput();
-    updateLetterAvailability(currentSpellingWord);
+async function finalizeSpellingPredictions(requestToken, spellingWordSnapshot) {
     const completedWord = await refreshSuggestedWords();
+    if (requestToken !== spellingPredictionRequestToken) {
+        return;
+    }
+    if (String(currentSpellingWord || '') !== spellingWordSnapshot) {
+        return;
+    }
+
+    updateLetterAvailability(currentSpellingWord);
+
     if (completedWord) {
         const normalizedCompletedWord = String(completedWord || '').trim().toLowerCase();
         availableCompletedSpellingWord = String(completedWord || '').trim();
@@ -1469,7 +1915,29 @@ async function handleLetterClick(letter) {
         availableCompletedSpellingWord = '';
         renderSpellingActionButtons();
     }
+
+    if (activeTool === 'spelling') {
+        restartScanningInSection('tool-panel', 150);
+    }
+}
+
+function handleLetterClick(letter) {
+    currentSpellingWord += letter.toLowerCase();
+    const requestToken = ++spellingPredictionRequestToken;
+    const spellingWordSnapshot = currentSpellingWord;
+    updateBuildSpaceInput();
+    updateLetterAvailability(currentSpellingWord);
     restartScanningInSection('tool-panel', 250);
+
+    finalizeSpellingPredictions(requestToken, spellingWordSnapshot).catch((error) => {
+        if (requestToken !== spellingPredictionRequestToken) {
+            return;
+        }
+        console.error('Error finalizing spelling predictions:', error);
+        if (activeTool === 'spelling') {
+            restartScanningInSection('tool-panel', 150);
+        }
+    });
 }
 
 // ============================================================
@@ -1477,72 +1945,78 @@ async function handleLetterClick(letter) {
 // ============================================================
 
 function getValidLetters(currentWord) {
-    if (!currentWord || currentWord.length === 0) {
-        return 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+    const allLetters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+    const normalizedCurrentWord = String(currentWord || '').trim().toLowerCase();
+
+    if (!normalizedCurrentWord) {
+        return allLetters;
     }
 
-    const lastChar = currentWord.slice(-1).toUpperCase();
-    const lastTwoChars = currentWord.slice(-2).toUpperCase();
+    // After a few letters, keep spelling fully flexible.
+    if (normalizedCurrentWord.length >= 4) {
+        return allLetters;
+    }
+
+    const predictedNextLetters = new Set();
+    currentPredictions.forEach((prediction) => {
+        const normalizedPrediction = String(prediction || '').trim().toLowerCase();
+        if (!normalizedPrediction.startsWith(normalizedCurrentWord)) {
+            return;
+        }
+        if (normalizedPrediction.length <= normalizedCurrentWord.length) {
+            return;
+        }
+        const nextLetter = normalizedPrediction.charAt(normalizedCurrentWord.length).toUpperCase();
+        if (/^[A-Z]$/.test(nextLetter)) {
+            predictedNextLetters.add(nextLetter);
+        }
+    });
+
+    const vowelsAndCommon = ['A', 'E', 'I', 'O', 'U', 'Y', 'R', 'N', 'S', 'T', 'L'];
+    const baseSet = new Set(vowelsAndCommon);
+    const lastChar = normalizedCurrentWord.charAt(normalizedCurrentWord.length - 1).toUpperCase();
+    if (/^[A-Z]$/.test(lastChar)) {
+        baseSet.add(lastChar);
+    }
+
+    // If predictions are available, bias toward them but keep broad fallback letters.
+    if (predictedNextLetters.size > 0) {
+        predictedNextLetters.forEach((letter) => baseSet.add(letter));
+        return Array.from(baseSet);
+    }
 
     const likelyAfter = {
-        'A': ['B', 'C', 'D', 'F', 'G', 'L', 'M', 'N', 'P', 'R', 'S', 'T', 'V', 'W', 'Y'],
-        'B': ['A', 'E', 'I', 'L', 'O', 'R', 'U', 'Y'],
-        'C': ['A', 'E', 'H', 'I', 'L', 'O', 'R', 'U'],
-        'D': ['A', 'E', 'I', 'O', 'R', 'U', 'Y'],
-        'E': ['A', 'D', 'L', 'M', 'N', 'R', 'S', 'T', 'V', 'W', 'X'],
-        'F': ['A', 'E', 'I', 'L', 'O', 'R', 'U'],
-        'G': ['A', 'E', 'I', 'L', 'O', 'R', 'U'],
-        'H': ['A', 'E', 'I', 'O', 'U', 'Y'],
-        'I': ['C', 'D', 'F', 'G', 'L', 'M', 'N', 'R', 'S', 'T'],
-        'J': ['A', 'E', 'O', 'U'],
-        'K': ['A', 'E', 'I', 'N'],
-        'L': ['A', 'E', 'I', 'O', 'U', 'Y'],
-        'M': ['A', 'E', 'I', 'O', 'U', 'Y'],
-        'N': ['A', 'C', 'D', 'E', 'G', 'I', 'K', 'O', 'S', 'T', 'U', 'Y', 'Z'],
-        'O': ['B', 'C', 'D', 'F', 'G', 'K', 'L', 'M', 'N', 'P', 'R', 'S', 'T', 'V', 'W'],
-        'P': ['A', 'E', 'I', 'L', 'O', 'R', 'U'],
-        'Q': ['U'],
-        'R': ['A', 'E', 'I', 'O', 'U', 'Y'],
-        'S': ['A', 'C', 'E', 'H', 'I', 'K', 'L', 'M', 'N', 'O', 'P', 'T', 'U', 'W'],
-        'T': ['A', 'E', 'H', 'I', 'O', 'R', 'U', 'W'],
-        'U': ['B', 'C', 'G', 'L', 'M', 'N', 'P', 'R', 'S', 'T'],
-        'V': ['A', 'E', 'I', 'O'],
-        'W': ['A', 'E', 'H', 'I', 'O'],
-        'X': ['A', 'E', 'I'],
-        'Y': ['A', 'E', 'O', 'U'],
-        'Z': ['A', 'E', 'I', 'O']
+        A: ['B', 'C', 'D', 'F', 'G', 'L', 'M', 'N', 'P', 'R', 'S', 'T', 'V', 'W', 'Y'],
+        B: ['A', 'E', 'I', 'L', 'O', 'R', 'U', 'Y'],
+        C: ['A', 'E', 'H', 'I', 'L', 'O', 'R', 'U'],
+        D: ['A', 'E', 'I', 'O', 'R', 'U', 'Y'],
+        E: ['A', 'D', 'L', 'M', 'N', 'R', 'S', 'T', 'V', 'W', 'X'],
+        F: ['A', 'E', 'I', 'L', 'O', 'R', 'U'],
+        G: ['A', 'E', 'I', 'L', 'O', 'R', 'U'],
+        H: ['A', 'E', 'I', 'O', 'U', 'Y'],
+        I: ['C', 'D', 'F', 'G', 'L', 'M', 'N', 'R', 'S', 'T'],
+        J: ['A', 'E', 'O', 'U'],
+        K: ['A', 'E', 'I', 'N'],
+        L: ['A', 'E', 'I', 'L', 'O', 'U', 'Y'],
+        M: ['A', 'E', 'I', 'O', 'U', 'Y'],
+        N: ['A', 'C', 'D', 'E', 'G', 'I', 'K', 'O', 'S', 'T', 'U', 'Y', 'Z'],
+        O: ['B', 'C', 'D', 'F', 'G', 'K', 'L', 'M', 'N', 'P', 'R', 'S', 'T', 'V', 'W'],
+        P: ['A', 'E', 'I', 'L', 'O', 'R', 'U'],
+        Q: ['U'],
+        R: ['A', 'E', 'I', 'O', 'R', 'U', 'Y'],
+        S: ['A', 'C', 'E', 'H', 'I', 'K', 'L', 'M', 'N', 'O', 'P', 'T', 'U', 'W'],
+        T: ['A', 'E', 'H', 'I', 'O', 'R', 'U', 'W'],
+        U: ['B', 'C', 'G', 'L', 'M', 'N', 'P', 'R', 'S', 'T'],
+        V: ['A', 'E', 'I', 'O'],
+        W: ['A', 'E', 'H', 'I', 'O'],
+        X: ['A', 'E', 'I'],
+        Y: ['A', 'E', 'O', 'U'],
+        Z: ['A', 'E', 'I', 'O']
     };
 
-    const likelyAfterTwoLetters = {
-        'TH': ['A', 'E', 'I', 'O', 'R'],
-        'CH': ['A', 'E', 'I', 'O', 'U'],
-        'SH': ['A', 'E', 'I', 'O', 'U'],
-        'WH': ['A', 'E', 'I', 'O', 'U'],
-        'PH': ['A', 'E', 'I', 'O', 'U'],
-        'ST': ['A', 'E', 'I', 'O', 'R', 'U'],
-        'SP': ['A', 'E', 'I', 'O', 'R'],
-        'SC': ['A', 'E', 'I', 'O', 'R'],
-        'FL': ['A', 'E', 'I', 'O', 'U'],
-        'BL': ['A', 'E', 'I', 'O', 'U'],
-        'CL': ['A', 'E', 'I', 'O', 'U'],
-        'GL': ['A', 'E', 'I', 'O', 'U'],
-        'PL': ['A', 'E', 'I', 'O', 'U'],
-        'BR': ['A', 'E', 'I', 'O', 'U'],
-        'CR': ['A', 'E', 'I', 'O', 'U'],
-        'DR': ['A', 'E', 'I', 'O', 'U'],
-        'FR': ['A', 'E', 'I', 'O', 'U'],
-        'GR': ['A', 'E', 'I', 'O', 'U'],
-        'PR': ['A', 'E', 'I', 'O', 'U'],
-        'TR': ['A', 'E', 'I', 'O', 'U'],
-        'ON': ['A', 'C', 'D', 'E', 'G', 'K', 'S', 'T', 'Y', 'Z'],
-        'RO': ['A', 'B', 'C', 'D', 'E', 'G', 'L', 'M', 'N', 'O', 'P', 'S', 'T', 'U', 'W'],
-        'RN': ['A', 'E', 'I', 'O']
-    };
-
-    if (currentWord.length >= 4) return 'ABCDEFGHIKLMNOPRSTUVWYZ'.split('');
-    if (currentWord.length >= 2 && likelyAfterTwoLetters[lastTwoChars]) return likelyAfterTwoLetters[lastTwoChars];
-    if (likelyAfter[lastChar]) return likelyAfter[lastChar];
-    return 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+    const likelyLetters = likelyAfter[lastChar] || allLetters;
+    likelyLetters.forEach((letter) => baseSet.add(letter));
+    return Array.from(baseSet);
 }
 
 function updateLetterAvailability(currentWord) {
@@ -1575,11 +2049,16 @@ function getVisibleEnabledButtons(selector) {
     });
 }
 
+function isSomethingElseLetterModalOpen() {
+    const modal = document.getElementById(SOMETHING_ELSE_LETTER_MODAL_ID);
+    return Boolean(modal && !modal.classList.contains('hidden'));
+}
+
 function getSectionButtonsInOrder() {
-    const orderedIds = ['action-section', 'choose-word-section', 'tool-toggle-section', 'tool-panel-section'];
+    const orderedIds = ['exit-creation-btn', 'action-section', 'choose-word-section', 'tool-toggle-section', 'tool-panel-section'];
     return orderedIds
         .map((id) => document.getElementById(id))
-        .filter((section) => section && section.offsetParent !== null);
+        .filter((element) => element && element.offsetParent !== null && !element.disabled);
 }
 
 function getActionButtonsInOrder() {
@@ -1604,6 +2083,9 @@ function getItemsForSection(sectionId) {
         return getToolToggleButtonsInOrder();
     }
     if (sectionId === 'choose-word') {
+        if (isSomethingElseLetterModalOpen()) {
+            return getVisibleEnabledButtons('.something-else-letter-btn, #something-else-go-back-btn');
+        }
         return getVisibleEnabledButtons('.prediction-btn');
     }
     if (sectionId === 'tool-panel' && (activeTool === 'categories' || activeTool === 'numbers')) {
@@ -1646,10 +2128,14 @@ function getScanPromptTextForElement(element) {
     if (!element) return '';
 
     if (element.type === 'letter-row') {
+        if (element.rowIndex === -1) return 'Go Back';
         return `Row ${element.rowIndex + 1}`;
     }
 
     if (element.classList && element.classList.contains('scan-section')) {
+        const configuredScanLabel = String(element.dataset.scanLabel || '').trim();
+        if (configuredScanLabel) return configuredScanLabel;
+
         const sectionId = element.dataset.sectionId;
         if (sectionId === 'action') return 'Actions';
         if (sectionId === 'tool-toggle') return 'Tools';
@@ -1993,6 +2479,8 @@ async function initialize() {
 
     if (!waitForSwitchToScan) {
         startAuditoryScanning();
+    } else {
+        playPageReadyChimeIfEnabled();
     }
 }
 

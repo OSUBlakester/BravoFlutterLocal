@@ -745,7 +745,7 @@
          */
         async function initImageLibraryDB() {
             return new Promise((resolve, reject) => {
-                const request = indexedDB.open('BravoImageLibrary', 1);
+                const request = indexedDB.open('BravoImageLibrary', 2);
                 
                 request.onerror = () => reject(request.error);
                 request.onsuccess = () => {
@@ -755,12 +755,20 @@
                 
                 request.onupgradeneeded = (event) => {
                     const db = event.target.result;
+                    const transaction = event.target.transaction;
                     
-                    // Create object store for images
+                    let imageStore;
                     if (!db.objectStoreNames.contains('images')) {
-                        const imageStore = db.createObjectStore('images', { keyPath: 'id' });
-                        // Create index on tags for faster searching
+                        imageStore = db.createObjectStore('images', { keyPath: 'id' });
+                    } else {
+                        imageStore = transaction.objectStore('images');
+                    }
+
+                    if (!imageStore.indexNames.contains('tags')) {
                         imageStore.createIndex('tags', 'tags', { multiEntry: true });
+                    }
+                    if (!imageStore.indexNames.contains('search_terms')) {
+                        imageStore.createIndex('search_terms', 'search_terms', { multiEntry: true });
                     }
                     
                     // Create object store for metadata
@@ -777,13 +785,14 @@
         async function downloadImageLibrary(token, aacUserId) {
             try {
                 // Don't update loading status - parent shows "Loading user data..."
+                const LIBRARY_SCHEMA_VERSION = 3;
                 
                 // Check if library is already downloaded and fresh
                 const db = await initImageLibraryDB();
                 const metadata = await getLibraryMetadata(db);
                 const oneDayAgo = Date.now() - (24 * 60 * 60 * 1000);
                 
-                if (metadata && metadata.timestamp > oneDayAgo && metadata.count > 0) {
+                if (metadata && metadata.timestamp > oneDayAgo && metadata.count > 0 && metadata.schemaVersion === LIBRARY_SCHEMA_VERSION) {
                     console.log(`📚 Library already downloaded (${metadata.count} images, ${new Date(metadata.timestamp).toLocaleString()})`);
                     return true;
                 }
@@ -804,6 +813,33 @@
                 
                 const data = await response.json();
                 const images = data.images || [];
+
+                for (const image of images) {
+                    if (!image.search_terms) {
+                        const terms = [];
+                        const addTerms = (value) => {
+                            if (typeof value === 'string' || typeof value === 'number') {
+                                const text = String(value).trim().toLowerCase();
+                                if (text) terms.push(text);
+                                return;
+                            }
+                            if (Array.isArray(value)) {
+                                for (const item of value) addTerms(item);
+                                return;
+                            }
+                            if (value && typeof value === 'object') {
+                                for (const item of Object.values(value)) addTerms(item);
+                            }
+                        };
+                        addTerms(image.tags);
+                        addTerms(image.aliases);
+                        addTerms(image.localized_tags);
+                        addTerms(image.localized_labels);
+                        if (image.concept) addTerms(image.concept);
+                        if (image.subconcept) addTerms(image.subconcept);
+                        image.search_terms = Array.from(new Set(terms));
+                    }
+                }
                 
                 console.log(`📚 Received ${images.length} images, storing in IndexedDB...`);
                 
@@ -849,7 +885,8 @@
                             metadataStore.put({
                                 key: 'library',
                                 count: images.length,
-                                timestamp: Date.now()
+                                timestamp: Date.now(),
+                                schemaVersion: LIBRARY_SCHEMA_VERSION
                             });
                         }
                     });
@@ -899,30 +936,78 @@
                     imageLibraryDB = await initImageLibraryDB();
                 }
                 
-                const normalizedText = searchText.trim().toLowerCase();
+                const normalizeSearchText = (text) => String(text || '')
+                    .toLowerCase()
+                    .replace(/[.,!?;:\"'()\[\]{}]/g, ' ')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+
+                const rankImageCandidate = (candidate, normalizedQuery) => {
+                    if (!candidate || !candidate.image_url || !normalizedQuery) return 0;
+                    const concept = normalizeSearchText(candidate.concept || '');
+                    const subconcept = normalizeSearchText(candidate.subconcept || '');
+                    const tags = Array.isArray(candidate.tags) ? candidate.tags.map(normalizeSearchText) : [];
+                    const aliases = Array.isArray(candidate.aliases) ? candidate.aliases.map(normalizeSearchText) : [];
+                    const terms = Array.isArray(candidate.search_terms) ? candidate.search_terms.map(normalizeSearchText) : [];
+                    let score = 0;
+                    if (subconcept === normalizedQuery) score += 240;
+                    if (concept === normalizedQuery) score += 220;
+                    if (tags.includes(normalizedQuery)) score += 200;
+                    if (aliases.includes(normalizedQuery)) score += 180;
+                    if (terms.includes(normalizedQuery)) score += 160;
+                    if (subconcept.startsWith(normalizedQuery)) score += 90;
+                    if (concept.startsWith(normalizedQuery)) score += 80;
+                    if (tags.some(t => t.startsWith(normalizedQuery))) score += 70;
+                    if (aliases.some(t => t.startsWith(normalizedQuery))) score += 60;
+                    if (terms.some(t => t.startsWith(normalizedQuery))) score += 50;
+                    if (subconcept.includes(normalizedQuery)) score += 35;
+                    if (concept.includes(normalizedQuery)) score += 30;
+                    if (tags.some(t => t.includes(normalizedQuery))) score += 25;
+                    if (aliases.some(t => t.includes(normalizedQuery))) score += 20;
+                    if (terms.some(t => t.includes(normalizedQuery))) score += 15;
+                    return score;
+                };
+
+                const pickBestImageCandidate = (candidates, queryText) => {
+                    const normalizedQuery = normalizeSearchText(queryText);
+                    let best = null;
+                    let bestScore = -1;
+                    for (const candidate of (candidates || [])) {
+                        const score = rankImageCandidate(candidate, normalizedQuery);
+                        if (score > bestScore) {
+                            bestScore = score;
+                            best = candidate;
+                        }
+                    }
+                    return best && best.image_url ? best.image_url : null;
+                };
+
+                const normalizedText = normalizeSearchText(searchText);
                 
                 // Try exact match first, then variations
                 const searchVariations = [
                     normalizedText,
-                    normalizedText.charAt(0).toUpperCase() + normalizedText.slice(1), // Capitalize
-                    searchText.split(' ').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '), // Title Case
-                    searchText.toUpperCase() // ALL CAPS
+                    searchText.trim().toLowerCase(),
+                    searchText.trim().charAt(0).toUpperCase() + searchText.trim().slice(1)
                 ];
                 
                 const transaction = imageLibraryDB.transaction(['images'], 'readonly');
                 const store = transaction.objectStore('images');
-                const tagsIndex = store.index('tags');
+                const searchIndex = store.index('search_terms');
                 
                 // Search each variation
                 for (const variation of searchVariations) {
-                    const request = tagsIndex.get(variation);
-                    const result = await new Promise((resolve, reject) => {
+                    const normalizedVariation = normalizeSearchText(variation);
+                    if (!normalizedVariation) continue;
+                    const request = searchIndex.getAll(normalizedVariation, 20);
+                    const candidates = await new Promise((resolve, reject) => {
                         request.onsuccess = () => resolve(request.result);
                         request.onerror = () => reject(request.error);
                     });
                     
-                    if (result && result.image_url) {
-                        return result.image_url;
+                    const bestUrl = pickBestImageCandidate(candidates, searchText);
+                    if (bestUrl) {
+                        return bestUrl;
                     }
                 }
                 
@@ -947,7 +1032,7 @@
                 const results = new Map();
                 const transaction = imageLibraryDB.transaction(['images'], 'readonly');
                 const store = transaction.objectStore('images');
-                const tagsIndex = store.index('tags');
+                const searchIndex = store.index('search_terms');
                 
                 // Search all texts in parallel
                 const searchPromises = searchTexts.map(async (searchText) => {
@@ -960,7 +1045,7 @@
                     ];
                     
                     for (const variation of searchVariations) {
-                        const request = tagsIndex.get(variation);
+                        const request = searchIndex.get(variation.toLowerCase());
                         const result = await new Promise((resolve, reject) => {
                             request.onsuccess = () => resolve(request.result);
                             request.onerror = () => reject(request.error);
@@ -1313,6 +1398,51 @@
         }
 
         // Function to check mood selection and interface preference, then redirect appropriately
+        async function localizeMoodLoadingOverlay(settings, token, aacUserId) {
+            try {
+                const targetLocale = String(settings?.userLanguage || 'en-US').trim() || 'en-US';
+                if (targetLocale.toLowerCase() === 'en-us') {
+                    return;
+                }
+
+                const sourceLines = ['Welcome to Bravo!', 'Loading user data...'];
+                const response = await fetch('/api/translate-lines', {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'X-User-ID': aacUserId,
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        lines: sourceLines,
+                        source_locale: 'en-US',
+                        target_locale: targetLocale
+                    })
+                });
+
+                if (!response.ok) {
+                    return;
+                }
+
+                const payload = await response.json();
+                const translated = Array.isArray(payload.translated_lines) ? payload.translated_lines : [];
+                const translatedHeadline = String(translated[0] || '').trim();
+                const translatedLoading = String(translated[1] || '').trim();
+
+                const headlineEl = document.querySelector('.mood-loading-headline');
+                if (headlineEl && translatedHeadline) {
+                    headlineEl.textContent = translatedHeadline;
+                }
+
+                const loadingTextEl = document.getElementById('splash-text');
+                if (loadingTextEl && translatedLoading) {
+                    loadingTextEl.textContent = translatedLoading;
+                }
+            } catch (error) {
+                console.warn('Unable to localize mood loading overlay:', error);
+            }
+        }
+
         async function redirectToPreferredInterface() {
             try {
                 const token = sessionStorage.getItem('firebaseIdToken');
@@ -1365,6 +1495,7 @@
                     settings = await settingsResponse.json();
                     shouldShowMood = settings.enableMoodSelection === true;
                     console.log('Mood selection enabled:', shouldShowMood);
+                    await localizeMoodLoadingOverlay(settings, token, aacUserId);
                 } else {
                     console.error('Failed to fetch settings:', settingsResponse.status, await settingsResponse.text());
                     // Continue without mood selection

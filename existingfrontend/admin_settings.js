@@ -2,6 +2,14 @@
 let isAuthContextReady = false;
 let isDomContentLoaded = false;
 
+function markAdminSaving() {
+    window.adminUnsavedIndicator?.markSaving?.();
+}
+
+function markAdminSaved() {
+    window.adminUnsavedIndicator?.markSaved?.();
+}
+
 // Volume Slider Handler
 function volumeSliderHandler() {
     console.log('Volume slider moved to:', this.value);
@@ -49,6 +57,7 @@ const scanLoopLimitInput = document.getElementById('scanLoopLimit');
 const scanModeInput = document.getElementById('scanMode');
 const ScanningOffInput = document.getElementById('ScanningOff');
 const waitForSwitchToScanInput = document.getElementById('waitForSwitchToScan');
+const playWaitForSwitchChimeInput = document.getElementById('playWaitForSwitchChime');
 // const useTapInterfaceInput = document.getElementById('useTapInterface'); // Removed from UI
 const interfaceAuditoryInput = document.getElementById('interfaceAuditory');
 const interfaceTapInput = document.getElementById('interfaceTap');
@@ -65,6 +74,13 @@ const vocabularyLevelSelect = document.getElementById('vocabularyLevel');
 const ttsVoiceSelect = document.getElementById('ttsVoiceSelect');
 const testTtsVoiceButton = document.getElementById('testTtsVoiceButton');
 const ttsVoiceStatus = document.getElementById('tts-voice-status');
+const userLanguageSelect = document.getElementById('userLanguage');
+const defaultPartnerLanguageSelect = document.getElementById('defaultPartnerLanguage');
+const defaultPartnerVoiceSelect = document.getElementById('defaultPartnerVoiceSelect');
+const locationOverrideLanguagesSelect = document.getElementById('locationOverrideLanguages');
+const locationOverrideLanguagesTable = document.getElementById('locationOverrideLanguagesTable');
+const addLocationOverrideRowButton = document.getElementById('addLocationOverrideRowButton');
+const locationOverrideVoiceContainer = document.getElementById('locationOverrideVoiceContainer');
 const toolbarPINInput = document.getElementById('toolbarPIN');
 const spellLetterOrderSelect = document.getElementById('spellLetterOrder');
 // Grid slider elements will be assigned in initializePage when DOM is ready
@@ -91,7 +107,14 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 });
 
-const llmProviderSelect = document.getElementById('llmProvider'); // Updated for provider selection
+const emailProviderStatusEl = document.getElementById('email-provider-status');
+const emailServerPrereqEl = document.getElementById('email-server-prereq');
+const refreshEmailStatusButton = document.getElementById('refreshEmailStatusButton');
+const connectEmailButton = document.getElementById('connectEmailButton');
+const disconnectEmailButton = document.getElementById('disconnectEmailButton');
+const exportProfileSettingsButton = document.getElementById('exportProfileSettingsButton');
+const importProfileSettingsButton = document.getElementById('importProfileSettingsButton');
+const importProfileSettingsFileInput = document.getElementById('importProfileSettingsFileInput');
 
 const saveSettingsButton = document.getElementById('saveSettingsButton');
 
@@ -101,6 +124,309 @@ let settingsStatus = null; // Changed to let
 // --- State Variables ---
 let currentSettings = {};
 let availableVoices = []; // To store loaded voices
+
+const SUPPORTED_LANGUAGE_OPTIONS = [
+    { value: 'en-US', label: 'English (US)' },
+    { value: 'es-US', label: 'Spanish (US)' },
+    { value: 'fr-FR', label: 'French (France)' },
+    { value: 'de-DE', label: 'German (Germany)' },
+    { value: 'it-IT', label: 'Italian (Italy)' },
+    { value: 'pt-BR', label: 'Portuguese (Brazil)' },
+    { value: 'ar-XA', label: 'Arabic' }
+];
+
+function getSelectedMultiValues(selectEl) {
+    if (!selectEl) return [];
+    return Array.from(selectEl.selectedOptions || []).map(option => option.value).filter(Boolean);
+}
+
+function setSelectedMultiValues(selectEl, values) {
+    if (!selectEl) return;
+    const selectedSet = new Set(Array.isArray(values) ? values : []);
+    Array.from(selectEl.options).forEach(option => {
+        option.selected = selectedSet.has(option.value);
+    });
+}
+
+function populateLanguageSelectors() {
+    const makeOptions = (target) => {
+        if (!target) return;
+        target.innerHTML = '';
+        SUPPORTED_LANGUAGE_OPTIONS.forEach(lang => {
+            const opt = document.createElement('option');
+            opt.value = lang.value;
+            opt.textContent = lang.label;
+            target.appendChild(opt);
+        });
+    };
+
+    makeOptions(userLanguageSelect);
+    makeOptions(defaultPartnerLanguageSelect);
+    makeOptions(locationOverrideLanguagesSelect);
+}
+
+function getVoicesForLocale(locale) {
+    if (!locale) return availableVoices;
+    const localeLower = locale.toLowerCase();
+    return availableVoices.filter(voice => {
+        const languageCodes = Array.isArray(voice.language_codes) ? voice.language_codes : [];
+        return languageCodes.some(code => String(code).toLowerCase() === localeLower);
+    });
+}
+
+function fillVoiceSelect(selectEl, locale, selectedVoice = '') {
+    if (!selectEl) return;
+    const voices = getVoicesForLocale(locale);
+    selectEl.innerHTML = '<option value="">-- Select a Voice --</option>';
+    voices.forEach(voice => {
+        const option = document.createElement('option');
+        option.value = voice.name;
+        option.textContent = `${voice.name} (${String(voice.ssml_gender || 'unknown').toLowerCase()})`;
+        selectEl.appendChild(option);
+    });
+    if (selectedVoice) {
+        selectEl.value = selectedVoice;
+    }
+}
+
+function renderLocationOverrideVoiceControls(selectedLocales, selectedVoiceMap = {}) {
+    if (!locationOverrideVoiceContainer) return;
+    locationOverrideVoiceContainer.innerHTML = '';
+
+    if (!selectedLocales.length) {
+        const emptyText = document.createElement('p');
+        emptyText.className = 'text-sm text-gray-500';
+        emptyText.textContent = 'No location override languages selected.';
+        locationOverrideVoiceContainer.appendChild(emptyText);
+        return;
+    }
+
+    selectedLocales.forEach(locale => {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'grid grid-cols-1 md:grid-cols-3 gap-3 items-center';
+
+        const label = document.createElement('label');
+        label.className = 'text-sm font-medium text-gray-700';
+        label.textContent = `Voice for ${locale}`;
+
+        const select = document.createElement('select');
+        select.className = 'md:col-span-2 focus:ring-indigo-500 focus:border-indigo-500 block w-full rounded-md sm:text-sm border-gray-300 shadow-sm';
+        select.dataset.locale = locale;
+
+        fillVoiceSelect(select, locale, selectedVoiceMap[locale] || '');
+
+        wrapper.appendChild(label);
+        wrapper.appendChild(select);
+        locationOverrideVoiceContainer.appendChild(wrapper);
+    });
+}
+
+// New table-based location override management functions
+function renderLocationOverrideLanguagesTable(localeVoiceMap = {}) {
+    if (!locationOverrideLanguagesTable) return;
+    locationOverrideLanguagesTable.innerHTML = '';
+
+    if (!localeVoiceMap || Object.keys(localeVoiceMap).length === 0) {
+        const emptyRow = document.createElement('tr');
+        const emptyCell = document.createElement('td');
+        emptyCell.colSpan = 3;
+        emptyCell.className = 'text-center py-4 text-gray-500';
+        emptyCell.textContent = 'No location override languages configured yet.';
+        emptyRow.appendChild(emptyCell);
+        locationOverrideLanguagesTable.appendChild(emptyRow);
+        return;
+    }
+
+    Object.entries(localeVoiceMap).forEach(([locale, voiceName]) => {
+        const row = document.createElement('tr');
+        row.className = 'border-b border-gray-300 hover:bg-gray-50';
+        row.dataset.locale = locale;
+
+        // Language cell
+        const langCell = document.createElement('td');
+        langCell.className = 'border border-gray-300 px-4 py-3';
+        const langSelect = document.createElement('select');
+        langSelect.className = 'w-full px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500';
+        langSelect.dataset.locale = locale;
+        SUPPORTED_LANGUAGE_OPTIONS.forEach(lang => {
+            const opt = document.createElement('option');
+            opt.value = lang.value;
+            opt.textContent = lang.label;
+            langSelect.appendChild(opt);
+        });
+        langSelect.value = locale;
+        langSelect.addEventListener('change', (e) => {
+            // Update row's data-locale attribute when language changes
+            row.dataset.locale = e.target.value;
+            // Refresh voices for the new locale
+            updateVoiceSelectInRow(row, e.target.value, voiceName || '');
+        });
+        langCell.appendChild(langSelect);
+        row.appendChild(langCell);
+
+        // Voice cell
+        const voiceCell = document.createElement('td');
+        voiceCell.className = 'border border-gray-300 px-4 py-3';
+        const voiceSelect = document.createElement('select');
+        voiceSelect.className = 'w-full px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500';
+        voiceSelect.dataset.locale = locale;
+        fillVoiceSelect(voiceSelect, locale, voiceName || '');
+        voiceCell.appendChild(voiceSelect);
+        row.appendChild(voiceCell);
+
+        // Delete button cell
+        const actionCell = document.createElement('td');
+        actionCell.className = 'border border-gray-300 px-4 py-3 text-center flex gap-2 justify-center';
+        const testBtn = document.createElement('button');
+        testBtn.type = 'button';
+        testBtn.className = 'inline-flex items-center gap-1 px-3 py-1 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold rounded transition-colors';
+        testBtn.innerHTML = '<i class=\"fas fa-volume-up\"></i>';
+        testBtn.title = 'Test this voice';
+        testBtn.addEventListener('click', () => testLocationOverrideVoice(voiceSelect));
+        actionCell.appendChild(testBtn);
+        
+        const deleteBtn = document.createElement('button');
+        deleteBtn.type = 'button';
+        deleteBtn.className = 'inline-flex items-center gap-1 px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold rounded transition-colors';
+        deleteBtn.innerHTML = '<i class=\"fas fa-trash\"></i> Delete';
+        deleteBtn.addEventListener('click', () => deleteLocationOverrideRow(row));
+        actionCell.appendChild(deleteBtn);
+        row.appendChild(actionCell);
+
+        locationOverrideLanguagesTable.appendChild(row);
+    });
+}
+
+function updateVoiceSelectInRow(row, locale, currentVoice = '') {
+    const voiceSelect = row.querySelector('td:nth-child(2) select');
+    if (voiceSelect) {
+        fillVoiceSelect(voiceSelect, locale, currentVoice);
+    }
+}
+
+function addLocationOverrideRow() {
+    // Find the first unused language from SUPPORTED_LANGUAGE_OPTIONS
+    const existingLocales = new Set(
+        Array.from(locationOverrideLanguagesTable?.querySelectorAll('tr[data-locale]') || [])
+            .map(row => row.dataset.locale)
+    );
+
+    const availableLanguage = SUPPORTED_LANGUAGE_OPTIONS.find(lang => !existingLocales.has(lang.value));
+    if (!availableLanguage) {
+        alert('All supported languages are already in the table.');
+        return;
+    }
+
+    // Create new row with the suggested language
+    const newLocale = availableLanguage.value;
+    const newMap = { [newLocale]: '' };
+    
+    // Render just the new row
+    const row = document.createElement('tr');
+    row.className = 'border-b border-gray-300 hover:bg-gray-50';
+    row.dataset.locale = newLocale;
+
+    // Language cell
+    const langCell = document.createElement('td');
+    langCell.className = 'border border-gray-300 px-4 py-3';
+    const langSelect = document.createElement('select');
+    langSelect.className = 'w-full px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500';
+    langSelect.dataset.locale = newLocale;
+    SUPPORTED_LANGUAGE_OPTIONS.forEach(lang => {
+        const opt = document.createElement('option');
+        opt.value = lang.value;
+        opt.textContent = lang.label;
+        langSelect.appendChild(opt);
+    });
+    langSelect.value = newLocale;
+    langSelect.addEventListener('change', (e) => {
+        row.dataset.locale = e.target.value;
+        updateVoiceSelectInRow(row, e.target.value, '');
+    });
+    langCell.appendChild(langSelect);
+    row.appendChild(langCell);
+
+    // Voice cell
+    const voiceCell = document.createElement('td');
+    voiceCell.className = 'border border-gray-300 px-4 py-3';
+    const voiceSelect = document.createElement('select');
+    voiceSelect.className = 'w-full px-2 py-1 border border-gray-300 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500';
+    voiceSelect.dataset.locale = newLocale;
+    fillVoiceSelect(voiceSelect, newLocale, '');
+    voiceCell.appendChild(voiceSelect);
+    row.appendChild(voiceCell);
+
+    // Delete button cell
+    const actionCell = document.createElement('td');
+    actionCell.className = 'border border-gray-300 px-4 py-3 text-center flex gap-2 justify-center';
+    const testBtn = document.createElement('button');
+    testBtn.type = 'button';
+    testBtn.className = 'inline-flex items-center gap-1 px-3 py-1 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold rounded transition-colors';
+    testBtn.innerHTML = '<i class=\"fas fa-volume-up\"></i>';
+    testBtn.title = 'Test this voice';
+    testBtn.addEventListener('click', () => testLocationOverrideVoice(voiceSelect));
+    actionCell.appendChild(testBtn);
+    
+    const deleteBtn = document.createElement('button');
+    deleteBtn.type = 'button';
+    deleteBtn.className = 'inline-flex items-center gap-1 px-3 py-1 bg-red-600 hover:bg-red-700 text-white text-sm font-semibold rounded transition-colors';
+    deleteBtn.innerHTML = '<i class=\"fas fa-trash\"></i> Delete';
+    deleteBtn.addEventListener('click', () => deleteLocationOverrideRow(row));
+    actionCell.appendChild(deleteBtn);
+    row.appendChild(actionCell);
+
+    locationOverrideLanguagesTable.appendChild(row);
+}
+
+function deleteLocationOverrideRow(row) {
+    if (confirm('Are you sure you want to delete this location override language?')) {
+        row.remove();
+    }
+}
+
+function getLocationOverrideLanguagesFromTable() {
+    const map = {};
+    if (!locationOverrideLanguagesTable) return map;
+    const rows = locationOverrideLanguagesTable.querySelectorAll('tr[data-locale]');
+    rows.forEach(row => {
+        const locale = row.dataset.locale;
+        const voiceSelect = row.querySelector('td:nth-child(2) select');
+        const voiceName = voiceSelect?.value || '';
+        if (locale && voiceName) {
+            map[locale] = voiceName;
+        }
+    });
+    return map;
+}
+
+function getLocationOverrideVoiceMapFromUI() {
+    // Now using table-based approach instead
+    return getLocationOverrideLanguagesFromTable();
+}
+
+function refreshLanguageDependentVoiceControls() {
+    const partnerLocale = defaultPartnerLanguageSelect ? defaultPartnerLanguageSelect.value : 'en-US';
+    const selectedPartnerVoice = defaultPartnerVoiceSelect ? defaultPartnerVoiceSelect.value : '';
+    fillVoiceSelect(defaultPartnerVoiceSelect, partnerLocale, selectedPartnerVoice);
+    
+    // Also update test voice select to stay in sync
+    if (ttsVoiceSelect) {
+        fillVoiceSelect(ttsVoiceSelect, partnerLocale, selectedPartnerVoice);
+    }
+    
+    // Also update voice options in table rows
+    if (locationOverrideLanguagesTable) {
+        const rows = locationOverrideLanguagesTable.querySelectorAll('tr[data-locale]');
+        rows.forEach(row => {
+            const locale = row.dataset.locale;
+            const voiceSelect = row.querySelector('td:nth-child(2) select');
+            const currentVoice = voiceSelect?.value || '';
+            if (voiceSelect) {
+                fillVoiceSelect(voiceSelect, locale, currentVoice);
+            }
+        });
+    }
+}
 
 // --- Utility Functions ---
 function showTemporaryStatus(element, message, isError = false, duration = 3000) {
@@ -120,41 +446,23 @@ function showTemporaryStatus(element, message, isError = false, duration = 3000)
  * Loads available TTS voices from the backend and populates the dropdown.
  */
 async function loadVoices() {
-    // ttsVoiceSelect will be assigned in initializePage, check there if needed
-    // For now, assume it will be available if this function is called from initializePage
     try {
-        // Use window.authenticatedFetch if this endpoint requires authentication
-        // Assuming /api/tts-voices is public or handled by a different auth mechanism if not using window.authenticatedFetch
-        const response = await window.authenticatedFetch('/api/tts-voices'); // Using authenticatedFetch
+        // This endpoint is public in backend and should not depend on /api/settings auth state.
+        const response = await fetch('/api/tts-voices');
         if (!response.ok) throw new Error(`Failed to load voices: ${response.statusText}`);
         availableVoices = await response.json();
-        
-        // Filter to only include US English voices (en-US, en_US, us-en variations)
-        const usEnVoices = availableVoices.filter(voice => {
-            if (!voice.name) return false;
-            const nameLower = voice.name.toLowerCase();
-            return nameLower.includes('en-us') || 
-                   nameLower.includes('en_us') || 
-                   nameLower.includes('us-en') ||
-                   nameLower.includes('us_en');
-        });
-        
-        console.log('All available voices:', availableVoices.map(v => v.name));
-        console.log('Filtered US English voices:', usEnVoices.map(v => v.name));
-        
-        ttsVoiceSelect.innerHTML = '<option value="">-- Select a Voice --</option>'; // Default option
-        usEnVoices.forEach(voice => {
-            const option = document.createElement('option');
-            option.value = voice.name;
-            option.textContent = `${voice.name} (${voice.ssml_gender.toLowerCase()})`;
-            ttsVoiceSelect.appendChild(option);
-        });
-        
-        console.log(`Loaded ${usEnVoices.length} US English voices out of ${availableVoices.length} total voices`);
+        refreshLanguageDependentVoiceControls();
+        console.log(`Loaded ${availableVoices.length} total voices`);
     } catch (error) {
         console.error('Error loading TTS voices:', error);
-        ttsVoiceSelect.innerHTML = '<option value="">Error loading voices</option>';
+        if (defaultPartnerVoiceSelect) {
+            defaultPartnerVoiceSelect.innerHTML = '<option value="">Error loading voices</option>';
+        }
+        if (ttsVoiceSelect) {
+            ttsVoiceSelect.innerHTML = '<option value="">Error loading voices</option>';
+        }
         showTemporaryStatus(ttsVoiceStatus, `Error loading voices: ${error.message}`, true);
+        showTemporaryStatus(settingsStatus, `Error loading voices: ${error.message}`, true);
     }
 }
 
@@ -207,7 +515,11 @@ async function loadSettings() {
             volumeDisplay.textContent = `${volume}/10`;
             console.log('Application volume set to:', volume);
         }
-        if (LLMOptionsInput) { LLMOptionsInput.value = currentSettings.LLMOptions || ''; }
+        if (LLMOptionsInput) {
+            LLMOptionsInput.value = currentSettings.LLMOptions !== null && currentSettings.LLMOptions !== undefined
+                ? currentSettings.LLMOptions
+                : '';
+        }
         if (FreestyleOptionsInput) { 
             console.log('DEBUG FreestyleOptions - Element found:', !!FreestyleOptionsInput);
             console.log('DEBUG FreestyleOptions - currentSettings.FreestyleOptions:', currentSettings.FreestyleOptions);
@@ -236,10 +548,27 @@ async function loadSettings() {
         if (disableTapPictogramsInput) { disableTapPictogramsInput.checked = currentSettings.disableTapPictograms || false; }
         if (ScanningOffInput) { ScanningOffInput.checked = currentSettings.ScanningOff || false; }
         if (waitForSwitchToScanInput) { waitForSwitchToScanInput.checked = currentSettings.waitForSwitchToScan || false; }
+        if (playWaitForSwitchChimeInput) { playWaitForSwitchChimeInput.checked = currentSettings.playWaitForSwitchChime || false; }
         if (enableSightWordsInput) { enableSightWordsInput.checked = currentSettings.enableSightWords !== false; }
         if (sightWordGradeLevelInput) { sightWordGradeLevelInput.value = currentSettings.sightWordGradeLevel || 'pre_k'; }
-        if (ttsVoiceSelect && currentSettings.selected_tts_voice_name) {
-            ttsVoiceSelect.value = currentSettings.selected_tts_voice_name;
+        if (userLanguageSelect) userLanguageSelect.value = currentSettings.userLanguage || 'en-US';
+        if (defaultPartnerLanguageSelect) defaultPartnerLanguageSelect.value = currentSettings.defaultPartnerLanguage || 'en-US';
+        if (locationOverrideLanguagesSelect) {
+            setSelectedMultiValues(locationOverrideLanguagesSelect, currentSettings.locationOverrideLanguages || []);
+        }
+        // Load location override languages table
+        const locationOverrideVoices = currentSettings.locationOverrideVoices || {};
+        if (Object.keys(locationOverrideVoices).length > 0) {
+            renderLocationOverrideLanguagesTable(locationOverrideVoices);
+        } else {
+            renderLocationOverrideLanguagesTable({});
+        }
+        refreshLanguageDependentVoiceControls();
+        if (defaultPartnerVoiceSelect) {
+            defaultPartnerVoiceSelect.value = currentSettings.defaultPartnerVoice || currentSettings.selected_tts_voice_name || '';
+        }
+        if (ttsVoiceSelect) {
+            ttsVoiceSelect.value = currentSettings.defaultPartnerVoice || currentSettings.selected_tts_voice_name || '';
         }
         // Load spellLetterOrder setting
         if (spellLetterOrderSelect) {
@@ -259,15 +588,9 @@ async function loadSettings() {
             if (gridColumnsValue) gridColumnsValue.textContent = 6;
             console.log("Using default gridColumns value: 6");
         }
-         // Load LLM provider setting
-        if (llmProviderSelect) {
-            // Set to saved value or default to 'gemini'
-            const providerValue = currentSettings.llm_provider || 'gemini';
-            llmProviderSelect.value = providerValue;
-        }
-
         // Load toolbar PIN (account level)
         await loadToolbarPIN();
+        await loadEmailProviderStatus();
 
          console.log("Settings loaded:", currentSettings);
          showTemporaryStatus(settingsStatus, 'Settings loaded.', false);
@@ -275,6 +598,216 @@ async function loadSettings() {
     } catch (error) {
         console.error('Error loading settings:', error);
         showTemporaryStatus(settingsStatus, `Error loading settings: ${error.message}`, true, 5000);
+    }
+}
+
+async function loadEmailProviderStatus() {
+    if (!emailProviderStatusEl || !window.authenticatedFetch) return;
+
+    emailProviderStatusEl.textContent = 'Checking…';
+    emailProviderStatusEl.style.color = '#4b5563';
+    if (emailServerPrereqEl) emailServerPrereqEl.classList.add('hidden');
+
+    // First check Firestore connection state
+    let connected = false;
+    let address = '';
+    try {
+        const response = await window.authenticatedFetch('/api/email/status');
+        if (response.ok) {
+            const statusData = await response.json();
+            const gmailStatus = statusData?.provider_status?.gmail || {};
+            connected = gmailStatus.connected === true;
+            address = gmailStatus.email_address || '';
+        }
+    } catch (_) { /* fall through to config probe */ }
+
+    if (connected) {
+        emailProviderStatusEl.style.color = '#047857';
+        emailProviderStatusEl.textContent = `✓ Connected${address ? ` as ${address}` : ''}`;
+        if (emailServerPrereqEl) emailServerPrereqEl.classList.add('hidden');
+        return;
+    }
+
+    // Probe whether server OAuth credentials are configured by calling connect-url
+    // (400/500 vs 200 tells us if env vars are missing)
+    try {
+        const probeResp = await window.authenticatedFetch('/api/email/connect-url', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ provider: 'gmail' })
+        });
+        if (!probeResp.ok) {
+            const errText = await probeResp.text().catch(() => '');
+            if (errText.includes('Missing Google OAuth') || probeResp.status === 500) {
+                emailProviderStatusEl.style.color = '#92400e';
+                emailProviderStatusEl.textContent = '⚠ Server not configured — see setup requirements below';
+                if (emailServerPrereqEl) emailServerPrereqEl.classList.remove('hidden');
+                return;
+            }
+        }
+        // connect-url returned OK, meaning config is present but no account linked yet
+        emailProviderStatusEl.style.color = '#1d4ed8';
+        emailProviderStatusEl.textContent = 'Not connected — click Connect Gmail to authorize';
+        if (emailServerPrereqEl) emailServerPrereqEl.classList.add('hidden');
+    } catch (_) {
+        emailProviderStatusEl.style.color = '#1d4ed8';
+        emailProviderStatusEl.textContent = 'Not connected — click Connect Gmail to authorize';
+        if (emailServerPrereqEl) emailServerPrereqEl.classList.add('hidden');
+    }
+}
+
+async function connectEmailProvider() {
+    const response = await window.authenticatedFetch('/api/email/connect-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider: 'gmail' })
+    });
+    if (!response.ok) {
+        const text = await response.text().catch(() => 'Unable to create Gmail connect URL');
+        if (text.includes('Missing Google OAuth') || response.status === 500) {
+            throw new Error('Server OAuth credentials are not configured. Add GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET to your .env file, then restart the server.');
+        }
+        throw new Error(text);
+    }
+
+    const data = await response.json();
+    if (!data?.connect_url) {
+        throw new Error('Missing Gmail connect URL');
+    }
+
+    window.location.href = data.connect_url;
+}
+
+async function disconnectEmailProvider() {
+    const response = await window.authenticatedFetch('/api/email/disconnect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' }
+    });
+    if (!response.ok) {
+        const text = await response.text().catch(() => 'Unable to disconnect Gmail');
+        throw new Error(text);
+    }
+
+    await loadEmailProviderStatus();
+}
+
+function sanitizeFilenamePart(value, fallback = 'profile') {
+    const normalized = String(value || '').trim();
+    if (!normalized) return fallback;
+    const cleaned = normalized
+        .replace(/[^a-zA-Z0-9_-]+/g, '_')
+        .replace(/_+/g, '_')
+        .replace(/^_+|_+$/g, '');
+    return cleaned || fallback;
+}
+
+async function exportProfileSettings() {
+    if (!window.authenticatedFetch) {
+        showTemporaryStatus(settingsStatus, 'Authentication is not ready. Please refresh.', true, 4000);
+        return;
+    }
+
+    showTemporaryStatus(settingsStatus, 'Exporting profile settings...', false, 0);
+    try {
+        const response = await window.authenticatedFetch('/api/profile-settings/export', {
+            method: 'GET'
+        });
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Export failed: ${response.status} ${errorText}`);
+        }
+
+        const exportData = await response.json();
+        const profileName = sanitizeFilenamePart(exportData?.profile?.display_name, 'profile');
+        const dateStamp = new Date().toISOString().slice(0, 10);
+        const filename = `bravo_profile_settings_${profileName}_${dateStamp}.json`;
+
+        const jsonText = JSON.stringify(exportData, null, 2);
+        const blob = new Blob([jsonText], { type: 'application/json' });
+        const blobUrl = window.URL.createObjectURL(blob);
+
+        const link = document.createElement('a');
+        link.href = blobUrl;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(blobUrl);
+
+        showTemporaryStatus(settingsStatus, 'Profile settings export complete.', false, 4000);
+    } catch (error) {
+        console.error('Error exporting profile settings:', error);
+        showTemporaryStatus(settingsStatus, `Export failed: ${error.message}`, true, 5000);
+    }
+}
+
+async function importProfileSettingsFromText(fileText) {
+    if (!window.authenticatedFetch) {
+        showTemporaryStatus(settingsStatus, 'Authentication is not ready. Please refresh.', true, 4000);
+        return;
+    }
+
+    let parsed;
+    try {
+        parsed = JSON.parse(fileText);
+    } catch (e) {
+        showTemporaryStatus(settingsStatus, 'Invalid JSON file. Please choose a valid export file.', true, 5000);
+        return;
+    }
+
+    const sourceName = parsed?.profile?.display_name || parsed?.profile?.aac_user_id || 'unknown profile';
+    const confirmed = window.confirm(
+        `Import settings from "${sourceName}" into the currently selected profile? This will overwrite matching settings sections.`
+    );
+    if (!confirmed) {
+        showTemporaryStatus(settingsStatus, 'Import cancelled.', false, 2500);
+        return;
+    }
+
+    showTemporaryStatus(settingsStatus, 'Importing profile settings...', false, 0);
+    try {
+        const response = await window.authenticatedFetch('/api/profile-settings/import', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(parsed)
+        });
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Import failed: ${response.status} ${errorText}`);
+        }
+
+        const result = await response.json();
+        const importedSections = Array.isArray(result.imported_sections) ? result.imported_sections : [];
+        await loadSettings();
+        showTemporaryStatus(
+            settingsStatus,
+            importedSections.length > 0
+                ? `Import complete: ${importedSections.join(', ')}`
+                : 'Import complete.',
+            false,
+            5000
+        );
+    } catch (error) {
+        console.error('Error importing profile settings:', error);
+        showTemporaryStatus(settingsStatus, `Import failed: ${error.message}`, true, 6000);
+    }
+}
+
+async function handleImportProfileSettingsFileSelection(event) {
+    const file = event?.target?.files?.[0];
+    if (!file) {
+        return;
+    }
+
+    try {
+        const fileText = await file.text();
+        await importProfileSettingsFromText(fileText);
+    } catch (error) {
+        console.error('Error reading import file:', error);
+        showTemporaryStatus(settingsStatus, 'Could not read import file.', true, 5000);
+    } finally {
+        // Allow selecting the same file again after import.
+        event.target.value = '';
     }
 }
 
@@ -314,9 +847,20 @@ async function saveSettings() {
     const newDisableTapPictograms = disableTapPictogramsInput ? disableTapPictogramsInput.checked : false;
     const newScanningOff = ScanningOffInput ? ScanningOffInput.checked : false;
     const newWaitForSwitchToScan = waitForSwitchToScanInput ? waitForSwitchToScanInput.checked : false;
+    const newPlayWaitForSwitchChime = playWaitForSwitchChimeInput ? playWaitForSwitchChimeInput.checked : false;
     const newEnableSightWords = enableSightWordsInput.checked;
     const newSightWordGradeLevel = sightWordGradeLevelInput.value;
-    const newSelectedTtsVoice = ttsVoiceSelect ? ttsVoiceSelect.value : null;
+    // Keep legacy selected_tts_voice_name aligned to the default partner voice.
+    const newSelectedTtsVoice = defaultPartnerVoiceSelect
+        ? defaultPartnerVoiceSelect.value
+        : (ttsVoiceSelect ? ttsVoiceSelect.value : null);
+    const newUserLanguage = userLanguageSelect ? userLanguageSelect.value : 'en-US';
+    const newDefaultPartnerLanguage = defaultPartnerLanguageSelect ? defaultPartnerLanguageSelect.value : 'en-US';
+    const newDefaultPartnerVoice = defaultPartnerVoiceSelect ? defaultPartnerVoiceSelect.value : '';
+    // Read from table-based location override languages
+    const locationOverrideTableMap = getLocationOverrideLanguagesFromTable();
+    const newLocationOverrideLanguages = Object.keys(locationOverrideTableMap);
+    const newLocationOverrideVoices = locationOverrideTableMap;
     const newGridColumns = gridColumnsSlider ? parseInt(gridColumnsSlider.value) : 6;
     const newToolbarPIN = toolbarPINInput ? toolbarPINInput.value.trim() : null;
     const newSpellLetterOrder = spellLetterOrderSelect ? spellLetterOrderSelect.value : 'alphabetical';
@@ -336,10 +880,6 @@ async function saveSettings() {
         - gridColumnsSlider exists: ${!!gridColumnsSlider}
         - gridColumnsSlider.value: ${gridColumnsSlider ? gridColumnsSlider.value : 'N/A'}
         - newGridColumns (parsed): ${newGridColumns}`);
-
-
-    const newLlmProvider = llmProviderSelect ? llmProviderSelect.value : 'gemini';
-
 
     // Validation
     if (!newDelay || isNaN(parseInt(newDelay)) || parseInt(newDelay) < 100) {
@@ -362,8 +902,8 @@ async function saveSettings() {
         settingsStatus.textContent = 'Invalid Speech Rate. Must be a number (e.g., 50-400).';
         settingsStatus.style.color = 'red'; setTimeout(() => { settingsStatus.textContent = ''; }, 4000); return;
     }
-     if (!newLLMOptions || isNaN(parseInt(newLLMOptions)) || parseInt(newLLMOptions) < 1 || parseInt(newLLMOptions) > 50) {
-        settingsStatus.textContent = 'Invalid LLM Options. Must be a number (e.g., 1-50).';
+      if (newLLMOptions === '' || isNaN(parseInt(newLLMOptions)) || parseInt(newLLMOptions) < 0 || parseInt(newLLMOptions) > 50) {
+          settingsStatus.textContent = 'Invalid LLM Options. Must be a number (e.g., 0-50).';
         settingsStatus.style.color = 'red'; setTimeout(() => { settingsStatus.textContent = ''; }, 4000); return;
     }
      if (newFreestyleOptions !== '' && (isNaN(parseInt(newFreestyleOptions)) || parseInt(newFreestyleOptions) < 1 || parseInt(newFreestyleOptions) > 50)) {
@@ -388,8 +928,18 @@ async function saveSettings() {
         settingsStatus.textContent = 'Toolbar PIN must be between 3 and 10 characters.';
         settingsStatus.style.color = 'red'; setTimeout(() => { settingsStatus.textContent = ''; }, 4000); return;
     }
-    if (ttsVoiceSelect && !newSelectedTtsVoice && availableVoices.length > 0) { // Check if voices loaded but none selected
-        showTemporaryStatus(settingsStatus, 'Please select a TTS voice.', true, 4000); return;
+    if (!newDefaultPartnerVoice && availableVoices.length > 0) { // Always require a default partner voice when voices are available
+        showTemporaryStatus(settingsStatus, 'Please select a Default Partner Voice (required for announcements).', true, 4000); return;
+    }
+    if (!newUserLanguage) {
+        showTemporaryStatus(settingsStatus, 'Please select a user language.', true, 4000); return;
+    }
+    if (!newDefaultPartnerLanguage) {
+        showTemporaryStatus(settingsStatus, 'Please select a default partner language.', true, 4000); return;
+    }
+    const missingOverrideVoices = newLocationOverrideLanguages.filter(locale => !newLocationOverrideVoices[locale]);
+    if (missingOverrideVoices.length > 0) {
+        showTemporaryStatus(settingsStatus, `Select voices for override language(s): ${missingOverrideVoices.join(', ')}`, true, 5000); return;
     }
     // Provider selection is always valid since it has default values
     // Remove the old LLM model validation
@@ -407,6 +957,7 @@ async function saveSettings() {
         scanMode: newScanMode,
         ScanningOff: newScanningOff,    
         waitForSwitchToScan: newWaitForSwitchToScan,
+        playWaitForSwitchChime: newPlayWaitForSwitchChime,
         SummaryOff: newSummaryOff,
         autoClean: newAutoClean,
         displaySplash: newDisplaySplash,
@@ -417,8 +968,12 @@ async function saveSettings() {
         disableTapPictograms: newDisableTapPictograms,
         enableSightWords: newEnableSightWords,
         sightWordGradeLevel: newSightWordGradeLevel,
-        selected_tts_voice_name: newSelectedTtsVoice,
-        llm_provider: newLlmProvider, // Updated to use provider instead of specific model
+        selected_tts_voice_name: newDefaultPartnerVoice,
+        userLanguage: newUserLanguage,
+        defaultPartnerLanguage: newDefaultPartnerLanguage,
+        defaultPartnerVoice: newDefaultPartnerVoice,
+        locationOverrideLanguages: newLocationOverrideLanguages,
+        locationOverrideVoices: newLocationOverrideVoices,
         gridColumns: newGridColumns, // Add gridColumns to save payload
         spellLetterOrder: newSpellLetterOrder, // Add spell letter order setting
         vocabularyLevel: newVocabularyLevel // Add vocabulary level setting
@@ -430,6 +985,7 @@ async function saveSettings() {
 
     console.log("Saving settings:", settingsToSave);
     console.log("FULL PAYLOAD:", JSON.stringify(settingsToSave, null, 2));
+    markAdminSaving();
     showTemporaryStatus(settingsStatus, 'Saving...', false, 0)
 
     try {
@@ -456,7 +1012,11 @@ async function saveSettings() {
             applicationVolumeSlider.value = volume;
             volumeDisplay.textContent = `${volume}/10`;
         }
-        if (LLMOptionsInput) LLMOptionsInput.value = currentSettings.LLMOptions || '';
+        if (LLMOptionsInput) {
+            LLMOptionsInput.value = currentSettings.LLMOptions !== null && currentSettings.LLMOptions !== undefined
+                ? currentSettings.LLMOptions
+                : '';
+        }
         if (FreestyleOptionsInput) {
             console.log('DEBUG FreestyleOptions - Reload value:', currentSettings.FreestyleOptions);
             FreestyleOptionsInput.value = currentSettings.FreestyleOptions !== null && currentSettings.FreestyleOptions !== undefined ? currentSettings.FreestyleOptions : '';
@@ -465,6 +1025,7 @@ async function saveSettings() {
         if (scanModeInput) scanModeInput.value = currentSettings.scanMode === 'step' ? 'step' : 'auto';
         if (ScanningOffInput) ScanningOffInput.checked = currentSettings.ScanningOff || false;
         if (waitForSwitchToScanInput) waitForSwitchToScanInput.checked = currentSettings.waitForSwitchToScan || false;
+        if (playWaitForSwitchChimeInput) playWaitForSwitchChimeInput.checked = currentSettings.playWaitForSwitchChime || false;
         if (SummaryOffInput) SummaryOffInput.checked = currentSettings.SummaryOff || false;
         if (autoCleanInput) autoCleanInput.checked = currentSettings.autoClean || false;
         if (displaySplashInput) displaySplashInput.checked = currentSettings.displaySplash || false;
@@ -473,14 +1034,21 @@ async function saveSettings() {
         if (enablePictogramsInput) enablePictogramsInput.checked = currentSettings.enablePictograms !== false;
         if (enableSightWordsInput) enableSightWordsInput.checked = currentSettings.enableSightWords !== false;
         if (sightWordGradeLevelInput) sightWordGradeLevelInput.value = currentSettings.sightWordGradeLevel || 'pre_k';
-        if (ttsVoiceSelect) ttsVoiceSelect.value = currentSettings.selected_tts_voice_name || '';
+        if (userLanguageSelect) userLanguageSelect.value = currentSettings.userLanguage || 'en-US';
+        if (defaultPartnerLanguageSelect) defaultPartnerLanguageSelect.value = currentSettings.defaultPartnerLanguage || 'en-US';
+        if (locationOverrideLanguagesSelect) {
+            setSelectedMultiValues(locationOverrideLanguagesSelect, currentSettings.locationOverrideLanguages || []);
+        }
+        refreshLanguageDependentVoiceControls();
+        if (defaultPartnerVoiceSelect) {
+            defaultPartnerVoiceSelect.value = currentSettings.defaultPartnerVoice || currentSettings.selected_tts_voice_name || '';
+        }
+        if (ttsVoiceSelect) ttsVoiceSelect.value = currentSettings.defaultPartnerVoice || currentSettings.selected_tts_voice_name || '';
         // Update gridColumns slider after save
         if (gridColumnsSlider && currentSettings.gridColumns !== undefined) {
             gridColumnsSlider.value = currentSettings.gridColumns;
             if (gridColumnsValue) gridColumnsValue.textContent = currentSettings.gridColumns;
         }
-        // Update LLM provider select
-        if (llmProviderSelect) llmProviderSelect.value = currentSettings.llm_provider || 'gemini';
         // Update spellLetterOrder select
         if (spellLetterOrderSelect) {
             const savedValue = currentSettings.spellLetterOrder || 'alphabetical';
@@ -510,12 +1078,116 @@ async function saveSettings() {
         if (typeof window.updateSightWordSettings === 'function') {
             window.updateSightWordSettings(currentSettings);
         }
+
+        markAdminSaved();
         
         showTemporaryStatus(settingsStatus, 'Settings saved successfully!', false);
 
     } catch (error) {
         console.error('Error saving settings:', error);
         showTemporaryStatus(settingsStatus, `Error saving: ${error.message}`, true, 5000);
+    }
+}
+
+/**
+ * Tests the Default Partner Voice
+ */
+async function testDefaultPartnerVoice() {
+    if (!defaultPartnerVoiceSelect) return;
+    const selectedVoice = defaultPartnerVoiceSelect.value;
+    if (!selectedVoice) {
+        showTemporaryStatus(settingsStatus, "Please select a Default Partner Voice to test.", true, 3000);
+        return;
+    }
+    showTemporaryStatus(settingsStatus, `Testing voice: ${selectedVoice}...`, false, 0);
+    try {
+        const response = await window.authenticatedFetch('/api/test-tts-voice', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                voice_name: selectedVoice, 
+                text: "This is a test of the Default Partner Voice."
+            })
+        });
+        
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ detail: response.statusText }));
+            throw new Error(errorData.detail || `Test failed: ${response.statusText}`);
+        }
+        
+        const result = await response.json();
+        if (result.audio_url) {
+            const audioResponse = await fetch(result.audio_url);
+            if (!audioResponse.ok) throw new Error(`Failed to fetch audio file: ${audioResponse.status}`);
+            const audioArrayBuffer = await audioResponse.arrayBuffer();
+            await playTestAudio(audioArrayBuffer, result.sample_rate || 22050);
+            showTemporaryStatus(settingsStatus, "Default Partner Voice tested successfully!", false, 3000);
+        } else if (result.audio_data) {
+            const binaryString = window.atob(result.audio_data);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            await playTestAudio(bytes.buffer, result.sample_rate || 22050);
+            showTemporaryStatus(settingsStatus, "Default Partner Voice tested successfully!", false, 3000);
+        } else {
+            throw new Error('No playable audio returned from test endpoint.');
+        }
+    } catch (error) {
+        console.error('Error testing voice:', error);
+        showTemporaryStatus(settingsStatus, `Error testing voice: ${error.message}`, true, 4000);
+    }
+}
+
+/**
+ * Tests a specific Location Override Voice
+ */
+async function testLocationOverrideVoice(voiceSelect) {
+    if (!voiceSelect) return;
+    const selectedVoice = voiceSelect.value;
+    if (!selectedVoice) {
+        alert("Please select a voice to test.");
+        return;
+    }
+    try {
+        showTemporaryStatus(settingsStatus, `Testing voice: ${selectedVoice}...`, false, 0);
+        const response = await window.authenticatedFetch('/api/test-tts-voice', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                voice_name: selectedVoice, 
+                text: "This is a test of the location override voice."
+            })
+        });
+        
+        if (!response.ok) {
+            const errorData = await response.json().catch(() => ({ detail: response.statusText }));
+            throw new Error(errorData.detail || `Test failed: ${response.statusText}`);
+        }
+        
+        const result = await response.json();
+        if (result.audio_url) {
+            const audioResponse = await fetch(result.audio_url);
+            if (!audioResponse.ok) throw new Error(`Failed to fetch audio file: ${audioResponse.status}`);
+            const audioArrayBuffer = await audioResponse.arrayBuffer();
+            await playTestAudio(audioArrayBuffer, result.sample_rate || 22050);
+            showTemporaryStatus(settingsStatus, "Location override voice tested successfully!", false, 3000);
+        } else if (result.audio_data) {
+            const binaryString = window.atob(result.audio_data);
+            const len = binaryString.length;
+            const bytes = new Uint8Array(len);
+            for (let i = 0; i < len; i++) {
+                bytes[i] = binaryString.charCodeAt(i);
+            }
+            await playTestAudio(bytes.buffer, result.sample_rate || 22050);
+            showTemporaryStatus(settingsStatus, "Location override voice tested successfully!", false, 3000);
+        } else {
+            throw new Error('No playable audio returned from test endpoint.');
+        }
+    } catch (error) {
+        console.error('Error testing voice:', error);
+        showTemporaryStatus(settingsStatus, `Error testing voice: ${error.message}`, true, 4000);
     }
 }
 
@@ -704,6 +1376,7 @@ async function loadToolbarPIN() {
  */
 async function saveToolbarPIN(newPIN) {
     try {
+        markAdminSaving();
         const response = await window.authenticatedFetch('/api/account/toolbar-pin', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
@@ -721,6 +1394,7 @@ async function saveToolbarPIN(newPIN) {
         }
         
         console.log("Toolbar PIN saved successfully");
+        markAdminSaved();
         return true;
     } catch (error) {
         console.error('Error saving toolbar PIN:', error);
@@ -776,6 +1450,45 @@ async function initializePage() {
         // Add Event Listeners
         if (saveSettingsButton) saveSettingsButton.addEventListener('click', saveSettings);
         if (testTtsVoiceButton) testTtsVoiceButton.addEventListener('click', testSelectedVoice);
+        const testDefaultPartnerVoiceButton = document.getElementById('testDefaultPartnerVoiceButton');
+        if (testDefaultPartnerVoiceButton) testDefaultPartnerVoiceButton.addEventListener('click', testDefaultPartnerVoice);
+        if (defaultPartnerLanguageSelect) defaultPartnerLanguageSelect.addEventListener('change', refreshLanguageDependentVoiceControls);
+        if (addLocationOverrideRowButton) addLocationOverrideRowButton.addEventListener('click', addLocationOverrideRow);
+        if (locationOverrideLanguagesSelect) locationOverrideLanguagesSelect.addEventListener('change', refreshLanguageDependentVoiceControls);
+        if (refreshEmailStatusButton) {
+            refreshEmailStatusButton.addEventListener('click', () => {
+                loadEmailProviderStatus().catch((error) => {
+                    showTemporaryStatus(settingsStatus, `Email status error: ${error.message}`, true, 4000);
+                });
+            });
+        }
+        if (connectEmailButton) {
+            connectEmailButton.addEventListener('click', () => {
+                connectEmailProvider().catch((error) => {
+                    showTemporaryStatus(settingsStatus, `Email connect error: ${error.message}`, true, 4000);
+                });
+            });
+        }
+        if (disconnectEmailButton) {
+            disconnectEmailButton.addEventListener('click', () => {
+                disconnectEmailProvider().catch((error) => {
+                    showTemporaryStatus(settingsStatus, `Email disconnect error: ${error.message}`, true, 4000);
+                });
+            });
+        }
+        if (exportProfileSettingsButton) {
+            exportProfileSettingsButton.addEventListener('click', () => {
+                exportProfileSettings().catch((error) => {
+                    showTemporaryStatus(settingsStatus, `Export error: ${error.message}`, true, 4000);
+                });
+            });
+        }
+        if (importProfileSettingsButton && importProfileSettingsFileInput) {
+            importProfileSettingsButton.addEventListener('click', () => {
+                importProfileSettingsFileInput.click();
+            });
+            importProfileSettingsFileInput.addEventListener('change', handleImportProfileSettingsFileSelection);
+        }
         
         // Mood-related event listeners
         // Grid columns slider event listener
@@ -801,7 +1514,8 @@ async function initializePage() {
 
 
         // Initial data loading
-        if (ttsVoiceSelect) await loadVoices();
+        populateLanguageSelectors();
+        await loadVoices();
         // Static provider selection - no need to populate dropdown
         await loadSettings();
         await loadToolbarPIN(); // Load the toolbar PIN on page initialization

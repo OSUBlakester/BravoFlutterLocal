@@ -50,10 +50,10 @@ class _CustomImagesWidgetState extends State<CustomImagesWidget> {
       );
 
       setState(() {
-        _images = images;
-        _status = images.isEmpty 
+        _images = images.where((img) => !img.isProfileImage).toList();
+        _status = _images.isEmpty 
             ? 'No custom images yet. Upload your first image!' 
-            : '${images.length} custom image(s)';
+            : '${_images.length} custom image(s)';
       });
     } catch (e) {
       setState(() {
@@ -84,10 +84,10 @@ class _CustomImagesWidgetState extends State<CustomImagesWidget> {
       );
 
       setState(() {
-        _images = images;
-        _status = images.isEmpty 
+        _images = images.where((img) => !img.isProfileImage).toList();
+        _status = _images.isEmpty 
             ? 'No custom images found. Upload your first image!' 
-            : 'Cache reloaded! ${images.length} custom images loaded';
+            : 'Cache reloaded! ${_images.length} custom images loaded';
       });
       
       if (mounted) {
@@ -146,12 +146,13 @@ class _CustomImagesWidgetState extends State<CustomImagesWidget> {
 
       final uploadedImage = await CustomImageService.uploadImage(
         imageFile: File(imageFile.path),
-        description: result,
+        primaryTag: result,
         idToken: widget.idToken,
         aacUserId: widget.aacUserId,
       );
 
       if (uploadedImage != null) {
+        CustomImageService.clearCache();
         await _loadImages(); // Refresh the list
         
         // Automatically clear pictogram cache so new image appears throughout the app
@@ -206,12 +207,13 @@ class _CustomImagesWidgetState extends State<CustomImagesWidget> {
 
       final updatedImage = await CustomImageService.updateImage(
         imageId: image.id,
-        description: result,
+        primaryTag: result,
         idToken: widget.idToken,
         aacUserId: widget.aacUserId,
       );
 
       if (updatedImage != null) {
+        CustomImageService.clearCache();
         await _loadImages(); // Refresh the list
         
         // Automatically clear pictogram cache so updated image appears throughout the app
@@ -285,6 +287,7 @@ class _CustomImagesWidgetState extends State<CustomImagesWidget> {
       );
 
       if (success) {
+        CustomImageService.clearCache();
         await _loadImages(); // Refresh the list
         
         // Automatically clear pictogram cache so deleted image no longer appears throughout the app
@@ -494,6 +497,53 @@ class CustomImageTile extends StatelessWidget {
     required this.onDelete,
   }) : super(key: key);
 
+  bool _isLocalFileUrl(String url) {
+    return url.startsWith('file://') || url.startsWith('/');
+  }
+
+  String _resolveLocalPath(String url) {
+    if (url.startsWith('file://')) {
+      return Uri.parse(url).toFilePath();
+    }
+    return url;
+  }
+
+  Widget _buildImageWidget(String url) {
+    if (_isLocalFileUrl(url)) {
+      final localPath = _resolveLocalPath(url);
+      return Image.file(
+        File(localPath),
+        fit: BoxFit.cover,
+        errorBuilder: (context, error, stackTrace) {
+          return Container(
+            color: Colors.grey[200],
+            child: const Icon(Icons.broken_image, color: Colors.grey),
+          );
+        },
+      );
+    }
+
+    return Image.network(
+      url,
+      fit: BoxFit.cover,
+      errorBuilder: (context, error, stackTrace) {
+        return Container(
+          color: Colors.grey[200],
+          child: const Icon(Icons.broken_image, color: Colors.grey),
+        );
+      },
+      loadingBuilder: (context, child, loadingProgress) {
+        if (loadingProgress == null) return child;
+        return Container(
+          color: Colors.grey[200],
+          child: const Center(
+            child: CircularProgressIndicator(strokeWidth: 2),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Card(
@@ -504,25 +554,7 @@ class CustomImageTile extends StatelessWidget {
           // Image
           Expanded(
             flex: 3,
-            child: Image.network(
-              image.imageUrl,
-              fit: BoxFit.cover,
-              errorBuilder: (context, error, stackTrace) {
-                return Container(
-                  color: Colors.grey[200],
-                  child: const Icon(Icons.broken_image, color: Colors.grey),
-                );
-              },
-              loadingBuilder: (context, child, loadingProgress) {
-                if (loadingProgress == null) return child;
-                return Container(
-                  color: Colors.grey[200],
-                  child: const Center(
-                    child: CircularProgressIndicator(strokeWidth: 2),
-                  ),
-                );
-              },
-            ),
+            child: _buildImageWidget(image.imageUrl),
           ),
           
           // Info and actions
@@ -591,11 +623,11 @@ class CustomImageUploadDialog extends StatefulWidget {
 }
 
 class _CustomImageUploadDialogState extends State<CustomImageUploadDialog> {
-  final _descriptionController = TextEditingController();
+  final _primaryTagController = TextEditingController();
 
   @override
   void dispose() {
-    _descriptionController.dispose();
+    _primaryTagController.dispose();
     super.dispose();
   }
 
@@ -609,15 +641,15 @@ class _CustomImageUploadDialogState extends State<CustomImageUploadDialog> {
           mainAxisSize: MainAxisSize.min,
           children: [
             TextField(
-              controller: _descriptionController,
+              controller: _primaryTagController,
               decoration: const InputDecoration(
-                labelText: 'Description *',
-                hintText: 'e.g., Disney World,vacation,family',
-                helperText: 'First item becomes the category/subcategory, additional items become tags',
+                labelText: 'Primary Tag *',
+                hintText: 'e.g., mom, dad, home, school',
+                helperText: 'Use one tag per image, matching the web app flow.',
                 border: OutlineInputBorder(),
               ),
               textCapitalization: TextCapitalization.words,
-              maxLines: 2,
+              maxLines: 1,
             ),
             const SizedBox(height: 8),
             const Text(
@@ -634,17 +666,17 @@ class _CustomImageUploadDialogState extends State<CustomImageUploadDialog> {
         ),
         ElevatedButton(
           onPressed: () {
-            if (_descriptionController.text.trim().isEmpty) {
+            if (_primaryTagController.text.trim().isEmpty) {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
-                  content: Text('Please enter a description'),
+                  content: Text('Please enter a primary tag'),
                   backgroundColor: Colors.red,
                 ),
               );
               return;
             }
 
-            Navigator.of(context).pop(_descriptionController.text.trim());
+            Navigator.of(context).pop(_primaryTagController.text.trim());
           },
           child: const Text('Upload'),
         ),
@@ -666,19 +698,28 @@ class CustomImageEditDialog extends StatefulWidget {
 }
 
 class _CustomImageEditDialogState extends State<CustomImageEditDialog> {
-  late final TextEditingController _descriptionController;
+  late final TextEditingController _primaryTagController;
+
+  bool _isLocalFileUrl(String url) {
+    return url.startsWith('file://') || url.startsWith('/');
+  }
+
+  String _resolveLocalPath(String url) {
+    if (url.startsWith('file://')) {
+      return Uri.parse(url).toFilePath();
+    }
+    return url;
+  }
 
   @override
   void initState() {
     super.initState();
-    // Reconstruct description from concept and tags
-    final allParts = [widget.image.concept, ...widget.image.tags];
-    _descriptionController = TextEditingController(text: allParts.join(', '));
+    _primaryTagController = TextEditingController(text: widget.image.subconcept);
   }
 
   @override
   void dispose() {
-    _descriptionController.dispose();
+    _primaryTagController.dispose();
     super.dispose();
   }
 
@@ -701,23 +742,31 @@ class _CustomImageEditDialogState extends State<CustomImageEditDialog> {
               ),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(8),
-                child: Image.network(
-                  widget.image.imageUrl,
-                  fit: BoxFit.cover,
-                  errorBuilder: (context, error, stackTrace) {
-                    return const Icon(Icons.broken_image, color: Colors.grey);
-                  },
-                ),
+                child: _isLocalFileUrl(widget.image.imageUrl)
+                    ? Image.file(
+                        File(_resolveLocalPath(widget.image.imageUrl)),
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) {
+                          return const Icon(Icons.broken_image, color: Colors.grey);
+                        },
+                      )
+                    : Image.network(
+                        widget.image.imageUrl,
+                        fit: BoxFit.cover,
+                        errorBuilder: (context, error, stackTrace) {
+                          return const Icon(Icons.broken_image, color: Colors.grey);
+                        },
+                      ),
               ),
             ),
             const SizedBox(height: 16),
             TextField(
-              controller: _descriptionController,
+              controller: _primaryTagController,
               maxLines: 3,
               decoration: const InputDecoration(
-                labelText: 'Description *',
-                hintText: 'e.g., Mom, Dad, Disney World,vacation,family',
-                helperText: 'Use commas to separate multiple descriptions. First item will be the main category.',
+                labelText: 'Primary Tag *',
+                hintText: 'e.g., mom, dad, home, school',
+                helperText: 'This matches the web app custom image flow.',
                 helperMaxLines: 2,
                 border: OutlineInputBorder(),
               ),
@@ -733,17 +782,17 @@ class _CustomImageEditDialogState extends State<CustomImageEditDialog> {
         ),
         ElevatedButton(
           onPressed: () {
-            if (_descriptionController.text.trim().isEmpty) {
+            if (_primaryTagController.text.trim().isEmpty) {
               ScaffoldMessenger.of(context).showSnackBar(
                 const SnackBar(
-                  content: Text('Please enter a description'),
+                  content: Text('Please enter a primary tag'),
                   backgroundColor: Colors.red,
                 ),
               );
               return;
             }
 
-            Navigator.of(context).pop(_descriptionController.text.trim());
+            Navigator.of(context).pop(_primaryTagController.text.trim());
           },
           child: const Text('Save'),
         ),

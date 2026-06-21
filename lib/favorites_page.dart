@@ -508,7 +508,13 @@ class FavoritesPageState extends State<FavoritesPage> with RouteAware, TickerPro
         _speakScanningPrompt('Press switch to begin scanning');
         hasPlayedInitialWaitForSwitchVoicePrompt = true;
       } else {
-        unawaited(_playWaitForSwitchNotification());
+        if (_showingArticles) {
+          unawaited(_playWaitForSwitchNotification());
+        } else {
+          debugPrint(
+            'FavoritesPage: Skipping wait chime for non-LLM favorites grid',
+          );
+        }
       }
       return;
     }
@@ -768,6 +774,19 @@ class FavoritesPageState extends State<FavoritesPage> with RouteAware, TickerPro
   }
 
   Future<void> _playWaitForSwitchNotification() async {
+    final settingsProvider = Provider.of<UserSettingsProvider>(
+      context,
+      listen: false,
+    );
+    final playChime =
+        settingsProvider.settings?.playWaitForSwitchChime ?? false;
+    if (!playChime) {
+      debugPrint(
+        'FavoritesPage waitForSwitchNotification: Chime disabled in settings',
+      );
+      return;
+    }
+
     final now = DateTime.now();
     if (_lastWaitForSwitchNotificationAt != null &&
         now.difference(_lastWaitForSwitchNotificationAt!).inMilliseconds <
@@ -781,7 +800,29 @@ class FavoritesPageState extends State<FavoritesPage> with RouteAware, TickerPro
 
     final player = AudioPlayer();
     try {
-      await player.setAsset('assets/notification_v2.mp3');
+      if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+        try {
+          const platform = MethodChannel('audio_routing');
+          if (Platform.isIOS) {
+            await platform.invokeMethod('routeToPersonal');
+          } else {
+            await platform.invokeMethod('resetToDefault');
+          }
+        } catch (e) {
+          debugPrint(
+            'FavoritesPage waitForSwitchNotification: Personal routing setup failed (non-critical): $e',
+          );
+        }
+      }
+
+      final personalVolume = await _getEffectivePersonalVolume();
+      const chimeCompensation = 0.18;
+      const chimeMaxCap = 0.16;
+      final chimeVolume = ((personalVolume / 10.0) * chimeCompensation)
+          .clamp(0.0, chimeMaxCap);
+
+      await player.setAsset('assets/notification.mp3');
+      await player.setVolume(chimeVolume);
       await player.play();
       await player.playerStateStream.firstWhere(
         (state) => state.processingState == ProcessingState.completed,
@@ -856,7 +897,16 @@ class FavoritesPageState extends State<FavoritesPage> with RouteAware, TickerPro
       try {
         final user = FirebaseAuth.instance.currentUser;
         if (user != null) {
-          final refreshedToken = await user.getIdToken(true);
+          String? refreshedToken;
+          try {
+            refreshedToken = await user
+                .getIdToken(true)
+                .timeout(const Duration(seconds: 6));
+          } catch (_) {
+            refreshedToken = await user
+                .getIdToken()
+                .timeout(const Duration(seconds: 4));
+          }
           if (refreshedToken != null && refreshedToken.isNotEmpty) {
             idToken = refreshedToken;
             debugPrint('FavoritesPage announceViaBackend: Token refreshed successfully');

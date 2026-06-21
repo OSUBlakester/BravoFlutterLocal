@@ -4,6 +4,205 @@ let freestyleGamepadIndex = null;
 let freestyleGamepadPollHandle = null;
 let freestyleLastGamepadInputTime = 0;
 const FREESTYLE_GAMEPAD_DEBOUNCE_MS = 300;
+const FREESTYLE_UI_TEXT_DEFAULTS = {
+    baseTitle: 'Free Style Communication',
+    baseTitleShort: 'Free Style',
+    exitFreestyle: 'Exit Freestyle',
+    buildSpace: 'Build Space',
+    buildMessagePlaceholder: 'Build your message here...',
+    speakDisplay: 'Speak Display',
+    backspace: 'Backspace',
+    clearDisplay: 'Clear Display',
+    cleanUp: 'Clean Up',
+    newRow: 'New Row',
+    goBack: 'Go Back',
+    somethingElse: 'Something Else',
+    somethingElseAz: 'Something Else A-Z',
+    suggestedWords: 'Suggested Words',
+    tools: 'Tools',
+    wordCategories: 'Word Categories',
+    spelling: 'Spelling',
+    numbers: 'Numbers',
+    numbersAdd: 'Add',
+    numbersReset: 'Reset to',
+    actionSection: 'Action',
+    chooseWordSection: 'Choose Word',
+    loading: 'Loading...',
+    // Audio prompts spoken to the user
+    promptDisplayEmpty: 'Display is empty.',
+    promptUnableToSpeak: 'Unable to speak display right now.',
+    promptStartedNewRow: 'Started new row.',
+    promptUnableToStartRow: 'Unable to start a new row right now.',
+    promptNoOtherOptions: 'I could not find other word options.',
+    promptNoMoreNumbers: 'No more numbers in this range.'
+};
+let freestyleUiText = { ...FREESTYLE_UI_TEXT_DEFAULTS };
+
+// Load settings once: extracts LLM options, autoClean, AND precomputed translation bundle.
+// Page always shows immediately with English defaults; labels swap to translated values
+// as soon as settings are available (no blank screen, no live translation API call).
+async function loadFreestyleSettings() {
+    try {
+        const settingsResponse = await authenticatedFetch('/api/settings');
+        if (!settingsResponse.ok) {
+            return;
+        }
+
+        const settings = await settingsResponse.json();
+
+        // Apply LLM / behaviour options
+        const freestyleOptions = Number(settings.FreestyleOptions);
+        const composeOptions = Number(settings.LLMOptions);
+        if (!Number.isNaN(freestyleOptions) && freestyleOptions > 0) {
+            LLMOptions = freestyleOptions;
+        } else if (!Number.isNaN(composeOptions) && composeOptions > 0) {
+            LLMOptions = composeOptions;
+        }
+        freestyleAutoClean = settings.autoClean === true;
+
+        // Apply precomputed translation bundle if available (populated by admin Translate Pages).
+        // If a legacy bundle is missing newer keys, backfill only the missing values with
+        // a small one-off translation request so newly added labels do not stay in English.
+        const targetLocale = String(settings?.userLanguage || 'en-US').trim() || 'en-US';
+        if (targetLocale.toLowerCase() !== 'en-us') {
+            const pretranslated = settings?.specialPageTranslations?.freestyle?.[targetLocale];
+            const missingKeys = [];
+
+            if (pretranslated && typeof pretranslated === 'object') {
+                Object.keys(FREESTYLE_UI_TEXT_DEFAULTS).forEach((key) => {
+                    const candidate = String(pretranslated[key] || '').trim();
+                    if (candidate) {
+                        freestyleUiText[key] = candidate;
+                    } else {
+                        missingKeys.push(key);
+                    }
+                });
+            } else {
+                // No saved bundle yet for this locale. Leave defaults in place rather than
+                // blocking first paint with a full-page translation request.
+                return;
+            }
+
+            if (missingKeys.length > 0) {
+                const response = await authenticatedFetch('/api/translate-lines', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        lines: missingKeys.map((key) => FREESTYLE_UI_TEXT_DEFAULTS[key]),
+                        source_locale: 'en-US',
+                        target_locale: targetLocale
+                    })
+                });
+
+                if (response.ok) {
+                    const payload = await response.json();
+                    const translatedLines = Array.isArray(payload.translated_lines) ? payload.translated_lines : [];
+                    missingKeys.forEach((key, index) => {
+                        const translatedValue = String(translatedLines[index] || '').trim();
+                        if (translatedValue) {
+                            freestyleUiText[key] = translatedValue;
+                        }
+                    });
+                }
+            }
+        }
+    } catch (error) {
+        console.error('Failed to load freestyle settings:', error);
+    }
+}
+
+
+function applyFreestyleLocalization() {
+    const setText = (id, value) => {
+        const element = document.getElementById(id);
+        if (element) {
+            element.textContent = value;
+        }
+    };
+
+    setText('exit-creation-btn', freestyleUiText.exitFreestyle);
+    setText('read-creation-btn', freestyleUiText.speakDisplay);
+    setText('backspace-btn', freestyleUiText.backspace);
+    setText('clear-word-btn', freestyleUiText.clearDisplay);
+    setText('ai-edit-btn', freestyleUiText.cleanUp);
+    setText('new-row-btn', freestyleUiText.newRow);
+    setText('action-go-back-btn', freestyleUiText.goBack);
+    setText('words-section-title', freestyleUiText.suggestedWords);
+    setText('tool-panel-title', freestyleUiText.wordCategories);
+    setText('categories-tool-btn', freestyleUiText.wordCategories);
+    setText('spelling-tool-btn', freestyleUiText.spelling);
+    setText('numbers-tool-btn', freestyleUiText.numbers);
+
+    const buildSpaceTitle = document.querySelector('#action-section .section-title');
+    if (buildSpaceTitle) {
+        buildSpaceTitle.textContent = freestyleUiText.buildSpace;
+    }
+
+    const toolsTitle = document.querySelector('#tool-toggle-section .section-title');
+    if (toolsTitle) {
+        toolsTitle.textContent = freestyleUiText.tools;
+    }
+
+    const buildSpaceInput = document.getElementById('current-word');
+    if (buildSpaceInput) {
+        buildSpaceInput.placeholder = freestyleUiText.buildMessagePlaceholder;
+    }
+
+    const loadingText = document.querySelector('#loading-indicator p');
+    if (loadingText) {
+        loadingText.textContent = freestyleUiText.loading;
+    }
+
+    // Compose runtime creates some standard labels dynamically; provide localized
+    // values through body dataset so compose_create.js can render them in locale.
+    document.body.dataset.composeGoBack = freestyleUiText.goBack;
+    document.body.dataset.composeSuggestedWords = freestyleUiText.suggestedWords;
+    document.body.dataset.composeSomethingElse = freestyleUiText.somethingElse;
+    document.body.dataset.composeSomethingElseAz = freestyleUiText.somethingElseAz;
+    document.body.dataset.numbersAdd = freestyleUiText.numbersAdd;
+    document.body.dataset.numbersReset = freestyleUiText.numbersReset;
+
+    // If prediction buttons were already rendered before localization completed,
+    // update them in place now.
+    document.querySelectorAll('#word-predictions [data-standard-option-type]').forEach((button) => {
+        const optionType = String(button.dataset.standardOptionType || '').trim();
+        if (optionType === 'go-back') {
+            button.textContent = freestyleUiText.goBack;
+        } else if (optionType === 'something-else') {
+            button.textContent = freestyleUiText.somethingElse;
+        } else if (optionType === 'something-else-az') {
+            button.textContent = freestyleUiText.somethingElseAz;
+        }
+    });
+
+    // Keep title in sync if compose logic already set it.
+    if (typeof updateWordsSectionTitle === 'function') {
+        updateWordsSectionTitle();
+    }
+
+    // Section-level scan prompts are spoken by compose_create.js.
+    // Set explicit localized labels so scanning does not fall back to hardcoded English.
+    const actionSection = document.getElementById('action-section');
+    if (actionSection) {
+        actionSection.dataset.scanLabel = String(
+            freestyleUiText.actionSection || freestyleUiText.buildSpace || 'Action'
+        );
+    }
+
+    const chooseWordSection = document.getElementById('choose-word-section');
+    if (chooseWordSection) {
+        chooseWordSection.dataset.scanLabel = String(
+            freestyleUiText.chooseWordSection || freestyleUiText.suggestedWords || 'Choose Word'
+        );
+    }
+
+    const toolToggleSection = document.getElementById('tool-toggle-section');
+    if (toolToggleSection) {
+        toolToggleSection.dataset.scanLabel = String(
+            freestyleUiText.tools || 'Tools'
+        );
+    }
+}
 
 function getFreestyleNavigationContext() {
     const params = new URLSearchParams(window.location.search);
@@ -55,16 +254,16 @@ async function updateFreestylePageTitle() {
             return;
         }
 
-        let baseTitle = 'Free Style Communication';
+        let baseTitle = freestyleUiText.baseTitle;
         const navContext = getFreestyleNavigationContext();
         if (navContext.originatingButton && navContext.isLlmGenerated) {
-            baseTitle = `Free Style - ${navContext.originatingButton}`;
+            baseTitle = `${freestyleUiText.baseTitleShort} - ${navContext.originatingButton}`;
         } else if (navContext.sourcePage && navContext.sourcePage.toLowerCase() !== 'home') {
             const pageName = navContext.sourcePage
                 .replace(/_/g, ' ')
                 .replace(/-/g, ' ')
                 .replace(/\b\w/g, (char) => char.toUpperCase());
-            baseTitle = `Free Style - ${pageName}`;
+            baseTitle = `${freestyleUiText.baseTitleShort} - ${pageName}`;
         }
 
         titleElement.textContent = currentProfile?.display_name
@@ -75,25 +274,6 @@ async function updateFreestylePageTitle() {
     }
 }
 
-async function loadFreestyleSettingsOverrides() {
-    try {
-        const response = await authenticatedFetch('/api/settings');
-        if (!response.ok) {
-            return;
-        }
-        const settings = await response.json();
-        const freestyleOptions = Number(settings.FreestyleOptions);
-        const composeOptions = Number(settings.LLMOptions);
-        if (!Number.isNaN(freestyleOptions) && freestyleOptions > 0) {
-            LLMOptions = freestyleOptions;
-        } else if (!Number.isNaN(composeOptions) && composeOptions > 0) {
-            LLMOptions = composeOptions;
-        }
-        freestyleAutoClean = settings.autoClean === true;
-    } catch (error) {
-        console.error('Failed to load freestyle override settings:', error);
-    }
-}
 
 function replaceButtonHandler(buttonId, handler) {
     const existingButton = document.getElementById(buttonId);
@@ -171,13 +351,24 @@ ADDITIONAL FREESTYLE REQUIREMENTS:
 - Return words or short phrases only.`;
 }
 
-async function requestFreestyleGeneralWords(requestDifferentOptions = false) {
+function freestyleStartsWithLetterFilter(word, selectedLetter) {
+    const trimmedWord = String(word || '').trim();
+    if (!trimmedWord || !selectedLetter) return false;
+    const normalizedStart = trimmedWord.replace(/^[^a-zA-Z]+/, '');
+    return normalizedStart.toLowerCase().startsWith(String(selectedLetter).toLowerCase());
+}
+
+async function requestFreestyleGeneralWords(requestDifferentOptions = false, requestOptions = {}) {
+    const startsWithLetter = String(requestOptions?.startsWithLetter || '').trim();
+    const requestedOptionCount = startsWithLetter
+        ? Math.min(50, Math.max(24, Math.max(1, LLMOptions) * 4))
+        : Math.max(1, LLMOptions);
     const payload = {
         ...getFreestyleRequestPayloadBase(),
         build_space_text: getCombinedBuildText().trim(),
         single_words_only: true,
         request_different_options: requestDifferentOptions,
-        max_options: Math.max(1, LLMOptions)
+        max_options: requestedOptionCount
     };
 
     try {
@@ -193,17 +384,25 @@ async function requestFreestyleGeneralWords(requestDifferentOptions = false) {
 
         const data = await response.json();
         const options = Array.isArray(data.word_options) ? data.word_options : [];
-        const nextWords = options
+        const parsedWords = options
             .map((item) => (typeof item === 'object' && item?.text ? item.text : item))
             .filter((item) => typeof item === 'string' && item.trim() !== '')
-            .slice(0, Math.max(1, LLMOptions));
+            .slice(0, requestedOptionCount);
+
+        const nextWords = startsWithLetter
+            ? parsedWords.filter((item) => freestyleStartsWithLetterFilter(item, startsWithLetter)).slice(0, Math.max(1, LLMOptions))
+            : parsedWords.slice(0, Math.max(1, LLMOptions));
 
         const fallbackWords = isStartingNewSentence()
             ? getSentenceStarterFallbackWords()
             : ['I', 'want', 'need', 'can', 'please', 'help', 'yes', 'no']
                 .slice(0, Math.max(1, LLMOptions));
 
-        currentPredictions = nextWords.length > 0 ? nextWords : fallbackWords;
+        const filteredFallbackWords = startsWithLetter
+            ? fallbackWords.filter((item) => freestyleStartsWithLetterFilter(item, startsWithLetter))
+            : fallbackWords;
+
+        currentPredictions = nextWords.length > 0 ? nextWords : filteredFallbackWords;
         renderWordPredictions();
         return nextWords.length > 0;
     } catch (error) {
@@ -212,19 +411,35 @@ async function requestFreestyleGeneralWords(requestDifferentOptions = false) {
             ? getSentenceStarterFallbackWords()
             : ['I', 'want', 'need', 'can', 'please', 'help', 'yes', 'no']
                 .slice(0, Math.max(1, LLMOptions));
-        currentPredictions = fallbackWords;
+        const filteredFallbackWords = startsWithLetter
+            ? fallbackWords.filter((item) => freestyleStartsWithLetterFilter(item, startsWithLetter))
+            : fallbackWords;
+        currentPredictions = filteredFallbackWords;
         renderWordPredictions();
         return false;
     }
 }
 
-requestCategoryWordsWithExclusions = async function(category, customPrompt, fallbackWords = [], excludeWords = []) {
+requestCategoryWordsWithExclusions = async function(category, customPrompt, fallbackWords = [], excludeWords = [], requestOptions = {}) {
+    const startsWithLetter = String(requestOptions?.startsWithLetter || '').trim();
+    const requestedOptionCount = startsWithLetter
+        ? Math.min(50, Math.max(24, Math.max(1, LLMOptions) * 4))
+        : Math.max(1, LLMOptions);
+    const basePrompt = String(customPrompt || '').trim();
+    const promptWithLetterConstraint = startsWithLetter
+        ? `${basePrompt}\n\nSTARTING LETTER REQUIREMENT:\n- Every option text must begin with '${startsWithLetter}' (case-insensitive).\n- Do not return options that start with any other letter.`
+        : basePrompt;
+    const filteredFallbackWords = startsWithLetter
+        ? fallbackWords.filter((item) => freestyleStartsWithLetterFilter(item, startsWithLetter))
+        : fallbackWords;
+
     const payload = {
         ...getFreestyleRequestPayloadBase(),
         category,
+        max_options: requestedOptionCount,
         build_space_content: getCombinedBuildText().trim(),
         exclude_words: excludeWords,
-        custom_prompt: customPrompt
+        custom_prompt: promptWithLetterConstraint
     };
 
     try {
@@ -235,24 +450,28 @@ requestCategoryWordsWithExclusions = async function(category, customPrompt, fall
         });
 
         if (!response.ok) {
-            currentPredictions = fallbackWords;
+            currentPredictions = filteredFallbackWords;
             renderWordPredictions();
             return false;
         }
 
         const data = await response.json();
         const rawWords = Array.isArray(data.words) ? data.words : [];
-        const nextWords = rawWords
+        const parsedWords = rawWords
             .map((item) => (typeof item === 'object' && item?.text ? item.text : item))
             .filter((item) => typeof item === 'string' && item.trim() !== '')
-            .slice(0, Math.max(1, LLMOptions));
+            .slice(0, requestedOptionCount);
 
-        currentPredictions = nextWords.length > 0 ? nextWords : fallbackWords;
+        const nextWords = startsWithLetter
+            ? parsedWords.filter((item) => freestyleStartsWithLetterFilter(item, startsWithLetter)).slice(0, Math.max(1, LLMOptions))
+            : parsedWords.slice(0, Math.max(1, LLMOptions));
+
+        currentPredictions = nextWords.length > 0 ? nextWords : filteredFallbackWords;
         renderWordPredictions();
         return nextWords.length > 0;
     } catch (error) {
         console.error('Failed to load freestyle category words with context:', error);
-        currentPredictions = fallbackWords;
+        currentPredictions = filteredFallbackWords;
         renderWordPredictions();
         return false;
     }
@@ -260,10 +479,13 @@ requestCategoryWordsWithExclusions = async function(category, customPrompt, fall
 
 buildCategorySpecificPrompt = buildFreestyleCategoryPrompt;
 
-loadGeneralWords = async function(excludeWords = [], fallbackWordsOverride = null) {
-    const didLoadWords = await requestFreestyleGeneralWords(Boolean(excludeWords?.length));
+loadGeneralWords = async function(excludeWords = [], fallbackWordsOverride = null, requestOptions = {}) {
+    const startsWithLetter = String(requestOptions?.startsWithLetter || '').trim();
+    const didLoadWords = await requestFreestyleGeneralWords(Boolean(excludeWords?.length), requestOptions);
     if (!didLoadWords && fallbackWordsOverride) {
-        currentPredictions = fallbackWordsOverride;
+        currentPredictions = startsWithLetter
+            ? fallbackWordsOverride.filter((item) => freestyleStartsWithLetterFilter(item, startsWithLetter))
+            : fallbackWordsOverride;
         renderWordPredictions();
     }
     return didLoadWords;
@@ -272,7 +494,11 @@ loadGeneralWords = async function(excludeWords = [], fallbackWordsOverride = nul
 async function speakDisplayFromFreestyle() {
     const currentText = getCombinedBuildText().trim();
     if (!currentText) {
-        await announce('Display is empty.', 'system', false, true);
+        if (typeof announcePartnerFacingOutput === 'function') {
+            await announcePartnerFacingOutput(freestyleUiText.promptDisplayEmpty, false, true);
+        } else {
+            await announce(freestyleUiText.promptDisplayEmpty, 'system', false, true);
+        }
         return;
     }
 
@@ -287,11 +513,19 @@ async function speakDisplayFromFreestyle() {
             await refreshSuggestedWords();
         }
 
-        await announce(textToSpeak, 'system', false, true);
+        if (typeof announcePartnerFacingOutput === 'function') {
+            await announcePartnerFacingOutput(textToSpeak, false, true);
+        } else {
+            await announce(textToSpeak, 'system', false, true);
+        }
         recordToSpeechHistory(textToSpeak);
     } catch (error) {
         console.error('Failed to speak freestyle display:', error);
-        await announce('Unable to speak display right now.', 'system', false, true);
+        if (typeof announcePartnerFacingOutput === 'function') {
+            await announcePartnerFacingOutput(freestyleUiText.promptUnableToSpeak, false, true);
+        } else {
+            await announce(freestyleUiText.promptUnableToSpeak, 'system', false, true);
+        }
     }
 
     restartScanning(250, true);
@@ -464,24 +698,31 @@ function tryResumeAudioContext() {
 }
 
 async function initializeFreestyleOverrides() {
-    await loadFreestyleSettingsOverrides();
-    await updateFreestylePageTitle();
+    try {
+        // Load settings (LLM options + precomputed translation bundle) in one fetch,
+        // then apply labels before revealing localized text.
+        await loadFreestyleSettings();
+        applyFreestyleLocalization();
+        await updateFreestylePageTitle();
 
-    setupBuildSpaceManualInput();
-    setupPinModal();
-    setupFreestyleGamepadListeners();
+        setupBuildSpaceManualInput();
+        setupPinModal();
+        setupFreestyleGamepadListeners();
 
-    document.body.addEventListener('mousedown', tryResumeAudioContext, { once: true });
-    document.body.addEventListener('touchstart', tryResumeAudioContext, { once: true });
-    document.body.addEventListener('keydown', tryResumeAudioContext, { once: true });
+        document.body.addEventListener('mousedown', tryResumeAudioContext, { once: true });
+        document.body.addEventListener('touchstart', tryResumeAudioContext, { once: true });
+        document.body.addEventListener('keydown', tryResumeAudioContext, { once: true });
 
-    replaceButtonHandler('exit-creation-btn', goBackFromFreestyle);
-    replaceButtonHandler('read-creation-btn', speakDisplayFromFreestyle);
+        replaceButtonHandler('exit-creation-btn', goBackFromFreestyle);
+        replaceButtonHandler('read-creation-btn', speakDisplayFromFreestyle);
 
-    await refreshSuggestedWords();
+        await refreshSuggestedWords();
+    } finally {
+        document.body.classList.remove('freestyle-localization-pending');
+    }
 }
 
-window.addEventListener('load', () => {
+document.addEventListener('DOMContentLoaded', () => {
     initializeFreestyleOverrides().catch((error) => {
         console.error('Failed to initialize freestyle overrides:', error);
     });

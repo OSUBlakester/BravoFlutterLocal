@@ -227,7 +227,23 @@ class AuthSessionManager {
     }
 
     final user = credential.user;
-    final token = await user?.getIdToken(true);
+    String? token;
+    if (user != null) {
+      try {
+        token = await user
+            .getIdToken(true)
+            .timeout(const Duration(seconds: 6));
+      } catch (e) {
+        debugPrint('[AuthRecovery] Forced token refresh failed: $e');
+        try {
+          token = await user
+              .getIdToken()
+              .timeout(const Duration(seconds: 4));
+        } catch (fallbackError) {
+          debugPrint('[AuthRecovery] Cached token fallback failed: $fallbackError');
+        }
+      }
+    }
 
     if (token == null || token.isEmpty) {
       throw Exception('Silent login completed without an ID token');

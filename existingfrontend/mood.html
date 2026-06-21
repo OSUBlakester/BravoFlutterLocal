@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Mood Selection</title>
+    <!-- Firebase SDK for silent token refresh -->
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+    <script src="/static/token-refresh.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
+    <link rel="stylesheet" href="/static/splash-screen.css">
+    <link rel="stylesheet" href="/static/mood-selection.css">
+    <style>
+        /* --- Basic Body Style --- */
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 0;
+            background-color: #f4f7f6;
+        }
+
+        /* --- Admin Toolbar Styles --- */
+        .admin-toolbar {
+            background-color: #ffffff;
+            padding: 0.25rem 0.5rem;
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            gap: 0.4rem;
+            flex-wrap: wrap;
+        }
+
+        .admin-toolbar button {
+            padding: 0.25rem 0.5rem;
+            border: 1px solid #ccc;
+            background-color: #f8f9fa;
+            border-radius: 0.25rem;
+            font-size: 0.75rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .admin-toolbar button:hover {
+            background-color: #e9ecef;
+            border-color: #adb5bd;
+        }
+
+        /* --- Page Banner Styles --- */
+        .page-banner {
+            background-color: #002244;
+            color: #FB4F14;
+            padding: 0.75em 1.5em;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .page-banner h1 {
+            margin: 0;
+            font-size: 1.75em;
+            font-weight: 500;
+            text-align: left;
+        }
+
+        /* --- Mood Grid Styles --- */
+        #moodContainer {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            padding: 20px;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        .mood-button {
+            position: relative;
+            padding: 20px;
+            font-size: 18px;
+            font-weight: 500;
+            cursor: pointer;
+            background-color: white;
+            color: #002244;
+            border: 2px solid #002244;
+            border-radius: 12px;
+            text-align: center;
+            min-height: 80px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            transition: all 0.2s ease;
+        }
+
+        .mood-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        }
+
+        .mood-button.current {
+            background-color: #FB4F14;
+            color: white;
+            border-color: #FB4F14;
+        }
+
+        .mood-button .mood-icon {
+            font-size: 24px;
+            margin-bottom: 8px;
+        }
+
+        .mood-button .mood-text {
+            font-size: 16px;
+            font-weight: 600;
+        }
+
+        /* Loading and error states */
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .error {
+            text-align: center;
+            padding: 40px;
+            color: #d32f2f;
+            background-color: #ffebee;
+            border-radius: 8px;
+            margin: 20px;
+        }
+
+        /* Back button */
+        .back-button {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 12px 20px;
+            background-color: #002244;
+            color: white;
+            border: none;
+            border-radius: 25px;
+            font-size: 16px;
+            cursor: pointer;
+            box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+            transition: all 0.2s ease;
+        }
+
+        .back-button:hover {
+            background-color: #FB4F14;
+            transform: translateY(-2px);
+        }
+    </style>
+</head>
+<body>
+    <!-- Splash Screen (Hidden by default, shown by splash.js) -->
+    <div id="splashScreen" class="splash-screen">
+        <div class="splash-content">
+            <div class="splash-logo">🎭</div>
+            <div class="splash-text">Loading Mood Selection...</div>
+            <div class="splash-spinner"></div>
+        </div>
+    </div>
+
+    <!-- Page Banner with Admin Toolbar -->
+    <div class="page-banner">
+        <h1><i class="fas fa-smile"></i> How are you feeling?</h1>
+        <div class="admin-toolbar">
+            <button onclick="window.location.href='admin_settings.html'">
+                <i class="fas fa-cog" style="margin-right: 0.2rem;"></i>Settings
+            </button>
+            <button onclick="window.location.href='gridpage.html'">
+                <i class="fas fa-home" style="margin-right: 0.2rem;"></i>Home
+            </button>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div id="mainContent">
+        <div id="loadingState" class="loading">
+            <i class="fas fa-spinner fa-spin"></i> Loading mood options...
+        </div>
+        
+        <div id="errorState" class="error" style="display: none;">
+            <i class="fas fa-exclamation-triangle"></i>
+            <p>Sorry, we couldn't load the mood options. Please try again.</p>
+            <button onclick="loadMoodOptions()" style="margin-top: 10px; padding: 8px 16px; background-color: #002244; color: white; border: none; border-radius: 4px; cursor: pointer;">
+                Retry
+            </button>
+        </div>
+
+        <div id="moodContainer" style="display: none;">
+            <!-- Mood buttons will be dynamically loaded here -->
+        </div>
+    </div>
+
+    <!-- Back Button -->
+    <button class="back-button" onclick="goBack()">
+        <i class="fas fa-arrow-left"></i> Back
+    </button>
+
+    <!-- Include JavaScript -->
+    <script src="/static/splash-screen.js"></script>
+    
+    <script>
+        // Authentication variables (same pattern as gridpage.js)
+        let currentAacUserId = null;
+        let firebaseIdToken = null;
+        const AAC_USER_ID_SESSION_KEY = "currentAacUserId";
+        const FIREBASE_TOKEN_SESSION_KEY = "firebaseIdToken";
+        
+        let moodOptions = [];
+        let userLanguageLocale = 'en-US';
+        let moodDisplayTextMap = new Map();
+        const moodUiText = {
+            pageTitle: 'How are you feeling?',
+            loadingMood: 'Loading mood options...',
+            errorLoad: "Sorry, we couldn't load the mood options. Please try again.",
+            retry: 'Retry',
+            back: 'Back',
+            current: 'Current',
+            setting: 'Setting...',
+            moodCleared: 'Mood cleared!',
+            moodSetPrefix: 'Mood set to',
+            takingBack: 'Taking you back...',
+            initFailed: 'Failed to initialize mood selection. Please refresh the page.',
+            loadFailed: 'Failed to load mood options. Please try again.',
+            setFailed: 'Failed to set mood. Please try again.'
+        };
+
+        // Mood icons mapping
+        const moodIcons = {
+            'Happy': 'fa-smile',
+            'Excited': 'fa-star',
+            'Calm': 'fa-leaf',
+            'Sad': 'fa-frown',
+            'Frustrated': 'fa-angry',
+            'Tired': 'fa-bed',
+            'Anxious': 'fa-heart',
+            'Proud': 'fa-trophy',
+            'Confused': 'fa-question',
+            'Grateful': 'fa-hands',
+            'Playful': 'fa-gamepad',
+            'Peaceful': 'fa-dove',
+            'Clear Mood': 'fa-times-circle'
+        };
+
+        // Authenticated fetch function (same as gridpage.js)
+        async function authenticatedFetch(url, options = {}, _isRetry = false) {
+            // Re-read token from sessionStorage (may have been refreshed by token-refresh.js)
+            firebaseIdToken = sessionStorage.getItem(FIREBASE_TOKEN_SESSION_KEY);
+            currentAacUserId = sessionStorage.getItem(AAC_USER_ID_SESSION_KEY);
+
+            if (!firebaseIdToken || !currentAacUserId) {
+                console.error("Authentication: Firebase ID Token or AAC User ID not found. Redirecting to login.");
+                sessionStorage.clear();
+                window.location.href = 'auth.html';
+                throw new Error("Authentication required.");
+            }
+
+            const headers = {
+                'Authorization': `Bearer ${firebaseIdToken}`,
+                'X-User-ID': currentAacUserId,
+                'Content-Type': 'application/json',
+                ...options.headers
+            };
+
+            const response = await fetch(url, { ...options, headers });
+
+            if ((response.status === 401 || response.status === 403) && !_isRetry) {
+                console.warn(`Authentication failed (${response.status}) for ${url}. Attempting silent token refresh...`);
+                if (typeof window.refreshFirebaseToken === 'function') {
+                    const newToken = await window.refreshFirebaseToken();
+                    if (newToken) {
+                        console.log('[AUTH] Token refreshed successfully, retrying request...');
+                        return authenticatedFetch(url, options, true);
+                    }
+                }
+                sessionStorage.clear();
+                window.location.href = 'auth.html';
+                throw new Error("Authentication failed");
+            }
+            if (response.status === 401 || response.status === 403) {
+                sessionStorage.clear();
+                window.location.href = 'auth.html';
+                throw new Error("Authentication failed after token refresh");
+            }
+
+            return response;
+        }
+
+        // Initialize user context (same pattern as gridpage.js)
+        async function initializeUserContext() {
+            console.log('initializeUserContext: Starting initialization...');
+            
+            firebaseIdToken = sessionStorage.getItem(FIREBASE_TOKEN_SESSION_KEY);
+            currentAacUserId = sessionStorage.getItem(AAC_USER_ID_SESSION_KEY);
+
+            if (!firebaseIdToken || !currentAacUserId) {
+                console.log("No Firebase ID Token or AAC User ID found in session. Redirecting to auth.html.");
+                sessionStorage.clear();
+                window.location.href = 'auth.html';
+                return false;
+            }
+            
+            console.log(`User context initialized. AAC User ID: ${currentAacUserId}`);
+            return true;
+        }
+
+        // Initialize page when DOM is loaded
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('Mood selection page initializing...');
+            initializeMoodPage();
+        });
+
+        // Initialize the mood selection page
+        async function initializeMoodPage() {
+            try {
+                // Initialize authentication
+                const userReady = await initializeUserContext();
+                if (!userReady) {
+                    return; // Redirection already handled
+                }
+
+                await loadMoodLocalizationFromSettings();
+                
+                // Load mood options
+                await loadMoodOptions();
+                
+                // Hide splash screen
+                hideSplashScreen();
+                
+            } catch (error) {
+                console.error('Error initializing mood page:', error);
+                showError(moodUiText.initFailed);
+                hideSplashScreen();
+            }
+        }
+
+        async function loadMoodLocalizationFromSettings() {
+            try {
+                const response = await authenticatedFetch('/api/settings', { method: 'GET' });
+                if (response.ok) {
+                    const settings = await response.json();
+                    userLanguageLocale = String(settings?.userLanguage || 'en-US').trim() || 'en-US';
+                }
+            } catch (error) {
+                console.warn('Unable to load mood localization settings:', error);
+            }
+
+            if (String(userLanguageLocale).toLowerCase() !== 'en-us') {
+                try {
+                    const keys = Object.keys(moodUiText);
+                    const lines = keys.map((key) => moodUiText[key]);
+                    const response = await authenticatedFetch('/api/translate-lines', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            lines,
+                            source_locale: 'en-US',
+                            target_locale: userLanguageLocale
+                        })
+                    });
+
+                    if (response.ok) {
+                        const payload = await response.json();
+                        const translated = Array.isArray(payload.translated_lines) ? payload.translated_lines : [];
+                        keys.forEach((key, index) => {
+                            const translatedValue = String(translated[index] || '').trim();
+                            if (translatedValue) {
+                                moodUiText[key] = translatedValue;
+                            }
+                        });
+                    }
+                } catch (error) {
+                    console.warn('Unable to localize mood static UI text:', error);
+                }
+            }
+
+            applyMoodLocalizedUiText();
+        }
+
+        function applyMoodLocalizedUiText() {
+            const pageTitle = document.querySelector('.page-banner h1');
+            if (pageTitle) {
+                pageTitle.innerHTML = `<i class="fas fa-smile"></i> ${moodUiText.pageTitle}`;
+            }
+
+            const loadingState = document.getElementById('loadingState');
+            if (loadingState) {
+                loadingState.innerHTML = `<i class="fas fa-spinner fa-spin"></i> ${moodUiText.loadingMood}`;
+            }
+
+            const errorState = document.getElementById('errorState');
+            if (errorState) {
+                const errorParagraph = errorState.querySelector('p');
+                if (errorParagraph) {
+                    errorParagraph.textContent = moodUiText.errorLoad;
+                }
+                const retryButton = errorState.querySelector('button');
+                if (retryButton) {
+                    retryButton.textContent = moodUiText.retry;
+                }
+            }
+
+            const backButton = document.querySelector('.back-button');
+            if (backButton) {
+                backButton.innerHTML = `<i class="fas fa-arrow-left"></i> ${moodUiText.back}`;
+            }
+        }
+
+        async function localizeMoodOptionLabels() {
+            moodDisplayTextMap = new Map();
+            if (!Array.isArray(moodOptions) || moodOptions.length === 0) {
+                return;
+            }
+
+            if (String(userLanguageLocale).toLowerCase() === 'en-us') {
+                moodOptions.forEach((mood) => {
+                    if (mood?.text) {
+                        moodDisplayTextMap.set(mood.text, mood.text);
+                    }
+                });
+                return;
+            }
+
+            const uniqueMoodTexts = [...new Set(moodOptions
+                .map((mood) => String(mood?.text || '').trim())
+                .filter(Boolean))];
+
+            try {
+                const response = await authenticatedFetch('/api/translate-lines', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        lines: uniqueMoodTexts,
+                        source_locale: 'en-US',
+                        target_locale: userLanguageLocale
+                    })
+                });
+
+                if (response.ok) {
+                    const payload = await response.json();
+                    const translated = Array.isArray(payload.translated_lines) ? payload.translated_lines : [];
+                    uniqueMoodTexts.forEach((sourceText, index) => {
+                        const translatedText = String(translated[index] || '').trim() || sourceText;
+                        moodDisplayTextMap.set(sourceText, translatedText);
+                    });
+                    return;
+                }
+            } catch (error) {
+                console.warn('Unable to localize mood option labels:', error);
+            }
+
+            uniqueMoodTexts.forEach((sourceText) => moodDisplayTextMap.set(sourceText, sourceText));
+        }
+
+        // Load available mood options from the API
+        async function loadMoodOptions() {
+            console.log('Loading mood options...');
+            
+            try {
+                const response = await authenticatedFetch('/api/mood/options', {
+                    method: 'GET'
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                console.log('Mood options loaded:', data);
+                
+                moodOptions = data.mood_options || [];
+                await localizeMoodOptionLabels();
+                renderMoodOptions();
+                
+            } catch (error) {
+                console.error('Error loading mood options:', error);
+                showError(moodUiText.loadFailed);
+            }
+        }
+
+        // Render mood options in the grid
+        function renderMoodOptions() {
+            const container = document.getElementById('moodContainer');
+            const loadingState = document.getElementById('loadingState');
+            
+            if (moodOptions.length === 0) {
+                showError('No mood options available.');
+                return;
+            }
+
+            // Clear container
+            container.innerHTML = '';
+            
+            // Create mood buttons
+            moodOptions.forEach(mood => {
+                const button = document.createElement('button');
+                button.className = `mood-button ${mood.current ? 'current' : ''}`;
+                button.dataset.sourceMoodText = mood.text;
+                button.onclick = () => selectMood(mood.text);
+                
+                const icon = moodIcons[mood.text] || 'fa-circle';
+                const displayText = moodDisplayTextMap.get(mood.text) || mood.text;
+                
+                button.innerHTML = `
+                    <div class="mood-icon">
+                        <i class="fas ${icon}"></i>
+                    </div>
+                    <div class="mood-text">${displayText}</div>
+                    ${mood.current ? `<div style="font-size: 12px; margin-top: 4px; color: rgba(255,255,255,0.9);">${moodUiText.current}</div>` : ''}
+                `;
+                
+                container.appendChild(button);
+            });
+            
+            // Show container and hide loading
+            loadingState.style.display = 'none';
+            container.style.display = 'grid';
+        }
+
+        // Select a mood
+        async function selectMood(moodText) {
+            console.log('Selecting mood:', moodText);
+            
+            try {
+                // Show loading state on the selected button
+                const buttons = document.querySelectorAll('.mood-button');
+                buttons.forEach(btn => {
+                    if (btn.dataset.sourceMoodText === moodText) {
+                        btn.innerHTML = `<i class="fas fa-spinner fa-spin"></i><br>${moodUiText.setting}`;
+                        btn.disabled = true;
+                    }
+                });
+
+                const response = await authenticatedFetch('/api/mood/set', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        mood: moodText === 'Clear Mood' ? null : moodText
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const result = await response.json();
+                console.log('Mood set successfully:', result);
+
+                const displayMoodText = moodDisplayTextMap.get(moodText) || moodText;
+                
+                // Show success message and redirect after delay
+                showSuccessMessage(
+                    moodText === 'Clear Mood'
+                        ? moodUiText.moodCleared
+                        : `${moodUiText.moodSetPrefix} ${displayMoodText}!`
+                );
+                
+                setTimeout(() => {
+                    goBack();
+                }, 1500);
+                
+            } catch (error) {
+                console.error('Error setting mood:', error);
+                showError(moodUiText.setFailed);
+                
+                // Restore buttons
+                await loadMoodOptions();
+            }
+        }
+
+        // Show success message
+        function showSuccessMessage(message) {
+            const container = document.getElementById('mainContent');
+            container.innerHTML = `
+                <div style="text-align: center; padding: 60px 20px; color: #4caf50;">
+                    <div style="font-size: 48px; margin-bottom: 20px;">
+                        <i class="fas fa-check-circle"></i>
+                    </div>
+                    <div style="font-size: 24px; font-weight: 600;">
+                        ${message}
+                    </div>
+                    <div style="font-size: 16px; margin-top: 10px; color: #666;">
+                        ${moodUiText.takingBack}
+                    </div>
+                </div>
+            `;
+        }
+
+        // Show error message
+        function showError(message) {
+            const errorState = document.getElementById('errorState');
+            const loadingState = document.getElementById('loadingState');
+            const moodContainer = document.getElementById('moodContainer');
+            
+            errorState.querySelector('p').textContent = message;
+            errorState.style.display = 'block';
+            loadingState.style.display = 'none';
+            moodContainer.style.display = 'none';
+        }
+
+        // Go back to previous page
+        function goBack() {
+            // Check if there's a referrer or previous page in history
+            if (document.referrer && document.referrer.includes(window.location.hostname)) {
+                window.history.back();
+            } else {
+                window.location.href = 'gridpage.html';
+            }
+        }
+
+        // Hide splash screen
+        function hideSplashScreen() {
+            const splashScreen = document.getElementById('splashScreen');
+            if (splashScreen) {
+                splashScreen.style.display = 'none';
+            }
+            
+            // Also check for splash screen managed by splash-screen.js
+            if (window.splashScreen && window.splashScreen.hide) {
+                window.splashScreen.hide();
+            }
+        }
+    </script>
+</body>
+</html>

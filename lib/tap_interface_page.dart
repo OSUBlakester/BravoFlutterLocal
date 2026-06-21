@@ -12,7 +12,6 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'config/environment_config.dart';
 import 'services/user_settings_provider.dart';
 import 'services/pictogram_service.dart';
-import 'services/custom_image_service.dart';
 // Note: AuthPage and UserSelectionPage are in main.dart
 import 'main.dart' show UserSelectionPage;
 import 'services/tap_interface_service.dart';
@@ -25,8 +24,11 @@ import 'favorites_page.dart';
 import 'games_page.dart';
 import 'mood_selection_page.dart';
 import 'email_page.dart';
+import 'music_page.dart';
 import 'widgets/spelling_dialog.dart';
+import 'package:intl/intl.dart';
 import 'services/schedule_service.dart';
+import 'services/music_playback_service.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'services/authenticated_http_client.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -101,6 +103,7 @@ class TapInterfaceButton extends StatefulWidget {
   final String? assignedImageUrl; // Pre-assigned image URL from database
   final String?
   imageSearchText; // Full speech text for image search (label may be abbreviated)
+  final bool cacheOnlyImageLookup;
 
   const TapInterfaceButton({
     super.key,
@@ -121,18 +124,70 @@ class TapInterfaceButton extends StatefulWidget {
     this.onImageLogged,
     this.assignedImageUrl,
     this.imageSearchText,
+    this.cacheOnlyImageLookup = false,
   });
 
   State<TapInterfaceButton> createState() => _TapInterfaceButtonState();
 }
 
 class _TapInterfaceButtonState extends State<TapInterfaceButton> {
+  static final Map<String, bool> _allSightWordsCache = {};
+  static String? _allSightWordsCacheGrade;
+  static bool _isSightWordServiceReady = false;
+  static bool _isSightWordServiceWarmupInProgress = false;
+
   String? _pictogramUrl;
   bool _isLoading = false;
   bool _isSightWord = false;
   String? _lastLoadedKey;
   bool _isLoadingPictogram =
       false; // guard against concurrent _loadPictogram calls
+
+  bool _looksLikeAbsoluteLocalPath(String value) {
+    return value.startsWith('/var/') ||
+        value.startsWith('/private/') ||
+        value.startsWith('/data/') ||
+        value.startsWith('/storage/') ||
+        value.startsWith('/Users/');
+  }
+
+  String? _normalizePictogramUrl(String? rawUrl) {
+    if (rawUrl == null) return null;
+
+    var url = rawUrl.trim();
+    if (url.isEmpty || url.toLowerCase() == 'null') return null;
+
+    if (url.startsWith('file://')) return url;
+    if (_looksLikeAbsoluteLocalPath(url)) return url;
+
+    if (url.startsWith('gs://')) {
+      final remainder = url.substring(5);
+      final slash = remainder.indexOf('/');
+      if (slash > 0) {
+        final bucket = remainder.substring(0, slash);
+        final objectPath = remainder.substring(slash + 1);
+        return 'https://storage.googleapis.com/$bucket/$objectPath';
+      }
+    }
+
+    if (url.startsWith('//')) {
+      return 'https:$url';
+    }
+
+    if (url.startsWith('storage.googleapis.com/')) {
+      return 'https://$url';
+    }
+
+    if (url.startsWith('/')) {
+      return '${EnvironmentConfig.apiBaseUrl}$url';
+    }
+
+    if (url.startsWith('http://') || url.startsWith('https://')) {
+      return url;
+    }
+
+    return url;
+  }
 
   static const Map<String, String> _numberWords = {
     'zero': '0',
@@ -473,8 +528,13 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
     );
   }
 
-  String? _getNumberDisplay(String label) {
-    final candidates = <String>[label, ...(widget.keywords ?? const <String>[])];
+  String? _getNumberDisplay(
+    String label, {
+    bool allowEmbeddedNumber = false,
+  }) {
+    final candidates = allowEmbeddedNumber
+        ? <String>[label, ...(widget.keywords ?? const <String>[])]
+        : <String>[label];
 
     for (final candidate in candidates) {
       final cleanLabel = _normalizeNumberToken(candidate);
@@ -484,9 +544,11 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
         return cleanLabel;
       }
 
-      final directNumberMatch = RegExp(r'\b\d{1,3}\b').firstMatch(cleanLabel);
-      if (directNumberMatch != null) {
-        return directNumberMatch.group(0);
+      if (allowEmbeddedNumber) {
+        final directNumberMatch = RegExp(r'\b\d{1,3}\b').firstMatch(cleanLabel);
+        if (directNumberMatch != null) {
+          return directNumberMatch.group(0);
+        }
       }
 
       final englishMapped = _numberWords[cleanLabel];
@@ -522,6 +584,8 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
     final gradeChanged =
         widget.sightWordGradeLevel != oldWidget.sightWordGradeLevel;
     final keywordsChanged = !listEquals(widget.keywords, oldWidget.keywords);
+    final cacheOnlyChanged =
+      widget.cacheOnlyImageLookup != oldWidget.cacheOnlyImageLookup;
 
     // When the button's word changes entirely, reset image state so the new word
     // gets a fresh lookup instead of keeping the old word's image.
@@ -552,7 +616,8 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
         enabledChanged ||
         sightWordsChanged ||
         gradeChanged ||
-        keywordsChanged) {
+        keywordsChanged ||
+        cacheOnlyChanged) {
       _loadPictogram();
     }
   }
@@ -584,8 +649,10 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
     final cacheKey = isNonEnglish
       ? '${userLocale.toLowerCase()}:$normalizedSearchTextForKey'
       : normalizedSearchTextForKey;
+    final lookupAttemptKey =
+        '$cacheKey|cacheOnly=${widget.cacheOnlyImageLookup ? 1 : 0}';
 
-    if (_lastLoadedKey == cacheKey) {
+    if (_lastLoadedKey == lookupAttemptKey) {
       // Already attempted a lookup for this exact key; the result is in _pictogramUrl (null means no image found).
       return;
     }
@@ -630,7 +697,7 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
             _pictogramUrl = null;
             _isSightWord = true; // Apply sight word formatting
             _isLoading = false;
-            _lastLoadedKey = cacheKey;
+              _lastLoadedKey = lookupAttemptKey;
           });
         }
       } else {
@@ -644,32 +711,58 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
               _pictogramUrl = null;
               _isSightWord = false;
               _isLoading = false;
-              _lastLoadedKey = cacheKey;
-            });
-          }
-        } else if (widget.assignedImageUrl != null &&
-            widget.assignedImageUrl!.isNotEmpty) {
-          // FIRST: Check if there's a pre-assigned image URL from the database
-          debugPrint(
-            '🖼️ Using assigned image for "${widget.label}": ${widget.assignedImageUrl}',
-          );
-          if (mounted) {
-            setState(() {
-              _pictogramUrl = widget.assignedImageUrl;
-              _isSightWord = false;
-              _isLoading = false;
-              _lastLoadedKey = cacheKey;
+              _lastLoadedKey = lookupAttemptKey;
             });
           }
         } else {
-          // SECOND: If no assigned image, search for pictogram
-          debugPrint(
-            '🖼️ Loading pictogram for "${widget.label}" (effectiveSearchText="$effectiveSearchText", locale="$userLocale")...',
-          );
-          debugPrint('🖼️ Pictogram lookup start for "${widget.label}"');
           final pictogramService = PictogramService();
-          var currentUserId = settingsProvider.userId;
-          var currentIdToken = settingsProvider.idToken;
+          final customMatch = pictogramService.getCustomImageMatch(
+            effectiveSearchText,
+            keywords: widget.keywords,
+          );
+          final isAssignedCustom = widget.assignedImageUrl != null &&
+              (widget.assignedImageUrl!.contains('/custom_images/') ||
+               widget.assignedImageUrl!.contains('/profile_images/'));
+
+          if (isAssignedCustom) {
+            debugPrint('🖼️ Using assigned custom image for "${widget.label}": ${widget.assignedImageUrl}');
+            if (mounted) {
+              setState(() {
+                _pictogramUrl = _normalizePictogramUrl(widget.assignedImageUrl);
+                _isSightWord = false;
+                _isLoading = false;
+                _lastLoadedKey = lookupAttemptKey;
+              });
+            }
+          } else if (customMatch != null) {
+            debugPrint('🖼️ Using matched custom image for "${widget.label}": $customMatch');
+            if (mounted) {
+              setState(() {
+                _pictogramUrl = _normalizePictogramUrl(customMatch);
+                _isSightWord = false;
+                _isLoading = false;
+                _lastLoadedKey = lookupAttemptKey;
+              });
+            }
+          } else if (widget.assignedImageUrl != null &&
+              widget.assignedImageUrl!.isNotEmpty) {
+            debugPrint('🖼️ Using assigned global image for "${widget.label}": ${widget.assignedImageUrl}');
+            if (mounted) {
+              setState(() {
+                _pictogramUrl = _normalizePictogramUrl(widget.assignedImageUrl);
+                _isSightWord = false;
+                _isLoading = false;
+                _lastLoadedKey = lookupAttemptKey;
+              });
+            }
+          } else {
+            // SECOND: If no assigned image and no custom image match, search for pictogram
+            debugPrint(
+              '🖼️ Loading pictogram for "${widget.label}" (effectiveSearchText="$effectiveSearchText", locale="$userLocale")...',
+            );
+            debugPrint('🖼️ Pictogram lookup start for "${widget.label}"');
+            var currentUserId = settingsProvider.userId;
+            var currentIdToken = settingsProvider.idToken;
 
           if (currentUserId == null ||
               currentUserId.isEmpty ||
@@ -680,7 +773,25 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
               currentUserId = currentUserId?.isNotEmpty == true
                   ? currentUserId
                   : authUser.uid;
-              final refreshedToken = await authUser.getIdToken(true);
+              String? refreshedToken;
+              try {
+                refreshedToken = await authUser
+                    .getIdToken(true)
+                    .timeout(const Duration(seconds: 6));
+              } catch (e) {
+                debugPrint(
+                  '[TapInterfaceButton] getIdToken(true) failed: $e',
+                );
+                try {
+                  refreshedToken = await authUser
+                      .getIdToken()
+                      .timeout(const Duration(seconds: 4));
+                } catch (fallbackError) {
+                  debugPrint(
+                    '[TapInterfaceButton] getIdToken() fallback failed: $fallbackError',
+                  );
+                }
+              }
               if (refreshedToken != null && refreshedToken.isNotEmpty) {
                 currentIdToken = refreshedToken;
                 settingsProvider.idToken = refreshedToken;
@@ -702,6 +813,7 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
           }
           pictogramService.enablePictograms = true;
 
+          // Single pass lookup. Board-level warmup handles bulk priming.
           final result = await pictogramService.getPictogramResult(
             effectiveSearchText,
             sightWordGradeLevel: widget.sightWordGradeLevel != null
@@ -710,6 +822,7 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
             keywords: widget.keywords,
             shouldLogMissing: widget.shouldLogMissing,
             locale: userLocale,
+            cacheOnly: widget.cacheOnlyImageLookup,
           );
 
           debugPrint(
@@ -742,16 +855,17 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
 
           if (mounted) {
             setState(() {
-              _pictogramUrl = result?.imageUrl;
+              _pictogramUrl = _normalizePictogramUrl(result?.imageUrl);
               _isSightWord =
                   false; // No sight word formatting for non-sight words
               _isLoading = false;
-              _lastLoadedKey = cacheKey;
+              _lastLoadedKey = lookupAttemptKey;
             });
           }
         }
       }
-    } catch (e) {
+    }
+  } catch (e) {
       debugPrint('Error loading pictogram for "${widget.label}": $e');
       if (mounted) {
         setState(() {
@@ -822,17 +936,39 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
       return false;
     }
 
+    final normalizedText = text.trim().toLowerCase();
+    final cacheKey = '${sightWordGradeLevel.trim()}::$normalizedText';
+    if (_allSightWordsCache.containsKey(cacheKey)) {
+      return _allSightWordsCache[cacheKey]!;
+    }
+
     try {
       final sightWordService = SightWordService();
-      if (!sightWordService.isInitialized) {
-        await sightWordService.initialize();
+
+      if (!_isSightWordServiceReady && !_isSightWordServiceWarmupInProgress) {
+        _isSightWordServiceWarmupInProgress = true;
+        try {
+          if (!sightWordService.isInitialized) {
+            await sightWordService.initialize();
+          }
+          _isSightWordServiceReady = true;
+        } finally {
+          _isSightWordServiceWarmupInProgress = false;
+        }
+      } else if (!_isSightWordServiceReady && _isSightWordServiceWarmupInProgress) {
+        // Another button is warming up the service; fail open for this frame.
+        return false;
       }
 
-      // Update grade level if needed
-      await sightWordService.setGradeLevel(sightWordGradeLevel);
+      if (_allSightWordsCacheGrade != sightWordGradeLevel) {
+        await sightWordService.setGradeLevel(sightWordGradeLevel);
+        _allSightWordsCacheGrade = sightWordGradeLevel;
+        _allSightWordsCache.clear();
+      }
 
       // Use the built-in method that checks if ALL words are sight words
       final allAreSightWords = sightWordService.isSightWordText(text);
+      _allSightWordsCache[cacheKey] = allAreSightWords;
 
       if (allAreSightWords) {
         debugPrint(
@@ -872,10 +1008,10 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
   }
 
   Widget _buildPictogramContent() {
-    // Check for number first
-    final numberDisplay = _getNumberDisplay(widget.label);
-    if (numberDisplay != null) {
-      return _buildNumberLayout(numberDisplay);
+    // For pure number options, always render the large-number display.
+    final numberOnlyDisplay = _getNumberDisplay(widget.label);
+    if (numberOnlyDisplay != null) {
+      return _buildNumberLayout(numberOnlyDisplay);
     }
 
     if (_isLoading) {
@@ -884,6 +1020,16 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
 
     if (_pictogramUrl != null && _pictogramUrl?.isNotEmpty == true) {
       return _buildPictogramLayout();
+    }
+
+    // For labels that contain a number plus other words (e.g. "5 little ducks"),
+    // only fall back to large-number display after pictogram lookup fails.
+    final fallbackNumberDisplay = _getNumberDisplay(
+      widget.label,
+      allowEmbeddedNumber: true,
+    );
+    if (fallbackNumberDisplay != null) {
+      return _buildNumberLayout(fallbackNumberDisplay);
     }
 
     return _buildTextOnlyContent();
@@ -991,6 +1137,39 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
 
     // Handle emoji pictograms - use LayoutBuilder for dynamic sizing
     final pictogramUrl = _pictogramUrl!;
+    final isLocalFileImage = pictogramUrl.startsWith('file://') ||
+      _looksLikeAbsoluteLocalPath(pictogramUrl);
+
+    if (isLocalFileImage) {
+      final localPath = pictogramUrl.startsWith('file://')
+          ? Uri.parse(pictogramUrl).toFilePath()
+          : pictogramUrl;
+      final localFile = File(localPath);
+      if (localFile.existsSync()) {
+        return LayoutBuilder(
+          builder: (context, constraints) {
+            final imageSize = (constraints.maxHeight * 1.5).clamp(30.0, 400.0);
+            return Center(
+              child: SizedBox(
+                width: imageSize,
+                height: imageSize,
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(4),
+                  child: Image.file(
+                    localFile,
+                    fit: BoxFit.cover,
+                    errorBuilder: (context, error, stackTrace) {
+                      return _buildTextOnlyContent();
+                    },
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      }
+    }
+
     if (!pictogramUrl.startsWith('http')) {
       return LayoutBuilder(
         builder: (context, constraints) {
@@ -1265,36 +1444,76 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
       {}; // Cache for preloaded images
   bool _isPreloadingImages = false;
 
-  Future<void> _syncAuthContextForTap() async {
-    final userSettings = Provider.of<UserSettingsProvider>(
-      context,
-      listen: false,
-    );
+  Future<String?> _safeGetIdToken(
+    User user, {
+    bool forceRefresh = true,
+  }) async {
+    try {
+      final token = await user
+          .getIdToken(forceRefresh)
+          .timeout(const Duration(seconds: 6));
+      if (token != null && token.isNotEmpty) {
+        return token;
+      }
+    } catch (e) {
+      debugPrint('[TapInterface] getIdToken(force=$forceRefresh) failed: $e');
+    }
 
-    var effectiveUserId = widget.aacUserId.trim();
-    var effectiveIdToken = widget.idToken.trim();
-
-    final user = FirebaseAuth.instance.currentUser;
-    if (user != null) {
-      effectiveUserId = effectiveUserId.isNotEmpty ? effectiveUserId : user.uid;
-      final refreshedToken = await user.getIdToken(true);
-      if (refreshedToken != null && refreshedToken.isNotEmpty) {
-        effectiveIdToken = refreshedToken;
+    if (forceRefresh) {
+      try {
+        final fallbackToken = await user
+            .getIdToken()
+            .timeout(const Duration(seconds: 4));
+        if (fallbackToken != null && fallbackToken.isNotEmpty) {
+          return fallbackToken;
+        }
+      } catch (e) {
+        debugPrint('[TapInterface] getIdToken() fallback failed: $e');
       }
     }
 
-    if (effectiveUserId.isNotEmpty) {
-      userSettings.userId = effectiveUserId;
-    }
-    if (effectiveIdToken.isNotEmpty) {
-      userSettings.idToken = effectiveIdToken;
-    }
+    return null;
+  }
 
-    if (effectiveUserId.isNotEmpty && effectiveIdToken.isNotEmpty) {
-      PictogramService().setUserContext(
-        userId: effectiveUserId,
-        idToken: effectiveIdToken,
+  Future<void> _syncAuthContextForTap() async {
+    try {
+      final userSettings = Provider.of<UserSettingsProvider>(
+        context,
+        listen: false,
       );
+
+      var effectiveUserId = widget.aacUserId.trim();
+      var effectiveIdToken = widget.idToken.trim();
+
+      final user = FirebaseAuth.instance.currentUser;
+      if (user != null) {
+        effectiveUserId =
+            effectiveUserId.isNotEmpty ? effectiveUserId : user.uid;
+        final refreshedToken = await _safeGetIdToken(user, forceRefresh: true);
+        if (refreshedToken != null && refreshedToken.isNotEmpty) {
+          effectiveIdToken = refreshedToken;
+        } else {
+          debugPrint(
+            '[TapInterface] Auth token refresh failed in _syncAuthContextForTap; continuing with existing context.',
+          );
+        }
+      }
+
+      if (effectiveUserId.isNotEmpty) {
+        userSettings.userId = effectiveUserId;
+      }
+      if (effectiveIdToken.isNotEmpty) {
+        userSettings.idToken = effectiveIdToken;
+      }
+
+      if (effectiveUserId.isNotEmpty && effectiveIdToken.isNotEmpty) {
+        PictogramService().setUserContext(
+          userId: effectiveUserId,
+          idToken: effectiveIdToken,
+        );
+      }
+    } catch (e) {
+      debugPrint('[TapInterface] _syncAuthContextForTap failed safely: $e');
     }
   }
 
@@ -1334,6 +1553,7 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
 
   bool _isLoadingPhraseOptions = false; // Separate loading state for phrases
   bool _isLoadingWordOptions = false; // Separate loading state for words
+  bool _cacheOnlyInitialImageLookup = false;
   // bool _isLoadingOptions = false;       // General loading state for operations affecting both sections
   bool _isLoadingConfig = false;
   String? _lastInitialWordOptionsLocale;
@@ -1377,6 +1597,7 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
 
   // --- Schedule Check ---
   Timer? _scheduleCheckTimer;
+  final Set<String> _handledSchedules = {};
 
   // --- Tap Debounce ---
   Timer? _tapDebounceTimer;
@@ -1415,7 +1636,7 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
       context,
       listen: false,
     );
-    _syncAuthContextForTap();
+    unawaited(_syncAuthContextForTap());
     _tapService = TapInterfaceService(userSettingsProvider: userSettings);
 
     // Initialize Wake Word Service
@@ -1432,28 +1653,47 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
       await _syncAuthContextForTap();
       // Refresh settings on page entry so language-dependent Tap requests
       // (words/phrases/image locale) use the latest user profile values.
-      await userSettings.fetchSettings();
-      await _hydrateLocationOverrideFromCurrentUser();
+      try {
+        await userSettings
+            .fetchSettings()
+            .timeout(const Duration(seconds: 8));
+      } catch (e) {
+        debugPrint(
+          '[TapInterface] Settings refresh timed out/failed on startup: $e',
+        );
+      }
+
+      // Never block Tap startup on location override hydration.
+      unawaited(_hydrateLocationOverrideFromCurrentUser());
       if (!mounted) return;
       final locale = userSettings.settings?.userLanguage ?? 'en-US';
+
+      // Start Tap config loading immediately. Cache prep runs in background.
+      _loadTapInterfaceConfig(); // word loading is handled inside after config resolves
+
       if (!_didInitialTapCachePrep) {
-        await _clearAllCaches();
-        if (!locale.startsWith('en')) {
-          Future.microtask(() async {
-            try {
-              await PictogramService().prefetchLocaleImages(locale);
-            } catch (e) {
-              debugPrint('[TapInterface] Locale prefetch error (initial): $e');
+        unawaited(() async {
+          try {
+            await _clearAllCaches().timeout(const Duration(seconds: 8));
+            if (!locale.startsWith('en')) {
+              await PictogramService().prefetchLocaleImages(locale).timeout(
+                const Duration(seconds: 8),
+              );
             }
-          });
-        }
+          } catch (e) {
+            debugPrint('[TapInterface] Initial cache prep timed out/failed: $e');
+          }
+        }());
         _didInitialTapCachePrep = true;
       } else {
         if (!locale.startsWith('en')) {
-          PictogramService().prefetchLocaleImages(locale);
+          unawaited(
+            PictogramService().prefetchLocaleImages(locale).timeout(
+              const Duration(seconds: 8),
+            ),
+          );
         }
       }
-      _loadTapInterfaceConfig(); // word loading is handled inside after config resolves
       _primeAudioSystem();
       _initializeAudioSessionProactively();
     });
@@ -1544,20 +1784,22 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
       final user = FirebaseAuth.instance.currentUser;
       String idToken = widget.idToken;
       if (user != null) {
-        final refreshedToken = await user.getIdToken(true);
+        final refreshedToken = await _safeGetIdToken(user, forceRefresh: true);
         if (refreshedToken != null && refreshedToken.isNotEmpty) {
           idToken = refreshedToken;
         }
       }
 
-      final response = await http.get(
-        Uri.parse('${EnvironmentConfig.apiBaseUrl}/get-user-current'),
-        headers: {
-          'Authorization': 'Bearer $idToken',
-          'X-User-ID': widget.aacUserId,
-          'Content-Type': 'application/json',
-        },
-      );
+      final response = await http
+          .get(
+            Uri.parse('${EnvironmentConfig.apiBaseUrl}/get-user-current'),
+            headers: {
+              'Authorization': 'Bearer $idToken',
+              'X-User-ID': widget.aacUserId,
+              'Content-Type': 'application/json',
+            },
+          )
+          .timeout(const Duration(seconds: 8));
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -1785,8 +2027,8 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
                   padding: const EdgeInsets.all(3),
                   child: Stack(
                     children: [
-                      // Show grid if we have options (even if loading)
-                      if (_phraseOptions.isNotEmpty)
+                      // Single-shot reveal: do not render partial phrase grid while warmup is active.
+                      if (_phraseOptions.isNotEmpty && !_isLoadingPhraseOptions)
                         _buildPhrasesGrid(userSettings, rows > 2)
                       else if (!_isLoadingPhraseOptions)
                         const Center(
@@ -1798,17 +2040,7 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
 
                       // Show loading indicator
                       if (_isLoadingPhraseOptions)
-                        _phraseOptions.isEmpty
-                            ? const Center(child: CircularProgressIndicator())
-                            : const Positioned(
-                                top: 0,
-                                left: 0,
-                                right: 0,
-                                child: LinearProgressIndicator(
-                                  minHeight: 2,
-                                  backgroundColor: Colors.transparent,
-                                ),
-                              ),
+                        const Center(child: CircularProgressIndicator()),
                     ],
                   ),
                 ),
@@ -1821,6 +2053,108 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
   }
 
   /// Build the phrases grid with consistent button generation
+  static const Set<String> _phraseImageWeakTerms = {
+    'i',
+    'me',
+    'my',
+    'mine',
+    'myself',
+    'you',
+    'your',
+    'yours',
+    'he',
+    'she',
+    'it',
+    'we',
+    'they',
+    'am',
+    'is',
+    'are',
+    'was',
+    'were',
+    'be',
+    'being',
+    'been',
+    'do',
+    'does',
+    'did',
+    'can',
+    'could',
+    'will',
+    'would',
+    'should',
+    'may',
+    'might',
+    'must',
+    'like',
+    'want',
+    'need',
+    'have',
+    'has',
+    'had',
+    'get',
+    'go',
+    'come',
+    'make',
+    'say',
+    'tell',
+    'think',
+    'know',
+    'feel',
+    'please',
+    'help',
+    'the',
+    'a',
+    'an',
+    'to',
+    'for',
+    'of',
+    'in',
+    'on',
+    'at',
+    'with',
+    'and',
+    'or',
+    'but',
+  };
+
+  String _normalizePhraseImageToken(String raw) {
+    return raw
+        .trim()
+        .toLowerCase()
+        .replaceAll(RegExp(r"^[^a-z0-9']+|[^a-z0-9']+$"), '');
+  }
+
+  String? _derivePhraseImageSearchText(String fullText, List<String>? keywords) {
+    final keywordList = keywords ?? const <String>[];
+
+    for (final keyword in keywordList) {
+      final normalized = _normalizePhraseImageToken(keyword);
+      if (normalized.isEmpty) continue;
+      if (_phraseImageWeakTerms.contains(normalized)) continue;
+      return normalized;
+    }
+
+    final words = fullText
+        .split(RegExp(r'\s+'))
+        .map(_normalizePhraseImageToken)
+        .where((w) => w.isNotEmpty)
+        .toList();
+
+    for (var i = words.length - 1; i >= 0; i--) {
+      final word = words[i];
+      if (_phraseImageWeakTerms.contains(word)) continue;
+      return word;
+    }
+
+    for (final keyword in keywordList) {
+      final normalized = _normalizePhraseImageToken(keyword);
+      if (normalized.isNotEmpty) return normalized;
+    }
+
+    return fullText.trim().isEmpty ? null : fullText.trim();
+  }
+
   Widget _buildPhrasesGrid(UserSettings? userSettings, bool allowScrolling) {
     final tapPictogramsDisabled = userSettings?.disableTapPictograms ?? false;
     final tapPictogramsEnabled = !tapPictogramsDisabled;
@@ -1853,6 +2187,7 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
             padding: const EdgeInsets.all(2),
             shouldLogMissing:
                 false, // Don't log missing images for dynamic buttons
+            cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
           );
         } else if (index < _phraseOptions.length) {
           final phraseOption = _phraseOptions[index];
@@ -1867,10 +2202,14 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
                     .where((s) => s.trim().isNotEmpty)
                     .toList()
               : null;
+          final phraseImageSearchText = _derivePhraseImageSearchText(
+            fullText,
+            keywords,
+          );
 
           return TapInterfaceButton(
             label: phraseOption['summary'] ?? '',
-            imageSearchText: fullText.isNotEmpty ? fullText : null,
+            imageSearchText: phraseImageSearchText,
             onPressed: () => _handlePhraseOptionTap(fullText),
             backgroundColor: isPreviewArmed
                 ? (Colors.amber[300] ?? Colors.amber.shade300)
@@ -1887,6 +2226,7 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
             keywords: keywords,
             shouldLogMissing:
                 false, // Don't log missing images for LLM-generated phrases
+            cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
           );
         } else {
           return Container(
@@ -2341,16 +2681,8 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
       setState(() {
         // Update phrase options (top 2 rows) - need exactly 17 for proper display
         _phraseOptions.clear();
-
-        // Validate phraseOptions is a proper list before using
-        if (phraseOptions is List) {
-          print('[TapInterface] Adding ${phraseOptions.length} phrase options');
-          _phraseOptions.addAll(phraseOptions.take(17));
-        } else {
-          print(
-            '[TapInterface] ERROR: phraseOptions is not a List, type: ${phraseOptions.runtimeType}',
-          );
-        }
+        print('[TapInterface] Adding ${phraseOptions.length} phrase options');
+        _phraseOptions.addAll(phraseOptions.take(17));
 
         // If we don't have enough phrase options, add fallbacks
         if (_phraseOptions.length < 17) {
@@ -2527,32 +2859,53 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
           );
         }
       } else {
-        debugPrint('[TapInterface] ❌ No tap config loaded!');
+        debugPrint('[TapInterface] ❌ No tap config loaded! Using local fallback configuration.');
       }
 
+      final finalConfig = ensuredConfig ?? _createLocalFallbackConfig();
+
       setState(() {
-        _tapConfig = ensuredConfig;
-        _tapBoards = boards;
+        _tapConfig = finalConfig;
+        _tapBoards = boards ?? const TapBoardsResponse(boards: [], boardSettings: TapBoardSettings());
         _isLoadingConfig = false;
       });
 
-      _openConfiguredHomeBoard().then((opened) {
-        if (opened) {
-          debugPrint('[TapInterface] Opened configured home board on startup');
-        } else {
-          // No home board configured — load general freestyle words now that config is ready
-          _loadInitialFreestyleOptions();
-          _loadInitialPhraseOptions();
-        }
-      });
+      _openConfiguredHomeBoard()
+          .timeout(const Duration(seconds: 12))
+          .then((opened) {
+            if (opened) {
+              debugPrint('[TapInterface] Opened configured home board on startup');
+            } else {
+              // No home board configured (or startup home board open failed)
+              // -> load general initial options so the page never appears blank.
+              _loadInitialFreestyleOptions();
+              _loadInitialPhraseOptions();
+            }
+          })
+          .catchError((e) {
+            debugPrint(
+              '[TapInterface] Home board startup load timed out/failed: $e. Falling back to initial options.',
+            );
+            if (!mounted) return;
+            _loadInitialFreestyleOptions();
+            _loadInitialPhraseOptions();
+          });
 
       // Preload category images in background for better performance
       _preloadCategoryImages();
     } catch (e) {
-      debugPrint('Error loading tap interface config: $e');
+      debugPrint('Error loading tap interface config (exception): $e. Using local fallback.');
+      
+      final fallbackConfig = _createLocalFallbackConfig();
+      
       setState(() {
+        _tapConfig = fallbackConfig;
+        _tapBoards = const TapBoardsResponse(boards: [], boardSettings: TapBoardSettings());
         _isLoadingConfig = false;
       });
+
+      _loadInitialFreestyleOptions();
+      _loadInitialPhraseOptions();
     }
   }
 
@@ -2597,6 +2950,79 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
       createdAt: config.createdAt,
       updatedAt: config.updatedAt,
       buttons: augmentedButtons,
+    );
+  }
+
+  TapInterfaceConfig _createLocalFallbackConfig() {
+    final defaultCategories = [
+      TapInterfaceCategory(
+        id: 'quick_talk',
+        label: 'Quick Talk',
+        speechText: 'Quick Talk',
+        imageUrl: 'https://storage.googleapis.com/bravo-dev-465400-aac-images/categories/quick_talk.png',
+        optionType: 'phrase',
+      ),
+      TapInterfaceCategory(
+        id: 'food_drink',
+        label: 'Food & Drink',
+        speechText: 'Food and Drink',
+        imageUrl: 'https://storage.googleapis.com/bravo-dev-465400-aac-images/categories/food_drink.png',
+        optionType: 'phrase',
+      ),
+      TapInterfaceCategory(
+        id: 'feelings',
+        label: 'Feelings',
+        speechText: 'Feelings',
+        imageUrl: 'https://storage.googleapis.com/bravo-dev-465400-aac-images/categories/feelings.png',
+        optionType: 'phrase',
+      ),
+      TapInterfaceCategory(
+        id: 'people',
+        label: 'People',
+        speechText: 'People',
+        imageUrl: 'https://storage.googleapis.com/bravo-dev-465400-aac-images/categories/people.png',
+        optionType: 'phrase',
+      ),
+      TapInterfaceCategory(
+        id: 'activities',
+        label: 'Activities',
+        speechText: 'Activities',
+        imageUrl: 'https://storage.googleapis.com/bravo-dev-465400-aac-images/categories/activities.png',
+        optionType: 'phrase',
+      ),
+      TapInterfaceCategory(
+        id: 'places',
+        label: 'Places',
+        speechText: 'Places',
+        imageUrl: 'https://storage.googleapis.com/bravo-dev-465400-aac-images/categories/places.png',
+        optionType: 'phrase',
+      ),
+      TapInterfaceCategory(
+        id: 'freestyle',
+        label: 'Freestyle',
+        speechText: 'Freestyle',
+        imageUrl: 'https://storage.googleapis.com/bravo-dev-465400-aac-images/categories/freestyle.png',
+        specialPage: 'freestyle',
+        optionType: 'word',
+      ),
+      TapInterfaceCategory(
+        id: 'email_special_fallback',
+        label: 'Email',
+        speechText: 'Email',
+        imageUrl: 'https://storage.googleapis.com/bravo-dev-465400-aac-images/categories/email.png',
+        specialPage: 'email',
+        optionType: 'phrase',
+      ),
+    ];
+
+    return TapInterfaceConfig(
+      id: 'default_fallback_config',
+      name: 'Default Fallback Config',
+      description: 'Used when server config fails to load',
+      isActive: true,
+      createdAt: DateTime.now().toIso8601String(),
+      updatedAt: DateTime.now().toIso8601String(),
+      buttons: defaultCategories,
     );
   }
 
@@ -3128,6 +3554,184 @@ VARIETY RULES:
     return null;
   }
 
+  /// Batch-preload pictogram images for a freshly committed set of phrase/word
+  /// options.  Runs entirely in the background so it never blocks the UI.
+  void _preloadImagesForOptions({
+    List<Map<String, String>>? phrases,
+    List<String>? words,
+    Map<String, List<String>>? wordKeywords,
+  }) {
+    final userSettings = Provider.of<UserSettingsProvider>(
+      context,
+      listen: false,
+    );
+    if (userSettings.settings?.disableTapPictograms == true) return;
+    if (userSettings.settings?.enablePictograms == false) return;
+
+    final locale =
+        _normalizeLocaleTag(userSettings.settings?.userLanguage) ?? 'en-US';
+
+    final pictogramService = PictogramService();
+    final currentUserId = userSettings.userId ?? widget.aacUserId;
+    final currentIdToken = userSettings.idToken ?? widget.idToken;
+    if (currentUserId.isNotEmpty && currentIdToken.isNotEmpty) {
+      pictogramService.setUserContext(
+        userId: currentUserId,
+        idToken: currentIdToken,
+      );
+    }
+    pictogramService.enablePictograms = true;
+
+    Future.microtask(() async {
+      try {
+        // Collect all terms we need images for.
+        final allTerms = <String>[];
+
+        if (phrases != null) {
+          for (final p in phrases) {
+            final fullText = p['fullText'] ?? '';
+            final keywordsStr = p['keywords'] ?? '';
+            final kws = keywordsStr.isNotEmpty
+                ? keywordsStr
+                      .split('|')
+                      .where((s) => s.trim().isNotEmpty)
+                      .toList()
+                : null;
+            final anchor = _derivePhraseImageSearchText(fullText, kws);
+            if (anchor != null && anchor.isNotEmpty) allTerms.add(anchor);
+          }
+        }
+
+        if (words != null) allTerms.addAll(words);
+
+        if (allTerms.isNotEmpty) {
+          final kwMap = wordKeywords ?? const <String, List<String>>{};
+          await pictogramService.prefetchButtonPictograms(
+            words: allTerms,
+            keywordMap: kwMap,
+            locale: locale,
+            maxItems: allTerms.length,
+          );
+        }
+
+        // Re-prime custom image match cache for the new set of terms.
+        if (allTerms.isNotEmpty) {
+          await pictogramService.preloadCustomImages(allTerms);
+        }
+      } catch (e) {
+        debugPrint('[TapInterface] _preloadImagesForOptions error: $e');
+      }
+    });
+  }
+
+  /// Warm currently visible Words terms before revealing the section.
+  /// This reduces phased image pop-in on board refresh.
+  Future<void> _warmVisibleWordImages({
+    required List<String> words,
+    required Map<String, List<String>> wordKeywords,
+    required List<TapBoardButton> boardButtons,
+  }) async {
+    final userSettings = Provider.of<UserSettingsProvider>(
+      context,
+      listen: false,
+    );
+    if (userSettings.settings?.disableTapPictograms == true) return;
+    if (userSettings.settings?.enablePictograms == false) return;
+
+    final locale =
+        _normalizeLocaleTag(userSettings.settings?.userLanguage) ?? 'en-US';
+    final pictogramService = PictogramService();
+
+    final currentUserId = userSettings.userId ?? widget.aacUserId;
+    final currentIdToken = userSettings.idToken ?? widget.idToken;
+    if (currentUserId.isNotEmpty && currentIdToken.isNotEmpty) {
+      pictogramService.setUserContext(
+        userId: currentUserId,
+        idToken: currentIdToken,
+      );
+    }
+    pictogramService.enablePictograms = true;
+
+    final preloadTerms = <String>[];
+    preloadTerms.addAll(words);
+    if (boardButtons.isNotEmpty) {
+      for (final button in boardButtons) {
+        if (button.hidden) continue;
+        final term = (button.imageSearchText ?? button.text).trim();
+        if (term.isNotEmpty) preloadTerms.add(term);
+      }
+    }
+
+    if (preloadTerms.isEmpty) return;
+
+    try {
+      await pictogramService
+          .prefetchButtonPictograms(
+            words: preloadTerms,
+            keywordMap: wordKeywords,
+            locale: locale,
+            maxItems: preloadTerms.length,
+            shouldLogMissing: true,
+          )
+          .timeout(const Duration(milliseconds: 4200));
+    } catch (e) {
+      debugPrint('[TapInterface] Word warmup timeout/error: $e');
+    }
+  }
+
+  Future<void> _warmVisiblePhraseImages({
+    required List<Map<String, String>> phrases,
+  }) async {
+    final userSettings = Provider.of<UserSettingsProvider>(
+      context,
+      listen: false,
+    );
+    if (userSettings.settings?.disableTapPictograms == true) return;
+    if (userSettings.settings?.enablePictograms == false) return;
+
+    final locale =
+        _normalizeLocaleTag(userSettings.settings?.userLanguage) ?? 'en-US';
+    final pictogramService = PictogramService();
+
+    final currentUserId = userSettings.userId ?? widget.aacUserId;
+    final currentIdToken = userSettings.idToken ?? widget.idToken;
+    if (currentUserId.isNotEmpty && currentIdToken.isNotEmpty) {
+      pictogramService.setUserContext(
+        userId: currentUserId,
+        idToken: currentIdToken,
+      );
+    }
+    pictogramService.enablePictograms = true;
+
+    final phraseTerms = <String>[];
+    for (final phrase in phrases) {
+      final fullText = phrase['fullText'] ?? '';
+      final keywordsStr = phrase['keywords'] ?? '';
+      final keywords = keywordsStr.isNotEmpty
+          ? keywordsStr.split('|').where((s) => s.trim().isNotEmpty).toList()
+          : null;
+      final anchor = _derivePhraseImageSearchText(fullText, keywords);
+      if (anchor != null && anchor.isNotEmpty) {
+        phraseTerms.add(anchor);
+      }
+    }
+
+    if (phraseTerms.isEmpty) return;
+
+    try {
+      await pictogramService
+          .prefetchButtonPictograms(
+            words: phraseTerms,
+            locale: locale,
+            maxItems: phraseTerms.length,
+            shouldLogMissing: true,
+          )
+          .timeout(const Duration(milliseconds: 3000));
+    } catch (e) {
+      debugPrint('[TapInterface] Phrase warmup timeout/error: $e');
+    }
+  }
+
   /// Preload category images in background for better performance
   void _preloadCategoryImages() async {
     if (_tapConfig == null || _isPreloadingImages) return;
@@ -3201,8 +3805,6 @@ VARIETY RULES:
         debugPrint('❌ Custom image batch preload error: $e');
       }
 
-      // Wait for all preloads to complete or timeout after 2 seconds
-      await Future.wait(futures).timeout(Duration(seconds: 2));
       debugPrint('🚀 Category image preloading completed');
     } catch (e) {
       debugPrint('❌ Category image preloading failed: $e');
@@ -3353,6 +3955,7 @@ VARIETY RULES:
               words: preloadWords,
               keywordMap: preloadKeywords,
               locale: resolvedLocale,
+              maxItems: preloadWords.length,
             );
           } catch (e) {
             debugPrint('[TapInterface] Pictogram prefetch error: $e');
@@ -3398,6 +4001,7 @@ VARIETY RULES:
               words: preloadWords,
               keywordMap: preloadKeywords,
               locale: resolvedLocale,
+              maxItems: preloadWords.length,
             );
           } catch (e) {
             debugPrint('[TapInterface] Pictogram prefetch error (fallback): $e');
@@ -4009,6 +4613,7 @@ VARIETY RULES:
             debugPrint(
               '[TapInterface] Loaded exactly ${_phraseOptions.length} phrase options for display',
             );
+            _preloadImagesForOptions(phrases: initialPhraseOptions);
           }
         } catch (e) {
           debugPrint('[TapInterface] Error loading phrase options: $e');
@@ -4130,6 +4735,7 @@ VARIETY RULES:
                                   .imageUrl, // Pass assigned image URL from database
                               shouldLogMissing:
                                   false, // Don't log missing images for category navigation buttons
+                                cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
                             );
                           })
                           .toList(),
@@ -4191,32 +4797,56 @@ VARIETY RULES:
     final cacheIsFresh =
         cacheTimestamp != null &&
         DateTime.now().difference(cacheTimestamp) <= _categoryOptionsCacheTtl;
+    final cachedPhrases = _categoryPhraseCache[categoryCacheKey] ?? const [];
+    final cachedWords = _categoryWordCache[categoryCacheKey] ?? const [];
+    final cachedBoardButtons =
+        _categoryBoardButtonsCache[categoryCacheKey] ?? const <TapBoardButton>[];
+    final hasCachedPhraseOptions = cachedPhrases.isNotEmpty;
+    final hasCachedWordOptions =
+      cachedWords.isNotEmpty || cachedBoardButtons.isNotEmpty;
     final hasCachedCategoryOptions =
         cacheIsFresh &&
         _categoryPhraseCache.containsKey(categoryCacheKey) &&
-        _categoryWordCache.containsKey(categoryCacheKey);
+        _categoryWordCache.containsKey(categoryCacheKey) &&
+      hasCachedPhraseOptions &&
+      hasCachedWordOptions;
 
     debugPrint(
-      '[TapInterface] Category cache: key=$categoryCacheKey, fresh=$cacheIsFresh, hasCachedCategoryOptions=$hasCachedCategoryOptions',
+      '[TapInterface] Category cache: key=$categoryCacheKey, fresh=$cacheIsFresh, hasCachedCategoryOptions=$hasCachedCategoryOptions, hasCachedPhraseOptions=$hasCachedPhraseOptions, hasCachedWordOptions=$hasCachedWordOptions, cachedPhrases=${cachedPhrases.length}, cachedWords=${cachedWords.length}, cachedBoardButtons=${cachedBoardButtons.length}',
     );
 
     if (hasCachedCategoryOptions) {
       debugPrint(
         '[TapInterface] ⚡ Using cached options for category: ${category.label} (key=$categoryCacheKey)',
       );
+      final cachedWordKeywords =
+          _categoryWordKeywordsCache[categoryCacheKey] ??
+          const <String, List<String>>{};
       setState(() {
         _selectedCategory = category;
-        _phraseOptions = _categoryPhraseCache[categoryCacheKey] ?? const [];
-        _wordOptions = _categoryWordCache[categoryCacheKey] ?? const [];
-        _wordKeywords =
-            _categoryWordKeywordsCache[categoryCacheKey] ??
-            const <String, List<String>>{};
-        _boardWordOptions =
-            _categoryBoardButtonsCache[categoryCacheKey] ??
-            const <TapBoardButton>[];
+        _phraseOptions = cachedPhrases;
+        _wordOptions = cachedWords;
+        _wordKeywords = cachedWordKeywords;
+        _boardWordOptions = cachedBoardButtons;
         _textPromptUsed = false;
+        _isLoadingPhraseOptions = true;
+        _isLoadingWordOptions = true;
+      });
+      await Future.wait([
+        _warmVisiblePhraseImages(phrases: cachedPhrases),
+        _warmVisibleWordImages(
+          words: cachedWords,
+          wordKeywords: cachedWordKeywords,
+          boardButtons: cachedBoardButtons,
+        ),
+      ]);
+      if (!mounted || _selectedCategory?.id != category.id) {
+        return;
+      }
+      setState(() {
         _isLoadingPhraseOptions = false;
         _isLoadingWordOptions = false;
+        _optionsRebuildKey++;
       });
       return;
     }
@@ -4248,7 +4878,7 @@ VARIETY RULES:
 
     // 1. Load Phrases
     _loadCategoryPhrases(category)
-        .then((phrases) {
+      .then((phrases) async {
           debugPrint(
             '[TapInterface] 🕒 Phrases loaded in ${stopwatch.elapsedMilliseconds}ms',
           );
@@ -4264,7 +4894,15 @@ VARIETY RULES:
             _phraseOptions = phrases;
             _categoryPhraseCache[categoryCacheKey] = phrases;
             _categoryOptionsCacheTimestamp[categoryCacheKey] = DateTime.now();
+            _isLoadingPhraseOptions = true;
+          });
+          await _warmVisiblePhraseImages(phrases: phrases);
+          if (!mounted || _selectedCategory?.id != targetCategoryId) {
+            return;
+          }
+          setState(() {
             _isLoadingPhraseOptions = false;
+            _optionsRebuildKey++;
           });
         })
         .catchError((e) {
@@ -4278,7 +4916,7 @@ VARIETY RULES:
 
     // 2. Load Words
     _loadCategoryWords(category)
-        .then((result) {
+      .then((result) async {
           debugPrint(
             '[TapInterface] 🕒 Words loaded in ${stopwatch.elapsedMilliseconds}ms',
           );
@@ -4299,11 +4937,11 @@ VARIETY RULES:
             _wordOptions = boardButtons.isEmpty ? words : [];
             _boardWordOptions = boardButtons;
             _wordKeywords = keywords;
-            _categoryWordCache[categoryCacheKey] = words;
+            _categoryWordCache[categoryCacheKey] = List<String>.from(words);
             _categoryWordKeywordsCache[categoryCacheKey] = keywords;
             _categoryBoardButtonsCache[categoryCacheKey] = boardButtons;
             _categoryOptionsCacheTimestamp[categoryCacheKey] = DateTime.now();
-            _isLoadingWordOptions = false;
+            _isLoadingWordOptions = true;
 
             // IMPORTANT: Clear session-tracked missing images when loading fresh words for new category
             // This allows us to log any missing images from this category's word set
@@ -4311,6 +4949,18 @@ VARIETY RULES:
             debugPrint(
               '📋 Cleared session-tracked missing images for new category: ${category.label}',
             );
+          });
+          await _warmVisibleWordImages(
+            words: words,
+            wordKeywords: keywords,
+            boardButtons: boardButtons,
+          );
+          if (!mounted || _selectedCategory?.id != targetCategoryId) {
+            return;
+          }
+          setState(() {
+            _isLoadingWordOptions = false;
+            _optionsRebuildKey++;
           });
         })
         .catchError((e) {
@@ -4349,14 +4999,19 @@ VARIETY RULES:
                 // Sync build space variables
                 _buildSpaceText = _speechHistory;
                 _buildSpaceController.text = _speechHistory;
+
+                // Clear board word options so _loadWordOptionsBasedOnBuildSpace
+                // doesn't skip the refresh due to the active-board guard
+                _boardWordOptions = [];
               });
               Navigator.pop(context);
 
               // Announce the word
               _announceViaBackend(word);
 
-              // Refresh word options
+              // Refresh word and phrase options based on updated speech text
               _loadWordOptionsBasedOnBuildSpace();
+              _loadPhraseOptionsBasedOnBuildSpace();
             },
           ),
         );
@@ -4428,6 +5083,43 @@ VARIETY RULES:
               idToken: widget.idToken,
               aacUserId: widget.aacUserId,
               displayName: widget.displayName,
+            ),
+          ),
+        );
+        break;
+      case 'music':
+      case 'spotify':
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (context) => MusicPage(
+              idToken: widget.idToken,
+              aacUserId: widget.aacUserId,
+              displayName: widget.displayName,
+              onTalkAboutMusic: (musicContext) async {
+                await Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => FreestylePage(
+                      idToken: widget.idToken,
+                      aacUserId: widget.aacUserId,
+                      displayName: widget.displayName,
+                      sourceContext: musicContext,
+                      sourcePage: 'music',
+                    ),
+                  ),
+                );
+              },
+              onTalkAboutSomethingElse: () async {
+                await Navigator.of(context).push(
+                  MaterialPageRoute(
+                    builder: (context) => FreestylePage(
+                      idToken: widget.idToken,
+                      aacUserId: widget.aacUserId,
+                      displayName: widget.displayName,
+                      sourcePage: 'music',
+                    ),
+                  ),
+                );
+              },
             ),
           ),
         );
@@ -4849,7 +5541,20 @@ VARIETY RULES:
         wordOpts,
         canonicalCategoryLabel,
       );
-      final deduplicatedWords = _deduplicateWords(validatedWords);
+      var deduplicatedWords = _deduplicateWords(validatedWords);
+
+      // Keep Home starter words anchored to practical AAC core words.
+      if (useHomeStarterPrompt) {
+        final localizedCoreSeed = await _localizeWordsForUserIfNeeded(
+          _getFallbackHomeStarterWords(count: requiredWordCount),
+        );
+        deduplicatedWords = _deduplicateWords(
+          <String>[
+            ...localizedCoreSeed,
+            ...deduplicatedWords,
+          ],
+        );
+      }
 
       List<String> finalWordOptions = deduplicatedWords
           .take(requiredWordCount)
@@ -5706,6 +6411,7 @@ VARIETY RULES:
                             .imageUrl, // Pass the assigned image URL from database
                         shouldLogMissing:
                             false, // Don't log missing images for sub-category navigation buttons
+                        cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
                       );
                     },
                   ),
@@ -6239,8 +6945,17 @@ VARIETY RULES:
     String resolvedPartnerVoice = '';
     String fallbackSpeechText = text;
     bool lazyLoadedSettings = false;
+    final shouldDuckMusic = routing == 'system';
+    final musicService = Provider.of<MusicPlaybackService>(
+      context,
+      listen: false,
+    );
     final callId = DateTime.now().microsecondsSinceEpoch.toString();
     try {
+      if (shouldDuckMusic) {
+        await musicService.beginAnnouncementDucking();
+      }
+
       debugPrint(
         '[TapInterface][$callId] 🎵 _announceViaBackendSimple called with text: "$text", routing: $routing',
       );
@@ -6319,6 +7034,7 @@ VARIETY RULES:
         return hasEnglishFunctionWord || asciiLetterRatio > 0.75;
       }
 
+      bool translationFailed = false;
       if (routing == 'system' && translateForPartner) {
         final userLang = _normalizeLocaleTag(
               sourceLocaleOverride ?? userSettings?.userLanguage ?? 'en-US',
@@ -6356,7 +7072,7 @@ VARIETY RULES:
               toLocale: partnerLang,
               idToken: idToken,
               aacUserId: userId,
-            ).timeout(const Duration(milliseconds: 1500));
+            ).timeout(const Duration(seconds: 5));
 
             // If translation result is unchanged for a non-English partner,
             // retry quickly with user locale as source (or en-US fallback)
@@ -6379,20 +7095,42 @@ VARIETY RULES:
                   toLocale: partnerLang,
                   idToken: idToken,
                   aacUserId: userId,
-                ).timeout(const Duration(milliseconds: 700));
+                ).timeout(const Duration(seconds: 3));
               }
             }
 
-            announcedText = translatedAttempt;
-            debugPrint(
-              '[TapInterface] Announcement translated ($translationSourceLocale->$partnerLang): "$announcedText"',
-            );
+            if (translatedAttempt.trim().toLowerCase() == text.trim().toLowerCase() &&
+                !partnerLang.startsWith('en')) {
+              translationFailed = true;
+              debugPrint(
+                '[TapInterface] Translation remained unchanged after retry. Flagging as failed translation.',
+              );
+            } else {
+              announcedText = translatedAttempt;
+              debugPrint(
+                '[TapInterface] Announcement translated ($translationSourceLocale->$partnerLang): "$announcedText"',
+              );
+            }
           } catch (e) {
+            translationFailed = true;
             debugPrint(
               '[TapInterface] Translation failed, speaking original text: $e',
             );
           }
         }
+      }
+
+      if (translationFailed) {
+        // If translation failed, we fall back to the user's language and voice settings
+        // instead of pronouncing English text using a Spanish TTS voice.
+        partnerLangForRouting = _normalizeLocaleTag(
+              sourceLocaleOverride ?? userSettings?.userLanguage ?? 'en-US',
+            ) ??
+            'en-US';
+        resolvedPartnerVoice = (userSettings?.selectedTtsVoiceName ?? '').trim();
+        debugPrint(
+          '[TapInterface] Translation failed fallback: partnerLangForRouting reset to $partnerLangForRouting, resolvedPartnerVoice reset to $resolvedPartnerVoice',
+        );
       }
 
       // Keep speech bubble aligned with actual announced text.
@@ -6449,8 +7187,8 @@ VARIETY RULES:
         const backendQuickStartDeadline = Duration(milliseconds: 900);
         final requiresReliablePartnerSpeech =
           routing == 'system' &&
-          translateForPartner &&
-          !partnerLangForRouting.startsWith('en');
+          (translateForPartner && !partnerLangForRouting.startsWith('en') ||
+           (!useSystemVoice && resolvedPartnerVoice.isNotEmpty));
 
         final shouldWarmupPartnerVoice =
             routing == 'system' &&
@@ -6635,19 +7373,8 @@ VARIETY RULES:
 
           try {
             if (!kIsWeb && Platform.isIOS) {
-              const platform = MethodChannel('audio_routing');
               await _flutterTts.stop();
               await player.stop();
-
-              // If wake-word recognizer is temporarily paused, force speaker for stable playback.
-              if (preserveMicrophoneSession && !pausedWakeWordForAnnouncement) {
-                await platform.invokeMethod('setupOptimalAudioSession');
-              } else {
-                await platform.invokeMethod('forceSpeaker');
-              }
-
-              // Keep route settle short to reduce tap-to-speech latency.
-              await Future.delayed(const Duration(milliseconds: 120));
             }
 
             // Detect backend audio format and use matching extension.
@@ -6677,11 +7404,7 @@ VARIETY RULES:
               '[TapInterface] Audio playback completed, processing...',
             );
 
-            // Reset audio routing if not preserving microphone session
-            if (!kIsWeb && Platform.isIOS && !preserveMicrophoneSession) {
-              const platform = MethodChannel('audio_routing');
-              await platform.invokeMethod('resetToDefault');
-            }
+            // No audio routing reset needed on Tap Interface
 
             backendAudioPlayed = true;
             debugPrint('[TapInterface][$callId] Backend audio played successfully');
@@ -6714,25 +7437,15 @@ VARIETY RULES:
           final player = AudioPlayer();
           try {
             if (!kIsWeb && Platform.isIOS) {
-              const platform = MethodChannel('audio_routing');
               await _flutterTts.stop();
               await player.stop();
-              if (preserveMicrophoneSession && !pausedWakeWordForAnnouncement) {
-                await platform.invokeMethod('setupOptimalAudioSession');
-              } else {
-                await platform.invokeMethod('forceSpeaker');
-              }
-              await Future.delayed(const Duration(milliseconds: 120));
             }
 
             await player.setUrl(audioUrl);
             await player.play();
             await _waitForPlaybackComplete(player);
 
-            if (!kIsWeb && Platform.isIOS && !preserveMicrophoneSession) {
-              const platform = MethodChannel('audio_routing');
-              await platform.invokeMethod('resetToDefault');
-            }
+            // No audio routing reset needed on Tap Interface
 
             backendAudioPlayed = true;
             debugPrint('[TapInterface] Backend audio_url played successfully');
@@ -6787,6 +7500,10 @@ VARIETY RULES:
 
       // Always restore notification sounds
       await _restoreAndroidNotificationSounds();
+
+      if (shouldDuckMusic) {
+        await musicService.endAnnouncementDucking();
+      }
     }
   }
 
@@ -6832,10 +7549,10 @@ VARIETY RULES:
     }
 
     try {
-      final response = await http.post(
-        Uri.parse('${EnvironmentConfig.apiBaseUrl}/api/translate-lines'),
-        headers: {
-          'Authorization': 'Bearer $idToken',
+      final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+        'POST',
+        '${EnvironmentConfig.apiBaseUrl}/api/translate-lines',
+        baseHeaders: {
           'X-User-ID': aacUserId,
           'Content-Type': 'application/json',
         },
@@ -6844,6 +7561,7 @@ VARIETY RULES:
           'source_locale': fromLocale,
           'target_locale': toLocale,
         }),
+        timeoutSeconds: 10,
       );
 
       if (response.statusCode == 200) {
@@ -6878,11 +7596,7 @@ VARIETY RULES:
       final player = AudioPlayer();
 
       try {
-        // Force speaker routing before playing (same as TTS)
-        if (!kIsWeb && Platform.isIOS) {
-          const platform = MethodChannel('audio_routing');
-          await platform.invokeMethod('forceSpeaker');
-        }
+        // No audio routing overrides needed on Tap Interface
 
         // Check if this is a data URL (base64 encoded)
         if (audioUrl.startsWith('data:audio/')) {
@@ -6923,11 +7637,7 @@ VARIETY RULES:
 
         debugPrint('[TapInterface] ✅ Custom audio playback completed');
 
-        // Reset audio routing to default
-        if (!kIsWeb && Platform.isIOS) {
-          const platform = MethodChannel('audio_routing');
-          await platform.invokeMethod('resetToDefault');
-        }
+        // No audio routing reset needed on Tap Interface
       } finally {
         // Always dispose the player
         await player.dispose();
@@ -7042,7 +7752,10 @@ VARIETY RULES:
       try {
         final user = FirebaseAuth.instance.currentUser;
         if (user != null) {
-          final refreshedToken = await user.getIdToken(true);
+          final refreshedToken = await _safeGetIdToken(
+            user,
+            forceRefresh: true,
+          );
           if (refreshedToken != null && refreshedToken.isNotEmpty) {
             idToken = refreshedToken;
             debugPrint('[TapInterface] Token refreshed for cleanup');
@@ -7052,13 +7765,17 @@ VARIETY RULES:
         debugPrint('[TapInterface] Token refresh failed for cleanup: $e');
       }
 
+      final userLanguage = settingsProvider.settings?.userLanguage ?? 'en-US';
       final url = '${EnvironmentConfig.apiBaseUrl}/api/freestyle/cleanup-text';
       final headers = {
         'Authorization': 'Bearer $idToken',
         'X-User-ID': aacUserId,
         'Content-Type': 'application/json',
       };
-      final body = json.encode({'text_to_cleanup': textToClean});
+      final body = json.encode({
+        'text_to_cleanup': textToClean,
+        'target_locale': userLanguage,
+      });
 
       debugPrint('[TapInterface] Cleanup URL: $url');
       debugPrint('[TapInterface] Cleanup headers: $headers');
@@ -7597,7 +8314,10 @@ VARIETY RULES:
       String idToken = widget.idToken;
       if (user != null) {
         try {
-          final refreshedToken = await user.getIdToken(true);
+          final refreshedToken = await _safeGetIdToken(
+            user,
+            forceRefresh: true,
+          );
           if (refreshedToken != null && refreshedToken.isNotEmpty) {
             idToken = refreshedToken;
           }
@@ -7701,8 +8421,8 @@ VARIETY RULES:
       // across sessions. Only clear stale negatives.
       await PictogramService().clearNullCacheEntries();
 
-      // Clear custom image service cache
-      CustomImageService.clearCache();
+      // Keep custom image cache warm across Tap page entries to avoid
+      // re-downloading/matching delays on first board render.
 
       // Warm up standard control buttons so locale-specific UI controls like
       // "Something Else" (e.g. "Algo más") have an image before the grid renders.
@@ -7759,7 +8479,7 @@ VARIETY RULES:
       }
 
       // Match GridPage behavior: use current valid token retrieval
-      final idToken = await user.getIdToken();
+      final idToken = await _safeGetIdToken(user, forceRefresh: false);
       if (idToken == null) {
         debugPrint('Failed to get user token');
         if (!mounted) return;
@@ -7868,6 +8588,7 @@ VARIETY RULES:
     // Check if we have any options to display
     if (_phraseOptions.isEmpty &&
         _wordOptions.isEmpty &&
+        _boardWordOptions.isEmpty &&
         !_isLoadingPhraseOptions &&
         !_isLoadingWordOptions) {
       return Center(
@@ -7924,7 +8645,7 @@ VARIETY RULES:
                       child: Stack(
                         children: [
                           // Show grid if we have options (even if loading)
-                          if (_wordOptions.isNotEmpty || !_isLoadingWordOptions)
+                          if (!_isLoadingWordOptions)
                             GridView.count(
                               physics:
                                   const AlwaysScrollableScrollPhysics(), // Enable scrolling for dynamic content
@@ -8032,7 +8753,9 @@ VARIETY RULES:
                                       padding: const EdgeInsets.all(2),
                                       keywords: _wordKeywords[boardButton.text],
                                       assignedImageUrl: boardButton.imageUrl,
-                                      shouldLogMissing: false,
+                                      shouldLogMissing:
+                                          !boardButton.isNavigationButton,
+                                      cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
                                     );
                                   }
 
@@ -8060,6 +8783,7 @@ VARIETY RULES:
                                       padding: const EdgeInsets.all(2),
                                       shouldLogMissing:
                                           false, // Don't log missing images for UI control buttons
+                                        cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
                                     );
                                   } else if (showSomethingElseAZ &&
                                       index == maxIndex + 1) {
@@ -8082,6 +8806,7 @@ VARIETY RULES:
                                           tapSightWordLogicEnabled,
                                       padding: const EdgeInsets.all(2),
                                       shouldLogMissing: false,
+                                      cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
                                     );
                                   } else if (index < _wordOptions.length) {
                                     final wordOption = _wordOptions[index];
@@ -8117,7 +8842,8 @@ VARIETY RULES:
                                       keywords:
                                           keywords, // Pass keywords for better image matching
                                       shouldLogMissing:
-                                          false, // Don't log missing images for LLM/backend-generated words
+                                          true, // Keep full fallback search enabled for visible Words buttons
+                                        cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
                                     );
                                   } else {
                                     // Empty slot
@@ -8725,9 +9451,7 @@ VARIETY RULES:
 
   Future<void> _loadWordOptionsBasedOnBuildSpace() async {
     try {
-      if (_currentQuestion.isEmpty &&
-          (_boardWordOptions.isNotEmpty ||
-              (_selectedCategory?.hasBoardWordOptions ?? false))) {
+      if (_currentQuestion.isEmpty && _boardWordOptions.isNotEmpty) {
         debugPrint(
           '[TapInterface] Skipping freestyle word refresh because a board is active',
         );
@@ -9092,6 +9816,9 @@ VARIETY RULES:
             '📋 Cleared session-tracked missing images for refreshed phrase options',
           );
         });
+        if (phraseOpts.isNotEmpty) {
+          _preloadImagesForOptions(phrases: phraseOpts);
+        }
         debugPrint(
           '[TapInterface] Updated UI with ${_phraseOptions.length} phrase options',
         );
@@ -9130,14 +9857,12 @@ VARIETY RULES:
         listen: false,
       );
       final llmOptions = userSettings.settings?.llmOptions ?? 10;
-      final idToken = userSettings.idToken ?? widget.idToken;
       final userId = userSettings.userId ?? widget.aacUserId;
 
-      final response = await http.get(
-        Uri.parse(
-          '${EnvironmentConfig.apiBaseUrl}/api/jokes/contextual?limit=$llmOptions',
-        ),
-        headers: {'Authorization': 'Bearer $idToken', 'X-User-ID': userId},
+      final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+        'GET',
+        '${EnvironmentConfig.apiBaseUrl}/api/jokes/contextual?limit=$llmOptions',
+        baseHeaders: {'X-User-ID': userId},
       );
 
       if (response.statusCode == 200) {
@@ -9165,9 +9890,21 @@ VARIETY RULES:
             .map<Map<String, String>>((joke) {
               final jokeText = (joke['text'] ?? '').toString().trim();
               final summary = (joke['summary'] ?? 'Joke').toString().trim();
+              final tags = joke['tags'];
+              String keywords = '';
+              if (tags != null) {
+                if (tags is List) {
+                  keywords = tags.join('|');
+                } else {
+                  keywords = tags.toString();
+                }
+              } else {
+                keywords = 'joke|humor';
+              }
               return {
                 'summary': summary.isNotEmpty ? summary : 'Joke',
                 'fullText': addPauseToJokeText(jokeText),
+                'keywords': keywords,
               };
             })
             .where((p) => p['fullText']!.isNotEmpty)
@@ -10138,17 +10875,12 @@ VARIETY RULES:
           _wordOptions,
         ); // Save old options for comparison
 
-        // CRITICAL FIX: Force clear the old options first to ensure UI update
-        _wordOptions.clear();
-        _wordKeywords.clear(); // Clear keywords when clearing word options
-        debugPrint(
-          '[TapInterface] CLEARED old _wordOptions to force UI update',
-        );
-
-        // Add new options
+        // Assign new list references directly — do NOT call .clear() on the
+        // old list because _categoryWordCache may share the same list object,
+        // and mutating it would silently corrupt the cache.
         _wordOptions = List<String>.from(
           newWordOptions.take(requiredWordCount),
-        ); // Force new list creation
+        );
         _wordKeywords = localizedNewWordKeywords;
 
         // CRITICAL DEBUG: Check for duplicates in final word options
@@ -10243,6 +10975,10 @@ VARIETY RULES:
   @override
   Widget build(BuildContext context) {
     final settingsProvider = Provider.of<UserSettingsProvider>(
+      context,
+      listen: true,
+    );
+    final musicService = Provider.of<MusicPlaybackService>(
       context,
       listen: true,
     );
@@ -10781,6 +11517,7 @@ VARIETY RULES:
                                                 .imageUrl, // Pass assigned image URL from database
                                             shouldLogMissing:
                                                 false, // Don't log missing images for category sidebar buttons
+                                            cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
                                           );
                                         })
                                         .toList(),
@@ -10936,6 +11673,18 @@ VARIETY RULES:
                     ),
                   ],
 
+                    if (musicService.isPlaying)
+                      IconButton(
+                        icon: const Icon(
+                          Icons.stop_circle,
+                          color: Colors.red,
+                        ),
+                        tooltip: 'Stop Playing Music',
+                        onPressed: () {
+                          musicService.stopPlayback();
+                        },
+                      ),
+
                   // Lock/Unlock Icon (moved to right side)
                   IconButton(
                     icon: Icon(
@@ -10959,10 +11708,13 @@ VARIETY RULES:
   // --- Schedule Check Methods ---
 
   void _startScheduleCheck() {
-    // Initial check (Login Check)
-    _checkSchedules(isRuntime: false);
+    // Delay initial check until after first frame so auth context is ready
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      await Future.delayed(const Duration(seconds: 2));
+      _checkSchedules(isRuntime: false);
+    });
 
-    // Periodic check (Runtime Check)
+    // Periodic check every minute
     _scheduleCheckTimer = Timer.periodic(const Duration(minutes: 1), (timer) {
       _checkSchedules(isRuntime: true);
     });
@@ -10970,14 +11722,37 @@ VARIETY RULES:
 
   Future<void> _checkSchedules({required bool isRuntime}) async {
     try {
-      final response = await http.get(
-        Uri.parse('${EnvironmentConfig.apiBaseUrl}/api/user-current-favorites'),
-        headers: {
-          'Authorization': 'Bearer ${widget.idToken}',
-          'X-User-ID': widget.aacUserId,
-          'Content-Type': 'application/json',
-        },
+      debugPrint('[ScheduleCheck] ========== Starting check (isRuntime=$isRuntime) ==========');
+
+      // Fetch user's current context state first to check if they are already at this favorite
+      String? currentFavoriteName;
+      try {
+        final stateResponse = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+          'GET',
+          '${EnvironmentConfig.apiBaseUrl}/get-user-current',
+          baseHeaders: {'X-User-ID': widget.aacUserId},
+        );
+        debugPrint('[ScheduleCheck] get-user-current status: ${stateResponse.statusCode}');
+        if (stateResponse.statusCode == 200) {
+          final stateData = json.decode(stateResponse.body);
+          currentFavoriteName = stateData['favorite_name'] as String?;
+          debugPrint('[ScheduleCheck] Currently loaded favorite: "$currentFavoriteName"');
+        } else {
+          debugPrint('[ScheduleCheck] get-user-current failed: ${stateResponse.body}');
+        }
+      } catch (e) {
+        debugPrint('[ScheduleCheck] Failed to fetch current user state: $e');
+      }
+
+      // Fetch favorites list
+      debugPrint('[ScheduleCheck] Fetching favorites from: ${EnvironmentConfig.apiBaseUrl}/api/user-current-favorites');
+      final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+        'GET',
+        '${EnvironmentConfig.apiBaseUrl}/api/user-current-favorites',
+        baseHeaders: {'X-User-ID': widget.aacUserId},
       );
+
+      debugPrint('[ScheduleCheck] Favorites response status: ${response.statusCode}');
 
       if (response.statusCode == 200) {
         final data = json.decode(response.body);
@@ -10985,45 +11760,130 @@ VARIETY RULES:
           data['favorites'] ?? [],
         );
 
+        debugPrint('[ScheduleCheck] Total favorites returned: ${favorites.length}');
+
+        final now = DateTime.now();
+        // Always use en_US locale so day names match what the backend stores ("Monday", etc.)
+        final currentDay = DateFormat('EEEE', 'en_US').format(now);
+        final currentTimeMinutes = now.hour * 60 + now.minute;
+
+        debugPrint('[ScheduleCheck] Current: $currentDay ${now.hour}:${now.minute.toString().padLeft(2, '0')} ($currentTimeMinutes min)');
+        debugPrint('[ScheduleCheck] Handled schedules: $_handledSchedules');
+
         for (final fav in favorites) {
-          bool shouldPrompt = false;
-          if (isRuntime) {
-            if (ScheduleService.didScheduleJustStart(fav)) {
-              shouldPrompt = true;
-            }
-          } else {
-            if (ScheduleService.isScheduleActive(fav)) {
-              shouldPrompt = true;
-            }
+          final favName = fav['name'] ?? '(unnamed)';
+          final schedule = fav['schedule'];
+
+          if (schedule == null) {
+            debugPrint('[ScheduleCheck]   "$favName": no schedule');
+            continue;
           }
 
-          if (shouldPrompt && mounted) {
-            _showLoadFavoriteDialog(fav);
-            break; // Only show one prompt at a time
+          final enabled = schedule['enabled'];
+          if (enabled != true) {
+            debugPrint('[ScheduleCheck]   "$favName": schedule disabled (enabled=$enabled)');
+            continue;
+          }
+
+          // Check if current day is in scheduled days list
+          bool isDayMatch = false;
+          final daysOfWeek = schedule['days_of_week'];
+          if (daysOfWeek is List) {
+            isDayMatch = daysOfWeek.contains(currentDay);
+            debugPrint('[ScheduleCheck]   "$favName": days=$daysOfWeek, currentDay="$currentDay", isDayMatch=$isDayMatch');
+          } else if (schedule['day_of_week'] != null) {
+            isDayMatch = schedule['day_of_week'] == currentDay;
+            debugPrint('[ScheduleCheck]   "$favName": day_of_week=${schedule['day_of_week']}, currentDay="$currentDay", isDayMatch=$isDayMatch');
+          } else {
+            debugPrint('[ScheduleCheck]   "$favName": no days_of_week field found in schedule: $schedule');
+          }
+
+          if (!isDayMatch) continue;
+
+          final startTimeStr = schedule['start_time'] as String?;
+          final endTimeStr = schedule['end_time'] as String?;
+          debugPrint('[ScheduleCheck]   "$favName": startTime=$startTimeStr, endTime=$endTimeStr');
+
+          if (startTimeStr == null || endTimeStr == null) {
+            debugPrint('[ScheduleCheck]   "$favName": missing start/end time, skipping');
+            continue;
+          }
+
+          // Parse start and end times
+          final startParts = startTimeStr.split(':').map(int.parse).toList();
+          final endParts = endTimeStr.split(':').map(int.parse).toList();
+          if (startParts.length < 2 || endParts.length < 2) {
+            debugPrint('[ScheduleCheck]   "$favName": could not parse times, skipping');
+            continue;
+          }
+
+          final startTimeMinutes = startParts[0] * 60 + startParts[1];
+          final endTimeMinutes = endParts[0] * 60 + endParts[1];
+
+          final minutesUntilStart = startTimeMinutes - currentTimeMinutes;
+          final isUpcoming = minutesUntilStart >= 0 && minutesUntilStart <= 15;
+          final isAlreadyActive = currentTimeMinutes > startTimeMinutes && currentTimeMinutes <= endTimeMinutes;
+
+          debugPrint('[ScheduleCheck]   "$favName": start=$startTimeMinutes min, end=$endTimeMinutes min, now=$currentTimeMinutes min, minutesUntilStart=$minutesUntilStart, isUpcoming=$isUpcoming, isAlreadyActive=$isAlreadyActive');
+
+          if (isUpcoming || isAlreadyActive) {
+            final key = "$favName-$currentDay-$startTimeStr";
+            debugPrint('[ScheduleCheck]   "$favName": MATCH! key="$key"');
+
+            if (_handledSchedules.contains(key)) {
+              debugPrint('[ScheduleCheck]   "$favName": already handled, skipping');
+              continue;
+            }
+
+            if (currentFavoriteName == favName) {
+              debugPrint('[ScheduleCheck]   "$favName": already loaded as current favorite, marking handled silently');
+              _handledSchedules.add(key);
+              continue;
+            }
+
+            debugPrint('[ScheduleCheck]   "$favName": showing dialog (mounted=$mounted)');
+            if (mounted) {
+              _showLoadFavoriteDialog(fav, key, minutesUntilStart: isUpcoming ? minutesUntilStart : 0);
+            } else {
+              debugPrint('[ScheduleCheck]   "$favName": widget not mounted, cannot show dialog!');
+            }
+            break; // Only prompt for one location at a time
+          } else {
+            debugPrint('[ScheduleCheck]   "$favName": outside window (minutesUntilStart=$minutesUntilStart), skipping');
           }
         }
+
+        debugPrint('[ScheduleCheck] ========== Check complete ==========');
+      } else {
+        debugPrint('[ScheduleCheck] Failed to load favorites: status=${response.statusCode}, body=${response.body}');
       }
-    } catch (e) {
-      debugPrint('Error checking schedules: $e');
+    } catch (e, stack) {
+      debugPrint('[ScheduleCheck] Error checking schedules: $e\n$stack');
     }
   }
 
-  Future<void> _showLoadFavoriteDialog(Map<String, dynamic> favorite) async {
+  Future<void> _showLoadFavoriteDialog(Map<String, dynamic> favorite, String scheduleKey, {int minutesUntilStart = 0}) async {
     final name = favorite['name'];
+    final message = minutesUntilStart > 0
+        ? 'The location "$name" is scheduled to start in $minutesUntilStart minute${minutesUntilStart == 1 ? '' : 's'}. Do you want to load it now?'
+        : 'The scheduled location "$name" is now active. Do you want to load it?';
     await showDialog(
       context: context,
+      barrierDismissible: false, // User must choose Yes or No
       builder: (context) => AlertDialog(
-        title: const Text('Scheduled Favorite'),
-        content: Text(
-          'The schedule for "$name" is active. Do you want to load this location?',
-        ),
+        title: const Text('Scheduled Location'),
+        content: Text(message),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context),
+            onPressed: () {
+              _handledSchedules.add(scheduleKey);
+              Navigator.pop(context);
+            },
             child: const Text('No'),
           ),
           ElevatedButton(
             onPressed: () {
+              _handledSchedules.add(scheduleKey);
               Navigator.pop(context);
               _loadFavorite(favorite);
             },
@@ -11039,13 +11899,10 @@ VARIETY RULES:
       // Use UTC timestamp with explicit timezone to match backend expectations
       final loadTimestamp = DateTime.now().toUtc().toIso8601String();
 
-      final response = await http.post(
-        Uri.parse('${EnvironmentConfig.apiBaseUrl}/user_current'),
-        headers: {
-          'Authorization': 'Bearer ${widget.idToken}',
-          'X-User-ID': widget.aacUserId,
-          'Content-Type': 'application/json',
-        },
+      final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+        'POST',
+        '${EnvironmentConfig.apiBaseUrl}/user_current',
+        baseHeaders: {'X-User-ID': widget.aacUserId},
         body: json.encode({
           'location': favorite['location'] ?? '',
           'locationLanguageOverride':

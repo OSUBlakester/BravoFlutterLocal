@@ -11,6 +11,7 @@ class CustomImage {
   final DateTime createdAt;
   final DateTime updatedAt;
   final bool active;
+  final bool isProfileImage;
 
   const CustomImage({
     required this.id,
@@ -25,22 +26,73 @@ class CustomImage {
     required this.createdAt,
     required this.updatedAt,
     required this.active,
+    this.isProfileImage = false,
   });
 
   factory CustomImage.fromJson(Map<String, dynamic> json) {
     return CustomImage(
-      id: json['id'] as String,
-      concept: json['concept'] as String,
-      subconcept: json['subconcept'] as String,
-      tags: List<String>.from(json['tags'] ?? []),
-      imageUrl: json['image_url'] as String,
-      originalFilename: json['original_filename'] as String,
-      storagePath: json['storage_path'] as String,
-      accountId: json['account_id'] as String,
-      aacUserId: json['aac_user_id'] as String,
-      createdAt: DateTime.parse(json['created_at'] as String),
-      updatedAt: DateTime.parse(json['updated_at'] as String),
+      id: (json['id'] ?? '').toString(),
+      concept: (json['concept'] ?? '').toString(),
+      subconcept: (json['subconcept'] ?? '').toString(),
+      tags: () {
+        final result = <String>[];
+        
+        // Add subconcept parts to tags list
+        final sub = (json['subconcept'] ?? '').toString();
+        if (sub.contains(',') || sub.contains('/')) {
+          result.addAll(
+            sub.split(RegExp(r'[,/]+'))
+                .map((s) => s.trim())
+                .where((s) => s.isNotEmpty),
+          );
+        } else {
+          final trimmed = sub.trim();
+          if (trimmed.isNotEmpty) {
+            result.add(trimmed);
+          }
+        }
+
+        // Add regular tags
+        final rawTags = json['tags'];
+        if (rawTags is List) {
+          for (final item in rawTags) {
+            final str = item?.toString() ?? '';
+            if (str.contains(',') || str.contains('/')) {
+              result.addAll(
+                str.split(RegExp(r'[,/]+'))
+                    .map((s) => s.trim())
+                    .where((s) => s.isNotEmpty),
+              );
+            } else {
+              final trimmed = str.trim();
+              if (trimmed.isNotEmpty) {
+                result.add(trimmed);
+              }
+            }
+          }
+        } else if (rawTags != null) {
+          final str = rawTags.toString();
+          result.addAll(
+            str.split(RegExp(r'[,/]+'))
+                .map((s) => s.trim())
+                .where((s) => s.isNotEmpty),
+          );
+        }
+        return result.toSet().toList(); // Deduplicate tags
+      }(),
+      imageUrl: (json['image_url'] ?? json['imageUrl'] ?? '').toString(),
+      originalFilename: (json['original_filename'] ?? json['originalFilename'] ?? '').toString(),
+      storagePath: (json['storage_path'] ?? json['storagePath'] ?? '').toString(),
+      accountId: (json['account_id'] ?? json['accountId'] ?? '').toString(),
+      aacUserId: (json['aac_user_id'] ?? json['aacUserId'] ?? '').toString(),
+      createdAt: json['created_at'] != null 
+          ? DateTime.tryParse(json['created_at'].toString()) ?? DateTime.now() 
+          : DateTime.now(),
+      updatedAt: json['updated_at'] != null 
+          ? DateTime.tryParse(json['updated_at'].toString()) ?? DateTime.now() 
+          : DateTime.now(),
       active: json['active'] as bool? ?? true,
+      isProfileImage: json['is_profile_image'] as bool? ?? json['isProfileImage'] as bool? ?? false,
     );
   }
 
@@ -58,6 +110,7 @@ class CustomImage {
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
       'active': active,
+      'is_profile_image': isProfileImage,
     };
   }
 
@@ -74,6 +127,7 @@ class CustomImage {
     DateTime? createdAt,
     DateTime? updatedAt,
     bool? active,
+    bool? isProfileImage,
   }) {
     return CustomImage(
       id: id ?? this.id,
@@ -88,6 +142,7 @@ class CustomImage {
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
       active: active ?? this.active,
+      isProfileImage: isProfileImage ?? this.isProfileImage,
     );
   }
 
@@ -105,129 +160,84 @@ class CustomImage {
   @override
   int get hashCode => id.hashCode;
 
-  /// Returns a formatted search string for filtering
   String get searchableText {
     return '$concept $subconcept ${tags.join(' ')}'.toLowerCase();
   }
 
-  /// Checks if this image matches the given search query
   bool matchesQuery(String query) {
     if (query.isEmpty) return true;
-    
+
     final lowerQuery = query.toLowerCase().trim();
     final searchText = searchableText.trim();
-    
-    // Debug logging for problematic single character queries
+
     if (lowerQuery.length == 1 && (lowerQuery == 'i' || searchText.contains('lily'))) {
       print('🚨 MATCHQUERY DEBUG: Query="$lowerQuery", SearchText="$searchText"');
       print('   Concept: "$concept", Subconcept: "$subconcept", Tags: $tags');
     }
-    
-    // For single character queries, be more strict to avoid false positives
+
     if (lowerQuery.length == 1) {
-      // Split searchable text into words and check for exact word matches
       final words = searchText.split(RegExp(r'\s+'));
       final result = words.any((word) => word == lowerQuery);
-      
-      // Debug single character matches
+
       if (lowerQuery == 'i' || searchText.contains('lily')) {
         print('   Words: $words');
         print('   SingleCharMatch Result: $result');
       }
-      
+
       return result;
     }
-    
-    // For multi-character queries, use fuzzy matching with word boundaries
+
     if (lowerQuery.length <= 3) {
-      // For short queries (2-3 chars), look for word starts or exact words
       final words = searchText.split(RegExp(r'\s+'));
-      return words.any((word) => 
-        word == lowerQuery ||  // exact match
-        word.startsWith(lowerQuery)  // word starts with query
-      );
+      return words.any((word) =>
+          word == lowerQuery || word.startsWith(lowerQuery));
     }
-    
-    // For longer queries, use the original contains logic
+
     return searchText.contains(lowerQuery);
   }
 }
 
 class CustomImageUploadRequest {
-  final String description;
+  final String primaryTag;
 
   const CustomImageUploadRequest({
-    required this.description,
+    required this.primaryTag,
   });
-
-  // Parse description into concept, subconcept, and tags
-  String get concept {
-    final parts = description.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-    return parts.isNotEmpty ? parts.first : '';
-  }
-
-  String get subconcept {
-    final parts = description.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-    return parts.isNotEmpty ? parts.first : '';
-  }
-
-  List<String> get tags {
-    final parts = description.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-    return parts.length > 1 ? parts.sublist(1) : [parts.isNotEmpty ? parts.first : ''];
-  }
 
   Map<String, String> toFormData() {
     return {
-      'concept': concept,
-      'subconcept': subconcept,
-      'tags': tags.join(','),
+      'concept': 'custom',
+      'subconcept': primaryTag,
+      'tags': '',
     };
   }
 
   @override
   String toString() {
-    return 'CustomImageUploadRequest(concept: $concept, subconcept: $subconcept, tags: $tags)';
+    return 'CustomImageUploadRequest(primaryTag: $primaryTag)';
   }
 }
 
 class CustomImageUpdateRequest {
   final String id;
-  final String? description;
+  final String? primaryTag;
 
   const CustomImageUpdateRequest({
     required this.id,
-    this.description,
+    this.primaryTag,
   });
 
-  // Parse description into concept, subconcept, and tags when needed
-  String? get concept {
-    if (description == null) return null;
-    final parts = description!.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-    return parts.isNotEmpty ? parts.first : null;
-  }
-
-  String? get subconcept {
-    if (description == null) return null;
-    final parts = description!.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-    return parts.isNotEmpty ? parts.first : null;
-  }
-
-  List<String>? get tags {
-    if (description == null) return null;
-    final parts = description!.split(',').map((e) => e.trim()).where((e) => e.isNotEmpty).toList();
-    return parts.length > 1 ? parts.sublist(1) : [parts.isNotEmpty ? parts.first : ''];
-  }
-
   Map<String, dynamic> toJson() {
-    final Map<String, dynamic> data = {'id': id};
-    if (concept != null) data['concept'] = concept;
-    if (subconcept != null) data['subconcept'] = subconcept;
-    if (tags != null) data['tags'] = tags;
-    return data;
+    return {
+      'image_id': id,
+      'concept': 'custom',
+      'subconcept': primaryTag ?? '',
+      'tags': [],
+    };
   }
 
   @override
   String toString() {
-    return 'CustomImageUpdateRequest(id: $id, description: $description)';
+    return 'CustomImageUpdateRequest(id: $id, primaryTag: $primaryTag)';
   }
 }

@@ -163,6 +163,67 @@ class _FreestylePageState extends State<FreestylePage> {
     'because',
   };
 
+  // --- Localization ---
+  static const _fsTranslations = <String, Map<String, String>>{
+    // Action buttons
+    'Speak Display': {'es-US': 'Hablar texto', 'fr-FR': 'Lire le texte', 'de-DE': 'Text sprechen', 'it-IT': 'Leggi testo', 'pt-BR': 'Falar texto', 'ar-XA': 'قراءة النص'},
+    'Clean Up': {'es-US': 'Limpiar', 'fr-FR': 'Nettoyer', 'de-DE': 'Bereinigen', 'it-IT': 'Correggi', 'pt-BR': 'Limpar', 'ar-XA': 'تنظيف'},
+    'Backspace': {'es-US': 'Borrar', 'fr-FR': 'Effacer', 'de-DE': 'Löschen', 'it-IT': 'Cancella', 'pt-BR': 'Apagar', 'ar-XA': 'حذف'},
+    'Clear': {'es-US': 'Borrar todo', 'fr-FR': 'Effacer tout', 'de-DE': 'Alles löschen', 'it-IT': 'Cancella tutto', 'pt-BR': 'Limpar tudo', 'ar-XA': 'مسح الكل'},
+    'New Row': {'es-US': 'Nueva fila', 'fr-FR': 'Nouvelle ligne', 'de-DE': 'Neue Zeile', 'it-IT': 'Nuova riga', 'pt-BR': 'Nova linha', 'ar-XA': 'سطر جديد'},
+    'Go Back': {'es-US': 'Regresar', 'fr-FR': 'Retour', 'de-DE': 'Zurück', 'it-IT': 'Indietro', 'pt-BR': 'Voltar', 'ar-XA': 'رجوع'},
+    // Number tool
+    'Reset to 0': {'es-US': 'Restablecer a 0', 'fr-FR': 'Réinitialiser à 0', 'de-DE': 'Auf 0 zurücksetzen', 'it-IT': 'Azzera', 'pt-BR': 'Reiniciar para 0', 'ar-XA': 'إعادة إلى 0'},
+    // Category labels
+    'General': {'es-US': 'General', 'fr-FR': 'Général', 'de-DE': 'Allgemein', 'it-IT': 'Generale', 'pt-BR': 'Geral', 'ar-XA': 'عام'},
+    'All': {'es-US': 'Todo', 'fr-FR': 'Tout', 'de-DE': 'Alle', 'it-IT': 'Tutto', 'pt-BR': 'Tudo', 'ar-XA': 'الكل'},
+    'Greetings': {'es-US': 'Saludos', 'fr-FR': 'Salutations', 'de-DE': 'Begrüßungen', 'it-IT': 'Saluti', 'pt-BR': 'Saudações', 'ar-XA': 'تحيات'},
+    'Ask': {'es-US': 'Preguntar', 'fr-FR': 'Demander', 'de-DE': 'Fragen', 'it-IT': 'Chiedere', 'pt-BR': 'Perguntar', 'ar-XA': 'اسأل'},
+    'Question': {'es-US': 'Pregunta', 'fr-FR': 'Question', 'de-DE': 'Frage', 'it-IT': 'Domanda', 'pt-BR': 'Pergunta', 'ar-XA': 'سؤال'},
+    'Request': {'es-US': 'Solicitar', 'fr-FR': 'Requête', 'de-DE': 'Anfragen', 'it-IT': 'Richiesta', 'pt-BR': 'Solicitar', 'ar-XA': 'طلب'},
+    'Respond': {'es-US': 'Responder', 'fr-FR': 'Répondre', 'de-DE': 'Antworten', 'it-IT': 'Rispondere', 'pt-BR': 'Responder', 'ar-XA': 'رد'},
+    'People': {'es-US': 'Personas', 'fr-FR': 'Personnes', 'de-DE': 'Personen', 'it-IT': 'Persone', 'pt-BR': 'Pessoas', 'ar-XA': 'أشخاص'},
+    'Places': {'es-US': 'Lugares', 'fr-FR': 'Lieux', 'de-DE': 'Orte', 'it-IT': 'Luoghi', 'pt-BR': 'Lugares', 'ar-XA': 'أماكن'},
+    'Things': {'es-US': 'Cosas', 'fr-FR': 'Choses', 'de-DE': 'Dinge', 'it-IT': 'Cose', 'pt-BR': 'Coisas', 'ar-XA': 'أشياء'},
+    'Actions': {'es-US': 'Acciones', 'fr-FR': 'Actions', 'de-DE': 'Aktionen', 'it-IT': 'Azioni', 'pt-BR': 'Ações', 'ar-XA': 'أفعال'},
+    'Describe': {'es-US': 'Describir', 'fr-FR': 'Décrire', 'de-DE': 'Beschreiben', 'it-IT': 'Descrivere', 'pt-BR': 'Descrever', 'ar-XA': 'وصف'},
+    'Animals': {'es-US': 'Animales', 'fr-FR': 'Animaux', 'de-DE': 'Tiere', 'it-IT': 'Animali', 'pt-BR': 'Animais', 'ar-XA': 'حيوانات'},
+    'Dates and Times': {'es-US': 'Fechas y horas', 'fr-FR': 'Dates et heures', 'de-DE': 'Daten und Uhrzeiten', 'it-IT': 'Date e orari', 'pt-BR': 'Datas e horários', 'ar-XA': 'التواريخ والأوقات'},
+    'Weather': {'es-US': 'Clima', 'fr-FR': 'Météo', 'de-DE': 'Wetter', 'it-IT': 'Meteo', 'pt-BR': 'Clima', 'ar-XA': 'الطقس'},
+    'Feelings': {'es-US': 'Sentimientos', 'fr-FR': 'Sentiments', 'de-DE': 'Gefühle', 'it-IT': 'Sentimenti', 'pt-BR': 'Sentimentos', 'ar-XA': 'المشاعر'},
+    'Food': {'es-US': 'Comida', 'fr-FR': 'Nourriture', 'de-DE': 'Essen', 'it-IT': 'Cibo', 'pt-BR': 'Comida', 'ar-XA': 'طعام'},
+    'Food and Drink': {'es-US': 'Comida y bebida', 'fr-FR': 'Nourriture et boissons', 'de-DE': 'Essen und Trinken', 'it-IT': 'Cibo e bevande', 'pt-BR': 'Comida e bebida', 'ar-XA': 'الطعام والشراب'},
+    'Health': {'es-US': 'Salud', 'fr-FR': 'Santé', 'de-DE': 'Gesundheit', 'it-IT': 'Salute', 'pt-BR': 'Saúde', 'ar-XA': 'صحة'},
+    'Travel': {'es-US': 'Viaje', 'fr-FR': 'Voyage', 'de-DE': 'Reisen', 'it-IT': 'Viaggio', 'pt-BR': 'Viagem', 'ar-XA': 'سفر'},
+    'School': {'es-US': 'Escuela', 'fr-FR': 'École', 'de-DE': 'Schule', 'it-IT': 'Scuola', 'pt-BR': 'Escola', 'ar-XA': 'مدرسة'},
+    'Work': {'es-US': 'Trabajo', 'fr-FR': 'Travail', 'de-DE': 'Arbeit', 'it-IT': 'Lavoro', 'pt-BR': 'Trabalho', 'ar-XA': 'عمل'},
+    'Family': {'es-US': 'Familia', 'fr-FR': 'Famille', 'de-DE': 'Familie', 'it-IT': 'Famiglia', 'pt-BR': 'Família', 'ar-XA': 'عائلة'},
+    'Sports': {'es-US': 'Deportes', 'fr-FR': 'Sports', 'de-DE': 'Sport', 'it-IT': 'Sport', 'pt-BR': 'Esportes', 'ar-XA': 'رياضة'},
+    'Colors': {'es-US': 'Colores', 'fr-FR': 'Couleurs', 'de-DE': 'Farben', 'it-IT': 'Colori', 'pt-BR': 'Cores', 'ar-XA': 'ألوان'},
+    // Section scanning prompts
+    'Exit page': {'es-US': 'Salir', 'fr-FR': 'Quitter', 'de-DE': 'Beenden', 'it-IT': 'Esci', 'pt-BR': 'Sair', 'ar-XA': 'خروج'},
+    'Choose word': {'es-US': 'Elegir palabra', 'fr-FR': 'Choisir un mot', 'de-DE': 'Wort wählen', 'it-IT': 'Scegli parola', 'pt-BR': 'Escolher palavra', 'ar-XA': 'اختر كلمة'},
+    'Tools': {'es-US': 'Herramientas', 'fr-FR': 'Outils', 'de-DE': 'Werkzeuge', 'it-IT': 'Strumenti', 'pt-BR': 'Ferramentas', 'ar-XA': 'أدوات'},
+    'Spelling': {'es-US': 'Ortografía', 'fr-FR': 'Orthographe', 'de-DE': 'Rechtschreibung', 'it-IT': 'Ortografia', 'pt-BR': 'Ortografia', 'ar-XA': 'هجاء'},
+    'Numbers': {'es-US': 'Números', 'fr-FR': 'Nombres', 'de-DE': 'Zahlen', 'it-IT': 'Numeri', 'pt-BR': 'Números', 'ar-XA': 'أرقام'},
+    'Word Categories': {'es-US': 'Categorías', 'fr-FR': 'Catégories', 'de-DE': 'Kategorien', 'it-IT': 'Categorie', 'pt-BR': 'Categorias', 'ar-XA': 'فئات'},
+    'Section': {'es-US': 'Sección', 'fr-FR': 'Section', 'de-DE': 'Abschnitt', 'it-IT': 'Sezione', 'pt-BR': 'Seção', 'ar-XA': 'قسم'},
+    'Something Else': {'es-US': 'Algo más', 'fr-FR': 'Autre chose', 'de-DE': 'Etwas anderes', 'it-IT': 'Qualcos\'altro', 'pt-BR': 'Outra coisa', 'ar-XA': 'شيء آخر'},
+    'Something Else A-Z': {'es-US': 'Algo más A-Z', 'fr-FR': 'Autre chose A-Z', 'de-DE': 'Etwas anderes A-Z', 'it-IT': 'Qualcos\'altro A-Z', 'pt-BR': 'Outra coisa A-Z', 'ar-XA': 'شيء آخر أ-ي'},
+    'More Suggestions': {'es-US': 'Más sugerencias', 'fr-FR': 'Plus de suggestions', 'de-DE': 'Mehr Vorschläge', 'it-IT': 'Altri suggerimenti', 'pt-BR': 'Mais sugestões', 'ar-XA': 'مزيد من الاقتراحات'},
+    'Back to Categories': {'es-US': 'Volver a categorías', 'fr-FR': 'Retour aux catégories', 'de-DE': 'Zurück zu Kategorien', 'it-IT': 'Torna alle categorie', 'pt-BR': 'Voltar às categorias', 'ar-XA': 'العودة إلى الفئات'},
+    'Spell': {'es-US': 'Deletrear', 'fr-FR': 'Épeler', 'de-DE': 'Buchstabieren', 'it-IT': 'Compita', 'pt-BR': 'Soletrar', 'ar-XA': 'تهجئة'},
+    // Status messages
+    'Ready to compose.': {'es-US': 'Listo para componer.', 'fr-FR': 'Prêt à composer.', 'de-DE': 'Bereit zum Schreiben.', 'it-IT': 'Pronto a comporre.', 'pt-BR': 'Pronto para compor.', 'ar-XA': 'جاهز للكتابة.'},
+    'Draft restored.': {'es-US': 'Borrador restaurado.', 'fr-FR': 'Brouillon restauré.', 'de-DE': 'Entwurf wiederhergestellt.', 'it-IT': 'Bozza ripristinata.', 'pt-BR': 'Rascunho restaurado.', 'ar-XA': 'تم استعادة المسودة.'},
+  };
+
+  String _t(String key) {
+    final provider = Provider.of<UserSettingsProvider>(context, listen: false);
+    final locale = provider.settings?.userLanguage ?? 'en-US';
+    return _fsTranslations[key]?[locale] ?? _dynamicCategoryTranslations[key] ?? key;
+  }
+
   // --- Build Space ---
   String _buildSpaceText = "";
   final TextEditingController _buildSpaceController = TextEditingController();
@@ -189,6 +250,8 @@ class _FreestylePageState extends State<FreestylePage> {
   List<String> _currentCategoryWords = [];
   bool _isLoadingCategoryWords = false;
   _FreestyleCategoryNode? _selectedWordCategory;
+  final Map<String, String> _dynamicCategoryTranslations = {};
+  String? _activeSuggestedLetterFilter;
   final List<_FreestyleCategoryNode> _categoryNavigationStack = [];
   String _activeToolPanel = 'categories';
   bool _isToolPanelVisible = false;
@@ -497,8 +560,8 @@ class _FreestylePageState extends State<FreestylePage> {
           : _currentContext;
       _isFirstRound = session.text.trim().isEmpty;
       _statusMessage = session.text.trim().isEmpty
-          ? 'Ready to compose.'
-          : 'Draft restored.';
+          ? _t('Ready to compose.')
+          : _t('Draft restored.');
     });
   }
 
@@ -576,8 +639,69 @@ class _FreestylePageState extends State<FreestylePage> {
       setState(() {
         _wordCategories = categories;
       });
+
+      await _translateDynamicCategories(categories);
     } catch (e) {
       debugPrint('FreestylePage: Failed to load compose category config: $e');
+    }
+  }
+
+  List<String> _collectCategoryLabels(List<_FreestyleCategoryNode> nodes) {
+    final labels = <String>[];
+    for (final node in nodes) {
+      labels.add(node.label);
+      if (node.children.isNotEmpty) {
+        labels.addAll(_collectCategoryLabels(node.children));
+      }
+    }
+    return labels;
+  }
+
+  Future<void> _translateDynamicCategories(
+    List<_FreestyleCategoryNode> categories,
+  ) async {
+    if (!mounted) return;
+    final locale =
+        Provider.of<UserSettingsProvider>(context, listen: false)
+            .settings
+            ?.userLanguage ??
+        'en-US';
+    if (locale == 'en-US') return;
+
+    final allLabels = _collectCategoryLabels(categories).toSet().toList();
+    final unknownLabels =
+        allLabels.where((l) => !_fsTranslations.containsKey(l)).toList();
+    if (unknownLabels.isEmpty) return;
+
+    try {
+      final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+        'POST',
+        '${EnvironmentConfig.apiBaseUrl}/api/translate-lines',
+        baseHeaders: {
+          'Content-Type': 'application/json',
+          'X-User-ID': widget.aacUserId,
+        },
+        body: json.encode({
+          'lines': unknownLabels,
+          'source_locale': 'en-US',
+          'target_locale': locale,
+        }),
+      );
+      if (!mounted) return;
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final translated = data['translated_lines'];
+        if (translated is List && translated.length == unknownLabels.length) {
+          setState(() {
+            for (int i = 0; i < unknownLabels.length; i++) {
+              _dynamicCategoryTranslations[unknownLabels[i]] =
+                  translated[i].toString();
+            }
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('FreestylePage: _translateDynamicCategories error: $e');
     }
   }
 
@@ -765,58 +889,54 @@ class _FreestylePageState extends State<FreestylePage> {
   }
 
   Map<String, dynamic> _buildFreestyleRequestPayloadBase() {
+    final userLanguage =
+        Provider.of<UserSettingsProvider>(context, listen: false)
+            .settings
+            ?.userLanguage ??
+        'en-US';
     return {
       'context': _currentContext,
       'source_page': widget.sourcePage,
       'is_llm_generated': widget.isLLMGenerated,
       'originating_button_text': widget.originatingButtonText,
+      'user_language': userLanguage,
     };
   }
 
   List<Map<String, dynamic>> _buildLeadingMainButtons() {
     final buttons = <Map<String, dynamic>>[
       {
-        'text': 'Speak Display',
+        'text': _t('Speak Display'),
         'icon': Icons.volume_up,
         'color': const Color(0xFF10B981),
         'action': _speakDisplayText,
       },
       {
-        'text': 'Exit Page',
-        'icon': Icons.logout,
-        'color': const Color(0xFF0F766E),
-        'action': () async {
-          if (mounted) {
-            Navigator.of(context).pop();
-          }
-        },
-      },
-      {
-        'text': 'Backspace',
-        'icon': Icons.backspace_outlined,
-        'color': const Color(0xFFF59E0B),
-        'action': _removeLastBuildSpaceUnit,
-      },
-      {
-        'text': 'Clear',
-        'icon': Icons.delete_outline,
-        'color': const Color(0xFFEF4444),
-        'action': _clearDisplayTextAsync,
-      },
-      {
-        'text': 'Clean Up',
+        'text': _t('Clean Up'),
         'icon': Icons.auto_fix_high,
         'color': const Color(0xFF7C3AED),
         'action': _cleanUpBuildSpace,
       },
       {
-        'text': 'New Row',
+        'text': _t('Backspace'),
+        'icon': Icons.backspace_outlined,
+        'color': const Color(0xFFF59E0B),
+        'action': _removeLastBuildSpaceUnit,
+      },
+      {
+        'text': _t('Clear'),
+        'icon': Icons.delete_outline,
+        'color': const Color(0xFFEF4444),
+        'action': _clearDisplayTextAsync,
+      },
+      {
+        'text': _t('New Row'),
         'icon': Icons.keyboard_return,
         'color': const Color(0xFF3B82F6),
         'action': _insertBuildSpaceNewLine,
       },
       {
-        'text': 'Go Back',
+        'text': _t('Go Back'),
         'icon': Icons.arrow_back,
         'color': const Color(0xFF6B7280),
         'action': _resetActiveToolPanel,
@@ -1602,7 +1722,13 @@ class _FreestylePageState extends State<FreestylePage> {
         _waitingForInitialSwitch = true;
         _switchStartRequested = false;
       });
-      unawaited(_playWaitForSwitchNotification());
+      if (_shouldPlayWaitForSwitchChimeForCurrentContext()) {
+        unawaited(_playWaitForSwitchNotification());
+      } else {
+        debugPrint(
+          'FreestylePage _maybeStartScanning: Skipping wait chime for non-LLM page/context',
+        );
+      }
 
       return; // IMPORTANT: Don't start scanning yet, wait for switch press
     }
@@ -1783,11 +1909,32 @@ class _FreestylePageState extends State<FreestylePage> {
           _switchStartRequested = false;
         });
       }
-      await _playWaitForSwitchNotification();
+      if (_shouldPlayWaitForSwitchChimeForCurrentContext()) {
+        await _playWaitForSwitchNotification();
+      } else {
+        debugPrint(
+          'FreestylePage _startScanningOrArmWaitForSwitch: Skipping wait chime for non-LLM page/context',
+        );
+      }
       return;
     }
 
     await _startAuditoryScanning();
+  }
+
+  bool _shouldPlayWaitForSwitchChimeForCurrentContext() {
+    if (widget.isLLMGenerated) {
+      return true;
+    }
+
+    final sourcePage = (widget.sourcePage ?? '').trim().toLowerCase();
+    if (sourcePage.contains('llm') ||
+        sourcePage.contains('follow') ||
+        sourcePage.contains('wake')) {
+      return true;
+    }
+
+    return false;
   }
 
   void _stopAuditoryScanning() {
@@ -1807,6 +1954,19 @@ class _FreestylePageState extends State<FreestylePage> {
   }
 
   Future<void> _playWaitForSwitchNotification() async {
+    final settingsProvider = Provider.of<UserSettingsProvider>(
+      context,
+      listen: false,
+    );
+    final playChime =
+        settingsProvider.settings?.playWaitForSwitchChime ?? false;
+    if (!playChime) {
+      debugPrint(
+        'FreestylePage waitForSwitchNotification: Chime disabled in settings',
+      );
+      return;
+    }
+
     final now = DateTime.now();
     if (_lastWaitForSwitchNotificationAt != null &&
         now.difference(_lastWaitForSwitchNotificationAt!).inMilliseconds <
@@ -1820,7 +1980,29 @@ class _FreestylePageState extends State<FreestylePage> {
 
     final player = AudioPlayer();
     try {
-      await player.setAsset('assets/notification_v2.mp3');
+      if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+        try {
+          const platform = MethodChannel('audio_routing');
+          if (Platform.isIOS) {
+            await platform.invokeMethod('routeToPersonal');
+          } else {
+            await platform.invokeMethod('resetToDefault');
+          }
+        } catch (e) {
+          debugPrint(
+            'FreestylePage waitForSwitchNotification: Personal routing setup failed (non-critical): $e',
+          );
+        }
+      }
+
+      final personalVolume = await _getEffectivePersonalVolume();
+      const chimeCompensation = 0.18;
+      const chimeMaxCap = 0.16;
+      final chimeVolume = ((personalVolume / 10.0) * chimeCompensation)
+          .clamp(0.0, chimeMaxCap);
+
+      await player.setAsset('assets/notification.mp3');
+      await player.setVolume(chimeVolume);
       await player.play();
       await player.playerStateStream.firstWhere(
         (state) => state.processingState == ProcessingState.completed,
@@ -1973,6 +2155,7 @@ class _FreestylePageState extends State<FreestylePage> {
 
   List<String> _getSectionIdsInOrder() {
     return <String>[
+      'exit-page',
       'action',
       'choose-word',
       if (_isToolPanelVisible) 'tool-panel' else 'tool-toggle',
@@ -1981,22 +2164,24 @@ class _FreestylePageState extends State<FreestylePage> {
 
   String _getSectionPromptText(String sectionId) {
     switch (sectionId) {
+      case 'exit-page':
+        return _t('Exit page');
       case 'action':
-        return 'Actions';
+        return _t('Actions');
       case 'choose-word':
-        return 'Choose word';
+        return _t('Choose word');
       case 'tool-toggle':
-        return 'Tools';
+        return _t('Tools');
       case 'tool-panel':
         if (_activeToolPanel == 'spelling') {
-          return 'Spelling';
+          return _t('Spelling');
         }
         if (_activeToolPanel == 'numbers') {
-          return 'Numbers';
+          return _t('Numbers');
         }
-        return 'Word Categories';
+        return _t('Word Categories');
       default:
-        return 'Section';
+        return _t('Section');
     }
   }
 
@@ -2070,7 +2255,8 @@ class _FreestylePageState extends State<FreestylePage> {
       listen: false,
     );
     final llmOptions = settingsProvider.settings?.llmOptions ?? 10;
-    return llmOptions <= 0 ? 1 : llmOptions;
+    final bounded = llmOptions <= 0 ? 1 : llmOptions;
+    return bounded > 10 ? 10 : bounded;
   }
 
   int _getSpellingSuggestedWordLimit() {
@@ -2170,7 +2356,7 @@ class _FreestylePageState extends State<FreestylePage> {
 
   List<Map<String, dynamic>> _buildNumberToolButtons() {
     final buttons = <Map<String, dynamic>>[
-      {'text': 'Go Back', 'action': _resetActiveToolPanel},
+      {'text': _t('Go Back'), 'action': _resetActiveToolPanel},
       ..._getActiveNumberToolRanges().map(
         (range) => {
           'text': range.label,
@@ -2186,7 +2372,7 @@ class _FreestylePageState extends State<FreestylePage> {
           'action': () => _incrementNumberBase(increment),
         });
       }
-      buttons.add({'text': 'Reset to 0', 'action': _resetNumberBase});
+      buttons.add({'text': _t('Reset to 0'), 'action': _resetNumberBase});
     }
 
     return buttons;
@@ -2332,11 +2518,113 @@ class _FreestylePageState extends State<FreestylePage> {
         requestDifferent: true,
         excludeWords: List<String>.from(_currentWordOptions),
         fallbackOptions: List<String>.from(_currentWordOptions),
+        startsWithLetter: _activeSuggestedLetterFilter,
       );
       return;
     }
 
-    await _loadMoreWordOptions();
+    await _loadMoreWordOptions(startsWithLetter: _activeSuggestedLetterFilter);
+  }
+
+  Future<void> _showSuggestedWordsLetterDialog() async {
+    final letters = _getAllLetters();
+    final selectedLetter = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        return Dialog(
+          child: Container(
+            width: MediaQuery.of(dialogContext).size.width * 0.9,
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text(
+                        'Choose a Letter',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.of(dialogContext).pop(),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: LayoutBuilder(
+                    builder: (context, constraints) {
+                      const columns = 5;
+                      const spacing = 6.0;
+                      final tileSize =
+                          ((constraints.maxWidth - ((columns - 1) * spacing)) /
+                                  columns)
+                              .clamp(58.0, 82.0)
+                              .toDouble();
+
+                      return Wrap(
+                        spacing: spacing,
+                        runSpacing: spacing,
+                        children: letters
+                            .map(
+                              (letter) => SizedBox(
+                                width: tileSize,
+                                height: tileSize,
+                                child: ElevatedButton(
+                                  onPressed: () => Navigator.of(dialogContext).pop(letter),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.blue[50] ?? Colors.blue.shade50,
+                                    foregroundColor: Colors.black87,
+                                    side: BorderSide(
+                                      color: Colors.blue[300] ?? Colors.blue.shade300,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                    elevation: 0,
+                                    padding: EdgeInsets.zero,
+                                    minimumSize: Size(tileSize, tileSize),
+                                  ),
+                                  child: Text(
+                                    letter,
+                                    style: TextStyle(
+                                      fontSize: (tileSize * 0.42).clamp(22.0, 32.0),
+                                      fontWeight: FontWeight.w700,
+                                      height: 1,
+                                    ),
+                                  ),
+                                ),
+                              ),
+                            )
+                            .toList(),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    if (selectedLetter == null || selectedLetter.isEmpty) {
+      return;
+    }
+
+    setState(() {
+      _activeSuggestedLetterFilter = selectedLetter.toLowerCase();
+      _statusMessage =
+          'Filtering suggestions to ${selectedLetter.toUpperCase()}.';
+    });
+
+    await _showMoreSuggestedOptions();
   }
 
   void _scheduleStatusMessageAutoHide() {
@@ -2425,34 +2713,31 @@ class _FreestylePageState extends State<FreestylePage> {
       }
     }
 
-    int maxRowIndex = -1;
-    for (final button in buttons) {
-      if (button.rowIndex > maxRowIndex) {
-        maxRowIndex = button.rowIndex;
-      }
-    }
-    final actionRowIndex = maxRowIndex;
-
-    buttons.add(
-      _FreestyleSpellingGridButton(
-        text: 'Go Back',
-        rowIndex: actionRowIndex,
-        isEnabled: true,
-        isStandardOption: true,
-      ),
-    );
+    // Use negative row indexes so action buttons always sort first in the
+    // row list and scanning starts on them after word detection.
+    const chooseWordRowIndex = -2;
+    const goBackRowIndex = -1;
 
     if (_availableCompletedSpellingWord.trim().isNotEmpty) {
       buttons.add(
         _FreestyleSpellingGridButton(
           text: 'Choose Word',
-          rowIndex: actionRowIndex,
+          rowIndex: chooseWordRowIndex,
           isEnabled: true,
           isStandardOption: true,
           isChooseWordOption: true,
         ),
       );
     }
+
+    buttons.add(
+      _FreestyleSpellingGridButton(
+        text: _t('Go Back'),
+        rowIndex: goBackRowIndex,
+        isEnabled: true,
+        isStandardOption: true,
+      ),
+    );
 
     return buttons;
   }
@@ -2534,19 +2819,19 @@ class _FreestylePageState extends State<FreestylePage> {
     // Add Go Back/Back button first
     entries.add(
       _FreestyleCategoryPanelEntry(
-        text: parentNode != null ? 'Back' : 'Go Back',
+        text: parentNode != null ? _t('Go Back') : _t('Go Back'),
         action: parentNode != null ? 'back' : 'close',
       ),
     );
 
     if (parentNode == null) {
       entries.add(
-        const _FreestyleCategoryPanelEntry(text: 'General', action: 'general'),
+        _FreestyleCategoryPanelEntry(text: _t('General'), action: 'general'),
       );
     } else {
       entries.add(
         _FreestyleCategoryPanelEntry(
-          text: 'All ${parentNode.label}',
+          text: '${_t('All')} ${_t(parentNode.label)}',
           action: 'select-parent',
           node: parentNode,
         ),
@@ -2556,7 +2841,7 @@ class _FreestylePageState extends State<FreestylePage> {
     for (final category in _getCurrentCategoryNodes()) {
       entries.add(
         _FreestyleCategoryPanelEntry(
-          text: category.label,
+          text: _t(category.label),
           action: _canDrillIntoCategory(category) ? 'drill' : 'select',
           node: category,
         ),
@@ -2613,6 +2898,7 @@ class _FreestylePageState extends State<FreestylePage> {
     bool requestDifferent = false,
   }) async {
     setState(() {
+      _activeSuggestedLetterFilter = null;
       _selectedWordCategory = category;
       _currentChooseWordCategory = category?.label ?? '';
       _currentScanningContext = 'choose-word-categories';
@@ -2629,6 +2915,7 @@ class _FreestylePageState extends State<FreestylePage> {
         excludeWords: requestDifferent
             ? List<String>.from(_currentWordOptions)
             : const <String>[],
+        startsWithLetter: _activeSuggestedLetterFilter,
       );
     } else {
       await _loadCategoryWordOptions(
@@ -2637,6 +2924,7 @@ class _FreestylePageState extends State<FreestylePage> {
         excludeWords: requestDifferent
             ? List<String>.from(_currentWordOptions)
             : const <String>[],
+        startsWithLetter: _activeSuggestedLetterFilter,
       );
     }
 
@@ -2653,9 +2941,8 @@ class _FreestylePageState extends State<FreestylePage> {
     return sorted;
   }
 
-  /// Returns row indexes with a special -1 marker for "Go Back" at the beginning
   List<int> _getVisibleLetterRowIndexesWithGoBack() {
-    return [-1, ..._getVisibleLetterRowIndexes()];
+    return _getVisibleLetterRowIndexes();
   }
 
   List<String> _getLettersForActiveRow() {
@@ -2778,6 +3065,8 @@ class _FreestylePageState extends State<FreestylePage> {
     }
 
     switch (_activeScanSection) {
+      case 'exit-page':
+        return List<Widget>.filled(1, Container());
       case 'action':
         return List<Widget>.filled(
           _buildLeadingMainButtons().length,
@@ -2785,7 +3074,7 @@ class _FreestylePageState extends State<FreestylePage> {
         );
       case 'choose-word':
         return List<Widget>.filled(
-          _getVisibleSuggestedWords().length + 2,
+          _getVisibleSuggestedWords().length + 3,
           Container(),
         );
       case 'tool-toggle':
@@ -2898,10 +3187,14 @@ class _FreestylePageState extends State<FreestylePage> {
         }
         return text;
       }
+    } else if (_activeScanSection == 'exit-page') {
+      if (index == 0) {
+        return _t('Exit page');
+      }
     } else if (_activeScanSection == 'choose-word') {
       final visibleWords = _getVisibleSuggestedWords();
       if (index == 0) {
-        return 'Go Back';
+        return _t('Go Back');
       }
 
       if (index > 0 && index <= visibleWords.length) {
@@ -2909,10 +3202,14 @@ class _FreestylePageState extends State<FreestylePage> {
       }
 
       if (index == visibleWords.length + 1) {
-        return 'Something Else';
+        return _t('Something Else');
+      }
+
+      if (index == visibleWords.length + 2) {
+        return _t('Something Else A-Z');
       }
     } else if (_activeScanSection == 'tool-toggle') {
-      const toolButtons = ['Go Back', 'Word Categories', 'Spell', 'Numbers'];
+      final toolButtons = [_t('Go Back'), _t('Word Categories'), _t('Spell'), _t('Numbers')];
       if (index >= 0 && index < toolButtons.length) {
         return toolButtons[index];
       }
@@ -2933,10 +3230,10 @@ class _FreestylePageState extends State<FreestylePage> {
         return _currentCategoryWords[index];
       } else {
         int controlIndex = index - _currentCategoryWords.length;
-        const controlButtons = [
-          "Back to Categories",
-          "Something Else",
-          "Go Back",
+        final controlButtons = [
+          _t('Back to Categories'),
+          _t('Something Else'),
+          _t('Go Back'),
         ];
         if (controlIndex < controlButtons.length) {
           return controlButtons[controlIndex];
@@ -2947,8 +3244,15 @@ class _FreestylePageState extends State<FreestylePage> {
         final rowIndexesWithGoBack = _getVisibleLetterRowIndexesWithGoBack();
         if (index >= 0 && index < rowIndexesWithGoBack.length) {
           final rowIndex = rowIndexesWithGoBack[index];
-          if (rowIndex == -1) {
-            return 'Go Back';
+          // Negative row indexes are reserved for action buttons.
+          if (rowIndex < 0) {
+            final rowButtons = _getSpellingGridButtons()
+                .where((b) => b.rowIndex == rowIndex)
+                .toList();
+            for (final b in rowButtons) {
+              if (b.isChooseWordOption) return _t('Choose word');
+              if (b.isStandardOption) return _t('Go Back');
+            }
           }
           return 'Row ${rowIndex + 1}';
         }
@@ -3024,6 +3328,15 @@ class _FreestylePageState extends State<FreestylePage> {
       debugPrint(
         '🎯 FreestylePage: First word selected - subsequent rounds can include phrases',
       );
+    }
+
+    // Category context is consumed after one word selection; revert to build-space-aware suggestions
+    if (_selectedWordCategory != null) {
+      setState(() {
+        _selectedWordCategory = null;
+        _currentChooseWordCategory = '';
+        _currentCategoryWords = [];
+      });
     }
 
     // Reload word options with new context
@@ -3216,12 +3529,22 @@ class _FreestylePageState extends State<FreestylePage> {
       );
       String idToken = settingsProvider.idToken ?? widget.idToken;
       String aacUserId = settingsProvider.userId ?? widget.aacUserId;
+      final userLanguage = settingsProvider.settings?.userLanguage ?? 'en-US';
 
       // Refresh token before cleanup call
       try {
         final user = FirebaseAuth.instance.currentUser;
         if (user != null) {
-          final refreshedToken = await user.getIdToken(true);
+          String? refreshedToken;
+          try {
+            refreshedToken = await user
+                .getIdToken(true)
+                .timeout(const Duration(seconds: 6));
+          } catch (_) {
+            refreshedToken = await user
+                .getIdToken()
+                .timeout(const Duration(seconds: 4));
+          }
           if (refreshedToken != null && refreshedToken.isNotEmpty) {
             idToken = refreshedToken;
             debugPrint('FreestylePage: Token refreshed for cleanup');
@@ -3241,7 +3564,10 @@ class _FreestylePageState extends State<FreestylePage> {
       debugPrint('FreestylePage: Cleanup URL: $url');
       debugPrint('FreestylePage: Cleanup headers: $headers');
 
-      final body = json.encode({'text_to_cleanup': textToClean});
+      final body = json.encode({
+        'text_to_cleanup': textToClean,
+        'target_locale': userLanguage,
+      });
 
       debugPrint('FreestylePage: Cleanup body: $body');
 
@@ -3362,6 +3688,7 @@ class _FreestylePageState extends State<FreestylePage> {
         _isSpellingModalOpen = false;
         _isChooseWordModalOpen = false;
         _selectedWordCategory = null;
+        _activeSuggestedLetterFilter = null;
         _currentChooseWordCategory = '';
         _currentCategoryWords = [];
         _categoryNavigationStack.clear();
@@ -3494,6 +3821,7 @@ class _FreestylePageState extends State<FreestylePage> {
       _selectedTopNumberRange = null;
       _currentNumberPageOffset = 0;
       _selectedWordCategory = null;
+      _activeSuggestedLetterFilter = null;
       _categoryNavigationStack.clear();
       _currentChooseWordCategory = '';
       _currentCategoryWords = [];
@@ -3530,6 +3858,7 @@ class _FreestylePageState extends State<FreestylePage> {
     bool? requestDifferent,
     List<String>? excludeWords,
     List<String>? fallbackOptions,
+    String? startsWithLetter,
   }) async {
     if (_isLoadingWordOptions) return;
 
@@ -3539,11 +3868,14 @@ class _FreestylePageState extends State<FreestylePage> {
         requestDifferent: requestDifferent ?? false,
         excludeWords: excludeWords ?? const <String>[],
         fallbackOptions: fallbackOptions,
+        startsWithLetter: startsWithLetter,
       );
       return;
     }
 
     final maxOptions = _getSuggestedWordLimit();
+    final normalizedLetter = startsWithLetter?.trim().toLowerCase();
+    final isLetterMode = normalizedLetter != null && normalizedLetter.isNotEmpty;
 
     setState(() {
       _isLoadingWordOptions = true;
@@ -3552,8 +3884,22 @@ class _FreestylePageState extends State<FreestylePage> {
 
     final effectiveFallbackOptions =
         (fallbackOptions != null && fallbackOptions.isNotEmpty)
-        ? fallbackOptions.take(maxOptions).toList()
-        : _getGeneralFallbackWords(maxOptions);
+        ? fallbackOptions
+          .where(
+            (word) =>
+            !isLetterMode ||
+            word.toLowerCase().startsWith(normalizedLetter),
+          )
+          .take(maxOptions)
+          .toList()
+        : _getGeneralFallbackWords(maxOptions)
+          .where(
+            (word) =>
+            !isLetterMode ||
+            word.toLowerCase().startsWith(normalizedLetter),
+          )
+          .take(maxOptions)
+          .toList();
 
     try {
       final exclusions =
@@ -3571,6 +3917,11 @@ class _FreestylePageState extends State<FreestylePage> {
         '🎯 FreestylePage _loadWordOptions exclusions: ${exclusions.length}',
       );
 
+      final userLanguage =
+          Provider.of<UserSettingsProvider>(context, listen: false)
+              .settings
+              ?.userLanguage ??
+          'en-US';
       final response = widget.composeMode
           ? await AuthenticatedHttpClient.makeAuthenticatedRequest(
               'POST',
@@ -3582,8 +3933,12 @@ class _FreestylePageState extends State<FreestylePage> {
               body: json.encode({
                 'category': 'general',
                 'build_space_content': _buildSpaceText,
-                'custom_prompt': _getContextFreeGeneralPrompt(),
+                'custom_prompt': isLetterMode
+                    ? '${_getContextFreeGeneralPrompt()}\nReturn single-word options that start with letter "${normalizedLetter.toUpperCase()}" only.'
+                    : _getContextFreeGeneralPrompt(),
                 'exclude_words': exclusions,
+                'user_language': userLanguage,
+                if (isLetterMode) 'starts_with_letter': normalizedLetter,
               }),
             )
           : await AuthenticatedHttpClient.makeAuthenticatedRequest(
@@ -3599,6 +3954,7 @@ class _FreestylePageState extends State<FreestylePage> {
                 'single_words_only': true,
                 'request_different_options': shouldRequestDifferent,
                 'max_options': maxOptions,
+                if (isLetterMode) 'starts_with_letter': normalizedLetter,
               }),
             );
 
@@ -3656,6 +4012,12 @@ class _FreestylePageState extends State<FreestylePage> {
               })
               .take(maxOptions)
               .toList();
+
+          if (isLetterMode) {
+            _currentWordOptions = _currentWordOptions
+                .where((word) => word.toLowerCase().startsWith(normalizedLetter))
+                .toList();
+          }
 
           if (_currentWordOptions.isNotEmpty &&
               _currentWordOptions.length < maxOptions) {
@@ -3716,6 +4078,7 @@ class _FreestylePageState extends State<FreestylePage> {
     bool requestDifferent = false,
     List<String> excludeWords = const <String>[],
     List<String>? fallbackOptions,
+    String? startsWithLetter,
   }) async {
     if (_isLoadingWordOptions) {
       return;
@@ -3728,23 +4091,48 @@ class _FreestylePageState extends State<FreestylePage> {
     });
 
     try {
+      final normalizedLetter = startsWithLetter?.trim().toLowerCase();
+      final isLetterMode = normalizedLetter != null && normalizedLetter.isNotEmpty;
+
       final response = await _getCategoryWords(
         category,
         excludeWords: requestDifferent ? excludeWords : const <String>[],
+        startsWithLetter: startsWithLetter,
       );
       final effectiveFallbackOptions =
           (fallbackOptions != null && fallbackOptions.isNotEmpty)
-          ? fallbackOptions.take(_getSuggestedWordLimit()).toList()
+          ? fallbackOptions
+                .where(
+                  (word) =>
+                      !isLetterMode ||
+                      word.toLowerCase().startsWith(normalizedLetter),
+                )
+                .take(_getSuggestedWordLimit())
+                .toList()
           : _getDefaultCategoryWords(
               category.promptCategory,
-            ).take(_getSuggestedWordLimit()).toList();
+            )
+                .where(
+                  (word) =>
+                      !isLetterMode ||
+                      word.toLowerCase().startsWith(normalizedLetter),
+                )
+                .take(_getSuggestedWordLimit())
+                .toList();
 
       if (!mounted) {
         return;
       }
 
       setState(() {
-        _currentWordOptions = response.take(_getSuggestedWordLimit()).toList();
+        final filteredResponse = isLetterMode
+            ? response
+                .where(
+                  (word) => word.toLowerCase().startsWith(normalizedLetter),
+                )
+                .toList()
+            : response;
+        _currentWordOptions = filteredResponse.take(_getSuggestedWordLimit()).toList();
         if (_currentWordOptions.isEmpty) {
           _currentWordOptions = effectiveFallbackOptions;
         }
@@ -3761,10 +4149,28 @@ class _FreestylePageState extends State<FreestylePage> {
       setState(() {
         _currentWordOptions =
             (fallbackOptions != null && fallbackOptions.isNotEmpty)
-            ? fallbackOptions.take(_getSuggestedWordLimit()).toList()
+            ? fallbackOptions
+                  .where(
+                    (word) =>
+                        !((startsWithLetter?.trim().isNotEmpty ?? false)) ||
+                        word.toLowerCase().startsWith(
+                          startsWithLetter!.trim().toLowerCase(),
+                        ),
+                  )
+                  .take(_getSuggestedWordLimit())
+                  .toList()
             : _getDefaultCategoryWords(
                 category.promptCategory,
-              ).take(_getSuggestedWordLimit()).toList();
+              )
+                  .where(
+                    (word) =>
+                        !((startsWithLetter?.trim().isNotEmpty ?? false)) ||
+                        word.toLowerCase().startsWith(
+                          startsWithLetter!.trim().toLowerCase(),
+                        ),
+                  )
+                  .take(_getSuggestedWordLimit())
+                  .toList();
         _currentCategoryWords = List<String>.from(_currentWordOptions);
         _statusMessage =
             'Using fallback ${category.label.toLowerCase()} options';
@@ -3779,7 +4185,7 @@ class _FreestylePageState extends State<FreestylePage> {
     }
   }
 
-  Future<void> _loadMoreWordOptions() async {
+  Future<void> _loadMoreWordOptions({String? startsWithLetter}) async {
     if (_currentNumberRange != null) {
       await _showMoreSuggestedOptions();
       return;
@@ -3789,12 +4195,15 @@ class _FreestylePageState extends State<FreestylePage> {
 
     // Store previous options for comparison
     final List<String> previousOptions = List.from(_currentWordOptions);
+    final normalizedLetter = startsWithLetter?.trim().toLowerCase();
+    final isLetterMode = normalizedLetter != null && normalizedLetter.isNotEmpty;
 
     if (widget.composeMode) {
       await _loadWordOptions(
         requestDifferent: true,
         excludeWords: previousOptions,
         fallbackOptions: previousOptions,
+        startsWithLetter: startsWithLetter,
       );
       return;
     }
@@ -3840,6 +4249,7 @@ class _FreestylePageState extends State<FreestylePage> {
             'is_llm_generated': widget.isLLMGenerated,
             'single_words_only': _isFirstRound,
             'originating_button_text': widget.originatingButtonText,
+            if (isLetterMode) 'starts_with_letter': normalizedLetter,
           };
         } else if (attemptCount == 2) {
           // Second attempt: Request specific categories
@@ -3861,6 +4271,7 @@ class _FreestylePageState extends State<FreestylePage> {
             'is_llm_generated': widget.isLLMGenerated,
             'single_words_only': _isFirstRound,
             'originating_button_text': widget.originatingButtonText,
+            if (isLetterMode) 'starts_with_letter': normalizedLetter,
           };
         } else {
           // Third attempt: Fallback with random seed
@@ -3880,6 +4291,7 @@ class _FreestylePageState extends State<FreestylePage> {
             'is_llm_generated': widget.isLLMGenerated,
             'single_words_only': _isFirstRound,
             'originating_button_text': widget.originatingButtonText,
+            if (isLetterMode) 'starts_with_letter': normalizedLetter,
           };
         }
 
@@ -3940,8 +4352,16 @@ class _FreestylePageState extends State<FreestylePage> {
               })
               .toList();
 
+          final filteredAttemptOptions = isLetterMode
+              ? attemptOptions
+                    .where(
+                      (word) => word.toLowerCase().startsWith(normalizedLetter),
+                    )
+                    .toList()
+              : attemptOptions;
+
           // Add unique options to our collection
-          for (String option in attemptOptions) {
+          for (String option in filteredAttemptOptions) {
             final optionLower = option.toLowerCase();
             final existingLower = finalNewOptions
                 .map((e) => e.toLowerCase())
@@ -3953,7 +4373,7 @@ class _FreestylePageState extends State<FreestylePage> {
           }
 
           debugPrint(
-            '   Attempt $attemptCount added ${attemptOptions.length} options, total now: ${finalNewOptions.length}',
+            '   Attempt $attemptCount added ${filteredAttemptOptions.length} options, total now: ${finalNewOptions.length}',
           );
         }
 
@@ -4010,6 +4430,9 @@ class _FreestylePageState extends State<FreestylePage> {
 
         for (String fallback in fallbackWords) {
           final fallbackLower = fallback.toLowerCase();
+          if (isLetterMode && !fallbackLower.startsWith(normalizedLetter)) {
+            continue;
+          }
           final previousLower = previousOptions
               .map((e) => e.toLowerCase())
               .toList();
@@ -4195,18 +4618,6 @@ class _FreestylePageState extends State<FreestylePage> {
       return _getAllLetters();
     }
 
-    if (currentWord.length >= 2) {
-      final matchingLetterOptions = _getNextLettersFromMatchingWords(
-        currentWord,
-      );
-      if (matchingLetterOptions.isNotEmpty) {
-        print(
-          'DEBUG: Using matching-word next letters for "$currentWord": $matchingLetterOptions',
-        );
-        return matchingLetterOptions;
-      }
-    }
-
     final lastChar = currentWord.toUpperCase().substring(
       currentWord.length - 1,
     );
@@ -4339,6 +4750,27 @@ class _FreestylePageState extends State<FreestylePage> {
       print('DEBUG: No pattern found, using all letters');
     }
 
+    if (currentWord.length >= 2) {
+      final matchingLetterOptions = _getNextLettersFromMatchingWords(
+        currentWord,
+      );
+      if (matchingLetterOptions.isNotEmpty) {
+        // Merge model/local-word evidence with language-pattern fallback so
+        // common continuations (for example BR -> A) are not over-filtered.
+        final mergedSet = <String>{
+          ...validLetters,
+          ...matchingLetterOptions,
+        };
+        final mergedLetters = _getAllLetters()
+            .where((letter) => mergedSet.contains(letter))
+            .toList(growable: false);
+        print(
+          'DEBUG: Merged valid letters for "$currentWord": $mergedLetters (pattern: $validLetters, matching: $matchingLetterOptions)',
+        );
+        return mergedLetters;
+      }
+    }
+
     print('DEBUG: Final valid letters for "$currentWord": $validLetters');
     return validLetters;
   }
@@ -4353,8 +4785,7 @@ class _FreestylePageState extends State<FreestylePage> {
 
     void addCandidate(String candidate) {
       final normalizedCandidate = candidate.trim().toLowerCase();
-      if (!_isVocabularyCompatibleCandidate(normalizedCandidate) ||
-          !normalizedCandidate.startsWith(normalizedWord) ||
+      if (!normalizedCandidate.startsWith(normalizedWord) ||
           normalizedCandidate.length <= normalizedWord.length) {
         return;
       }
@@ -4455,6 +4886,12 @@ class _FreestylePageState extends State<FreestylePage> {
     final normalizedWord = word.trim().toLowerCase();
     if (normalizedWord.isEmpty) {
       return false;
+    }
+
+    // Always treat an exact fallback-dictionary match as a complete word.
+    final fallbackWordSet = await _getSpellingFallbackWordSet();
+    if (fallbackWordSet.contains(normalizedWord)) {
+      return true;
     }
 
     final sightWordService = SightWordService();
@@ -4642,11 +5079,12 @@ class _FreestylePageState extends State<FreestylePage> {
   }
 
   int _scoreLocalSpellingPrediction(String prefix, String candidate) {
-    if (!_isVocabularyCompatibleCandidate(candidate)) {
-      return -10000;
-    }
-
     int score = 0;
+    if (!_isVocabularyCompatibleCandidate(candidate)) {
+      // Keep broader spelling suggestions available while still ranking
+      // vocabulary-compatible words first.
+      score -= 120;
+    }
     if (candidate == prefix) {
       score += 2000;
     }
@@ -4724,9 +5162,6 @@ class _FreestylePageState extends State<FreestylePage> {
       final candidate = fallbackWords[index];
       if (!candidate.startsWith(normalizedWord)) {
         break;
-      }
-      if (!_isVocabularyCompatibleCandidate(candidate)) {
-        continue;
       }
       matchingWords.add(candidate);
       if (matchingWords.length >= maxResults * 4) {
@@ -4880,8 +5315,12 @@ class _FreestylePageState extends State<FreestylePage> {
       for (final prediction in predictions) {
         final normalizedPrediction = prediction.trim().toLowerCase();
         if (normalizedPrediction.isEmpty ||
-            !_isVocabularyCompatibleCandidate(normalizedPrediction) ||
             seenPredictions.contains(normalizedPrediction)) {
+          continue;
+        }
+        if (normalizedRequestedWord.isNotEmpty &&
+            normalizedPrediction != normalizedRequestedWord &&
+            !normalizedPrediction.startsWith(normalizedRequestedWord)) {
           continue;
         }
         seenPredictions.add(normalizedPrediction);
@@ -4950,15 +5389,11 @@ class _FreestylePageState extends State<FreestylePage> {
   }
 
   Future<void> _restartSpellingWithActionPriority() async {
-    int actionRowIndex = -1;
-    for (final button in _getSpellingGridButtons()) {
-      if (button.isChooseWordOption || button.isStandardOption) {
-        actionRowIndex = button.rowIndex;
-        break;
-      }
-    }
+    final hasActionButton = _getSpellingGridButtons().any(
+      (b) => b.isChooseWordOption || b.isStandardOption,
+    );
 
-    if (actionRowIndex < 0) {
+    if (!hasActionButton) {
       await _restartScanningInSection('tool-panel');
       return;
     }
@@ -4968,12 +5403,17 @@ class _FreestylePageState extends State<FreestylePage> {
       return;
     }
 
+    // Restart in 'rows' phase at index -1 so the first scan step lands on
+    // Choose Word (row index -2, which sorts first), then continues through
+    // Go Back and all letter rows for one full loop before pausing.
     setState(() {
       _activeScanSection = 'tool-panel';
       _currentScanLevel = 'items';
-      _lettersScanPhase = 'items';
-      _activeLetterRowIndex = actionRowIndex;
+      _lettersScanPhase = 'rows';
+      _activeLetterRowIndex = null;
       _scanningIndex = -1;
+      _lastScannedIndex = -1;
+      _lastScanScopeKey = '';
       _currentScanCycle = 0;
     });
 
@@ -5100,14 +5540,20 @@ class _FreestylePageState extends State<FreestylePage> {
   Future<List<String>> _getCategoryWords(
     _FreestyleCategoryNode category, {
     List<String> excludeWords = const <String>[],
+    String? startsWithLetter,
   }) async {
     try {
+      final normalizedLetter = startsWithLetter?.trim().toLowerCase();
+      final isLetterMode = normalizedLetter != null && normalizedLetter.isNotEmpty;
       final requestBody = {
         if (!widget.composeMode) ..._buildFreestyleRequestPayloadBase(),
         'category': category.promptCategory,
-        'custom_prompt': _buildCategorySpecificPrompt(category),
+        'custom_prompt': isLetterMode
+            ? '${_buildCategorySpecificPrompt(category)}\nReturn single-word options that start with letter "${normalizedLetter.toUpperCase()}" only.'
+            : _buildCategorySpecificPrompt(category),
         'build_space_content': _buildSpaceText,
         'exclude_words': excludeWords,
+        if (isLetterMode) 'starts_with_letter': normalizedLetter,
       };
 
       final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
@@ -5124,7 +5570,7 @@ class _FreestylePageState extends State<FreestylePage> {
         final data = json.decode(response.body);
         if (data['words'] != null && data['words'] is List) {
           final List<dynamic> wordsList = data['words'];
-          return wordsList.map((wordData) {
+          final mapped = wordsList.map((wordData) {
             // The API returns objects with 'text' and 'keyword' fields
             if (wordData is Map && wordData['text'] != null) {
               return wordData['text'].toString();
@@ -5134,6 +5580,13 @@ class _FreestylePageState extends State<FreestylePage> {
               return wordData.toString();
             }
           }).toList();
+          return isLetterMode
+              ? mapped
+                    .where(
+                      (word) => word.toLowerCase().startsWith(normalizedLetter),
+                    )
+                    .toList()
+              : mapped;
         }
         throw Exception('Invalid response format');
       }
@@ -5143,10 +5596,23 @@ class _FreestylePageState extends State<FreestylePage> {
       debugPrint('Error getting category words: $e');
       final fallbackByPrompt = _getDefaultCategoryWords(category.promptCategory);
       if (!_isGenericCategoryFallback(fallbackByPrompt)) {
-        return fallbackByPrompt;
+        final normalizedLetter = startsWithLetter?.trim().toLowerCase();
+        if (normalizedLetter == null || normalizedLetter.isEmpty) {
+          return fallbackByPrompt;
+        }
+        return fallbackByPrompt
+            .where((word) => word.toLowerCase().startsWith(normalizedLetter))
+            .toList();
       }
 
-      return _getDefaultCategoryWords(category.label);
+      final fallbackByLabel = _getDefaultCategoryWords(category.label);
+      final normalizedLetter = startsWithLetter?.trim().toLowerCase();
+      if (normalizedLetter == null || normalizedLetter.isEmpty) {
+        return fallbackByLabel;
+      }
+      return fallbackByLabel
+          .where((word) => word.toLowerCase().startsWith(normalizedLetter))
+          .toList();
     }
   }
 
@@ -5271,27 +5737,35 @@ class _FreestylePageState extends State<FreestylePage> {
   // --- SPEECH BUBBLE OVERLAY METHODS ---
 
   void _showSpeechBubbleOverlay(String text) {
+    if (!mounted) return;
+
     final settingsProvider = Provider.of<UserSettingsProvider>(
       context,
       listen: false,
     );
 
-    if (settingsProvider.settings?.displaySplash != true) {
+    final displaySplash = settingsProvider.settings?.displaySplash;
+    debugPrint(
+      'FreestylePage _showSpeechBubbleOverlay: text="$text" displaySplash=$displaySplash mounted=$mounted',
+    );
+    if (displaySplash != true) {
+      debugPrint('FreestylePage _showSpeechBubbleOverlay: BLOCKED (displaySplash=$displaySplash)');
       return;
     }
 
     _speechBubbleTimer?.cancel();
+    final duration = settingsProvider.settings?.displaySplashtime ?? 3000;
 
-    if (mounted) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       setState(() {
         _showSpeechBubble = true;
         _speechBubbleText = text;
       });
-    }
-
-    final duration = settingsProvider.settings?.displaySplashtime ?? 3000;
-    _speechBubbleTimer = Timer(Duration(milliseconds: duration), () {
-      _hideSpeechBubbleOverlay();
+      _speechBubbleTimer = Timer(Duration(milliseconds: duration), () {
+        _hideSpeechBubbleOverlay();
+      });
+      debugPrint('FreestylePage speech bubble displayed for ${duration}ms: "$text"');
     });
   }
 
@@ -5595,6 +6069,40 @@ class _FreestylePageState extends State<FreestylePage> {
     }
   }
 
+  Future<String> _translateForPartner(
+    String text, {
+    required String fromLocale,
+    required String toLocale,
+    required String idToken,
+    required String aacUserId,
+  }) async {
+    if (text.isEmpty || fromLocale == toLocale) return text;
+    try {
+      final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+        'POST',
+        '${EnvironmentConfig.apiBaseUrl}/api/translate-lines',
+        baseHeaders: {
+          'X-User-ID': aacUserId,
+          'Content-Type': 'application/json',
+        },
+        body: json.encode({
+          'lines': [text],
+          'source_locale': fromLocale,
+          'target_locale': toLocale,
+        }),
+        timeoutSeconds: 10,
+      );
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final lines = data['translated_lines'];
+        if (lines is List && lines.isNotEmpty) return lines[0].toString();
+      }
+    } catch (e) {
+      debugPrint('FreestylePage: _translateForPartner error: $e');
+    }
+    return text;
+  }
+
   // --- Announcement method (identical to main page for consistency) ---
   Future<void> _announceViaBackend(
     String text, {
@@ -5724,6 +6232,34 @@ class _FreestylePageState extends State<FreestylePage> {
         );
       }
 
+      String announcedText = text;
+      if (routing == 'system' && mounted) {
+        final freshProvider = Provider.of<UserSettingsProvider>(context, listen: false);
+        final userLang = freshProvider.settings?.userLanguage ?? 'en-US';
+        final partnerLang = freshProvider.effectivePartnerLanguage;
+        debugPrint('FreestylePage: userLang=$userLang partnerLang=$partnerLang');
+        if (userLang != partnerLang) {
+          announcedText = await _translateForPartner(
+            text,
+            fromLocale: userLang,
+            toLocale: partnerLang,
+            idToken: idToken,
+            aacUserId: aacUserId,
+          );
+          debugPrint(
+            'FreestylePage: Translated "$text" ($userLang→$partnerLang) → "$announcedText"',
+          );
+        }
+      }
+
+      // Show speech bubble with the partner-language text (translated or original).
+      debugPrint(
+        'FreestylePage _announceViaBackend: showSpeechBubble=$showSpeechBubble announcedText="$announcedText"',
+      );
+      if (showSpeechBubble && mounted) {
+        _showSpeechBubbleOverlay(announcedText);
+      }
+
       final response = await http.post(
         Uri.parse('${EnvironmentConfig.apiBaseUrl}/play-audio'),
         headers: {
@@ -5732,9 +6268,13 @@ class _FreestylePageState extends State<FreestylePage> {
           'Content-Type': 'application/json',
         },
         body: json.encode({
-          'text': text,
+          'text': announcedText,
           'routing_target': routing,
           if (speechRate != null) 'speech_rate': speechRate,
+          if (routing == 'system' && mounted) ...() {
+            final pv = Provider.of<UserSettingsProvider>(context, listen: false).effectivePartnerVoice;
+            return pv.isNotEmpty ? {'partner_voice_name': pv} : <String, dynamic>{};
+          }(),
         }),
       );
       final endRequest = DateTime.now();
@@ -5765,10 +6305,6 @@ class _FreestylePageState extends State<FreestylePage> {
             await player.stop();
             await platform.invokeMethod('forceSpeaker');
             await player.setVolume(volumeLevel);
-
-            if (showSpeechBubble) {
-              _showSpeechBubbleOverlay(text);
-            }
 
             await Future.delayed(const Duration(milliseconds: 600));
 
@@ -5803,10 +6339,6 @@ class _FreestylePageState extends State<FreestylePage> {
             await platform.invokeMethod('routeToPersonal');
             await _disposeAudioPlayer(player, 'iOS announcement');
           } else if (!kIsWeb && Platform.isWindows) {
-            if (showSpeechBubble) {
-              _showSpeechBubbleOverlay(text);
-            }
-
             debugPrint('FreestylePage: Windows priming audio with silence.mp3');
             try {
               final primingPlayer = AudioPlayer();
@@ -5874,10 +6406,6 @@ class _FreestylePageState extends State<FreestylePage> {
               await _flutterTts.stop();
               await player.stop();
               await platform.invokeMethod('forceSpeaker');
-
-              if (showSpeechBubble) {
-                _showSpeechBubbleOverlay(text);
-              }
 
               await Future.delayed(const Duration(milliseconds: 1200));
 
@@ -5970,10 +6498,6 @@ class _FreestylePageState extends State<FreestylePage> {
               await _disposeAudioPlayer(player, 'Android announcement');
             }
           } else {
-            if (showSpeechBubble) {
-              _showSpeechBubbleOverlay(text);
-            }
-
             try {
               final primingPlayer = AudioPlayer();
               await primingPlayer.setAsset('assets/silence.mp3');
@@ -6230,6 +6754,13 @@ class _FreestylePageState extends State<FreestylePage> {
       return;
     }
 
+    if (_activeScanSection == 'exit-page') {
+      if (_scanningIndex == 0 && mounted) {
+        Navigator.of(context).pop();
+      }
+      return;
+    }
+
     if (_activeScanSection == 'choose-word') {
       final visibleWords = _getVisibleSuggestedWords();
       if (_scanningIndex == 0) {
@@ -6249,6 +6780,14 @@ class _FreestylePageState extends State<FreestylePage> {
       if (_scanningIndex == somethingElseIndex) {
         _stopAuditoryScanning();
         await _showMoreSuggestedOptions();
+        await _restartScanningInSection('choose-word');
+        return;
+      }
+
+      final somethingElseAZIndex = visibleWords.length + 2;
+      if (_scanningIndex == somethingElseAZIndex) {
+        _stopAuditoryScanning();
+        await _showSuggestedWordsLetterDialog();
         await _restartScanningInSection('choose-word');
       }
       return;
@@ -6326,12 +6865,7 @@ class _FreestylePageState extends State<FreestylePage> {
         final rowIndexesWithGoBack = _getVisibleLetterRowIndexesWithGoBack();
         if (_scanningIndex! >= 0 && _scanningIndex! < rowIndexesWithGoBack.length) {
           final rowIndex = rowIndexesWithGoBack[_scanningIndex!];
-          if (rowIndex == -1) {
-            // Go Back selected
-            await _closeSpellingToolAndReturnToSections();
-          } else {
-            _selectLetterRow(rowIndex);
-          }
+          _selectLetterRow(rowIndex);
         }
       } else {
         final rowButtons = _getSpellingButtonsForActiveRow();
@@ -6618,6 +7152,26 @@ class _FreestylePageState extends State<FreestylePage> {
     );
   }
 
+  Widget _buildExitStandaloneButton() {
+    final bool isHighlighted =
+        _isScanning &&
+        _scanningIndex != null &&
+        ((_currentScanLevel == 'sections' && _isSectionHighlighted('exit-page')) ||
+            (_currentScanLevel == 'items' &&
+                _activeScanSection == 'exit-page' &&
+                _scanningIndex == 0));
+
+    return _buildSuggestedActionButton(
+      text: _t('Exit page'),
+      onPressed: () {
+        if (mounted) {
+          Navigator.of(context).pop();
+        }
+      },
+      isHighlighted: isHighlighted,
+    );
+  }
+
   Widget _buildSuggestedWordsSection() {
     final String sectionTitle;
     final numberValues = _getCurrentNumberPageValues();
@@ -6644,21 +7198,13 @@ class _FreestylePageState extends State<FreestylePage> {
           : LayoutBuilder(
               builder: (context, constraints) {
                 final visibleWords = _getVisibleSuggestedWords();
-                final width = constraints.maxWidth;
-                final totalItems = visibleWords.length + 2;
-                final crossAxisCount = width >= 1080
-                    ? ((totalItems / 2).ceil()).clamp(6, 8)
-                    : width >= 840
-                    ? ((totalItems / 2).ceil()).clamp(5, 7)
-                    : width >= 620
-                    ? ((totalItems / 2).ceil()).clamp(4, 6)
-                    : 3;
+                final totalItems = visibleWords.length + 3;
                 return GridView.builder(
                   shrinkWrap: true,
                   physics: const NeverScrollableScrollPhysics(),
                   padding: EdgeInsets.zero,
                   gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: crossAxisCount,
+                    crossAxisCount: 6,
                     crossAxisSpacing: 6,
                     mainAxisSpacing: 6,
                     childAspectRatio: 4.3,
@@ -6667,7 +7213,7 @@ class _FreestylePageState extends State<FreestylePage> {
                   itemBuilder: (context, index) {
                     if (index == 0) {
                       return _buildSuggestedActionButton(
-                        text: 'Go Back',
+                        text: _t('Go Back'),
                         onPressed: _returnToSectionScan,
                         isHighlighted:
                             _isScanning &&
@@ -6686,15 +7232,29 @@ class _FreestylePageState extends State<FreestylePage> {
                     }
 
                     final somethingElseIndex = visibleWords.length + 1;
+                    if (index == somethingElseIndex) {
+                      return _buildSuggestedActionButton(
+                        text: _t('Something Else'),
+                        onPressed: _showMoreSuggestedOptions,
+                        isHighlighted:
+                            _isScanning &&
+                            _scanningIndex != null &&
+                            _currentScanLevel == 'items' &&
+                            _activeScanSection == 'choose-word' &&
+                            _scanningIndex == somethingElseIndex,
+                      );
+                    }
+
+                    final somethingElseAZIndex = visibleWords.length + 2;
                     return _buildSuggestedActionButton(
-                      text: 'Something Else',
-                      onPressed: _showMoreSuggestedOptions,
+                      text: _t('Something Else A-Z'),
+                      onPressed: _showSuggestedWordsLetterDialog,
                       isHighlighted:
                           _isScanning &&
                           _scanningIndex != null &&
                           _currentScanLevel == 'items' &&
                           _activeScanSection == 'choose-word' &&
-                          _scanningIndex == somethingElseIndex,
+                          _scanningIndex == somethingElseAZIndex,
                     );
                   },
                 );
@@ -6718,7 +7278,7 @@ class _FreestylePageState extends State<FreestylePage> {
         childAspectRatio: 7.0,
         children: [
           _buildSuggestedActionButton(
-            text: 'Go Back',
+            text: _t('Go Back'),
             onPressed: () {
               unawaited(_restartScanning(resetToSections: true));
             },
@@ -6730,7 +7290,7 @@ class _FreestylePageState extends State<FreestylePage> {
                 _scanningIndex == 0,
           ),
           _buildSuggestedActionButton(
-            text: 'Word Categories',
+            text: _t('Word Categories'),
             onPressed: _openChooseWordModal,
             isHighlighted:
                 _isScanning &&
@@ -6740,7 +7300,7 @@ class _FreestylePageState extends State<FreestylePage> {
                 _scanningIndex == 1,
           ),
           _buildSuggestedActionButton(
-            text: 'Spell',
+            text: _t('Spell'),
             onPressed: _openSpellingModal,
             isHighlighted:
                 _isScanning &&
@@ -6750,7 +7310,7 @@ class _FreestylePageState extends State<FreestylePage> {
                 _scanningIndex == 2,
           ),
           _buildSuggestedActionButton(
-            text: 'Numbers',
+            text: _t('Numbers'),
             onPressed: _showNumbersToolPanel,
             isHighlighted:
                 _isScanning &&
@@ -6799,124 +7359,154 @@ class _FreestylePageState extends State<FreestylePage> {
         final double letterFontSize = (((buttonSizePx / 10) * 1.44) * 1.2)
             .clamp(16.0, 31.0);
 
+        // Separate action buttons (Go Back, Choose Word) from letter buttons.
+        final actionButtons =
+            buttons.where((b) => b.isStandardOption || b.isChooseWordOption).toList();
+        final letterRowIndexes =
+            rowIndexes
+                .where(
+                  (ri) => buttons.any(
+                    (b) => b.rowIndex == ri && !b.isStandardOption && !b.isChooseWordOption,
+                  ),
+                )
+                .toList();
+
+        // Reusable helper that builds a single spelling button widget.
+        Widget buildSpellingButton(_FreestyleSpellingGridButton button) {
+          return Builder(
+            builder: (context) {
+              bool isHighlighted = false;
+              if (_isScanning &&
+                  _scanningIndex != null &&
+                  _currentScanningContext == 'spelling-letters') {
+                if (_lettersScanPhase == 'rows') {
+                  if (_scanningIndex! >= 0 &&
+                      _scanningIndex! < rowIndexesWithGoBack.length) {
+                    final highlightedRowIndex =
+                        rowIndexesWithGoBack[_scanningIndex!];
+                    if (highlightedRowIndex == -1) {
+                      isHighlighted =
+                          button.isStandardOption && button.text == 'Go Back';
+                    } else {
+                      isHighlighted =
+                          button.isEnabled &&
+                          highlightedRowIndex == button.rowIndex;
+                    }
+                  }
+                } else {
+                  final activeRowButtons = _getSpellingButtonsForActiveRow();
+                  if (_scanningIndex! >= 0 &&
+                      _scanningIndex! < activeRowButtons.length) {
+                    final highlightedButton = activeRowButtons[_scanningIndex!];
+                    isHighlighted =
+                        highlightedButton.rowIndex == button.rowIndex &&
+                        highlightedButton.text == button.text &&
+                        highlightedButton.isChooseWordOption ==
+                            button.isChooseWordOption &&
+                        highlightedButton.isStandardOption ==
+                            button.isStandardOption;
+                  }
+                }
+              }
+
+              const double spellingButtonScale = 1.25;
+              final buttonWidth =
+                  (button.isStandardOption || button.isChooseWordOption)
+                      ? (132.0 * spellingButtonScale)
+                      : (44.0 * spellingButtonScale);
+
+              return SizedBox(
+                width: buttonWidth,
+                height: 44 * spellingButtonScale,
+                child: Container(
+                  decoration: BoxDecoration(
+                    color: isHighlighted
+                        ? const Color(0xFFFB4F14)
+                        : (button.isEnabled
+                              ? Colors.white
+                              : Colors.grey[300]),
+                    border: Border.all(
+                      color: isHighlighted
+                          ? const Color(0xFFFB4F14)
+                          : (button.isEnabled
+                                ? const Color(0xFF002244)
+                                : Colors.grey),
+                      width: 2,
+                    ),
+                    borderRadius: BorderRadius.circular(6),
+                  ),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      onTap: !button.isEnabled
+                          ? null
+                          : () {
+                              if (button.isChooseWordOption) {
+                                unawaited(_chooseCurrentSpellingWord());
+                              } else if (button.isStandardOption) {
+                                unawaited(
+                                  _closeSpellingToolAndReturnToSections(),
+                                );
+                              } else if (button.letter != null) {
+                                _handleLetterClick(button.letter!);
+                              }
+                            },
+                      borderRadius: BorderRadius.circular(6),
+                      child: Center(
+                        child: Text(
+                          button.text,
+                          style: TextStyle(
+                            fontSize:
+                                (button.isStandardOption ||
+                                        button.isChooseWordOption)
+                                    ? 14
+                                    : letterFontSize,
+                            fontWeight: FontWeight.w600,
+                            color: isHighlighted
+                                ? Colors.white
+                                : (button.isEnabled
+                                      ? const Color(0xFF002244)
+                                      : Colors.grey),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+              );
+            },
+          );
+        }
+
         return SingleChildScrollView(
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              for (final rowIndex in rowIndexes) ...[
+              // Action buttons (Go Back / Choose Word) displayed above the
+              // letter rows, directly beneath the Current Word text box.
+              if (actionButtons.isNotEmpty) ...[
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
+                  children: [
+                    for (final button in actionButtons) buildSpellingButton(button),
+                  ],
+                ),
+                const SizedBox(height: 6),
+              ],
+              // Letter rows.
+              for (final rowIndex in letterRowIndexes) ...[
                 Wrap(
                   spacing: 4,
                   runSpacing: 4,
                   children: [
                     for (final button in buttons.where(
-                      (candidate) => candidate.rowIndex == rowIndex,
+                      (candidate) =>
+                          candidate.rowIndex == rowIndex &&
+                          !candidate.isStandardOption &&
+                          !candidate.isChooseWordOption,
                     ))
-                      Builder(
-                        builder: (context) {
-                          bool isHighlighted = false;
-                          if (_isScanning &&
-                              _scanningIndex != null &&
-                              _currentScanningContext == 'spelling-letters') {
-                            if (_lettersScanPhase == 'rows') {
-                              if (_scanningIndex! >= 0 &&
-                                  _scanningIndex! <
-                                      rowIndexesWithGoBack.length) {
-                                final highlightedRowIndex =
-                                    rowIndexesWithGoBack[_scanningIndex!];
-                                if (highlightedRowIndex == -1) {
-                                  isHighlighted =
-                                      button.isStandardOption &&
-                                      button.text == 'Go Back';
-                                } else {
-                                  isHighlighted =
-                                      button.isEnabled &&
-                                      highlightedRowIndex == button.rowIndex;
-                                }
-                              }
-                            } else {
-                              final activeRowButtons =
-                                  _getSpellingButtonsForActiveRow();
-                              if (_scanningIndex! >= 0 &&
-                                  _scanningIndex! < activeRowButtons.length) {
-                                final highlightedButton =
-                                    activeRowButtons[_scanningIndex!];
-                                isHighlighted =
-                                    highlightedButton.rowIndex ==
-                                        button.rowIndex &&
-                                    highlightedButton.text == button.text &&
-                                    highlightedButton.isChooseWordOption ==
-                                        button.isChooseWordOption &&
-                                    highlightedButton.isStandardOption ==
-                                        button.isStandardOption;
-                              }
-                            }
-                          }
-
-                          final buttonWidth = button.isStandardOption
-                              ? 132.0
-                              : 44.0;
-
-                          return SizedBox(
-                            width: buttonWidth,
-                            height: 44,
-                            child: Container(
-                              decoration: BoxDecoration(
-                                color: isHighlighted
-                                    ? const Color(0xFFFB4F14)
-                                    : (button.isEnabled
-                                          ? Colors.white
-                                          : Colors.grey[300]),
-                                border: Border.all(
-                                  color: isHighlighted
-                                      ? const Color(0xFFFB4F14)
-                                      : (button.isEnabled
-                                            ? const Color(0xFF002244)
-                                            : Colors.grey),
-                                  width: 2,
-                                ),
-                                borderRadius: BorderRadius.circular(6),
-                              ),
-                              child: Material(
-                                color: Colors.transparent,
-                                child: InkWell(
-                                  onTap: !button.isEnabled
-                                      ? null
-                                      : () {
-                                          if (button.isChooseWordOption) {
-                                            unawaited(
-                                              _chooseCurrentSpellingWord(),
-                                            );
-                                          } else if (button.isStandardOption) {
-                                            unawaited(
-                                              _closeSpellingToolAndReturnToSections(),
-                                            );
-                                          } else if (button.letter != null) {
-                                            _handleLetterClick(button.letter!);
-                                          }
-                                        },
-                                  borderRadius: BorderRadius.circular(6),
-                                  child: Center(
-                                    child: Text(
-                                      button.text,
-                                      style: TextStyle(
-                                        fontSize: button.isStandardOption
-                                            ? 14
-                                            : letterFontSize,
-                                        fontWeight: FontWeight.w600,
-                                        color: isHighlighted
-                                            ? Colors.white
-                                            : (button.isEnabled
-                                                  ? const Color(0xFF002244)
-                                                  : Colors.grey),
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            ),
-                          );
-                        },
-                      ),
+                      buildSpellingButton(button),
                   ],
                 ),
                 const SizedBox(height: 4),
@@ -6929,7 +7519,7 @@ class _FreestylePageState extends State<FreestylePage> {
   }
 
   Widget _buildInlineSpellingPanel() {
-    return SizedBox(height: 152, child: _buildInlineAlphabetGrid());
+    return SizedBox(height: 250, child: _buildInlineAlphabetGrid());
   }
 
   Widget _buildInlineNumbersPanel() {
@@ -7128,7 +7718,17 @@ class _FreestylePageState extends State<FreestylePage> {
                           child: Column(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              _buildActionSection(),
+                              Row(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  SizedBox(
+                                    width: 118,
+                                    child: _buildExitStandaloneButton(),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Expanded(child: _buildActionSection()),
+                                ],
+                              ),
                               const SizedBox(height: 12),
                               _buildSuggestedWordsSection(),
                               const SizedBox(height: 12),
@@ -7580,7 +8180,7 @@ class _FreestylePageState extends State<FreestylePage> {
     // Word Categories button
     buttons.add(
       _buildMainControlButton(
-        'Word Categories',
+        _t('Word Categories'),
         Icons.list,
         const Color(0xFF8B5CF6),
         _openChooseWordModal,
@@ -7596,7 +8196,7 @@ class _FreestylePageState extends State<FreestylePage> {
     // Spell button
     buttons.add(
       _buildMainControlButton(
-        'Spell',
+        _t('Spell'),
         Icons.keyboard,
         const Color(0xFF3B82F6),
         _openSpellingModal,
@@ -7608,7 +8208,7 @@ class _FreestylePageState extends State<FreestylePage> {
     // Numbers button
     buttons.add(
       _buildMainControlButton(
-        'Numbers',
+        _t('Numbers'),
         Icons.pin,
         const Color(0xFFF59E0B),
         _showNumbersToolPanel,
@@ -7917,7 +8517,7 @@ class _FreestylePageState extends State<FreestylePage> {
                     child: LayoutBuilder(
                       builder: (context, constraints) {
                         double optimalFontSize = _calculateOptimalFontSize(
-                          'More Suggestions',
+                          _t('More Suggestions'),
                           compact ? letterFontSize * 0.72 : letterFontSize,
                           constraints.maxWidth,
                           FontWeight.w500,
@@ -7925,7 +8525,7 @@ class _FreestylePageState extends State<FreestylePage> {
 
                         return Center(
                           child: Text(
-                            'More Suggestions',
+                            _t('More Suggestions'),
                             style: TextStyle(
                               color: const Color(0xFF002244),
                               fontSize: optimalFontSize,

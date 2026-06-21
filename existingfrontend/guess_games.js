@@ -40,6 +40,178 @@ const GAME_CONFIG = {
 
 const CONFIG = GAME_CONFIG[GAME_TYPE];
 
+const GUESS_GAMES_UI_TEXT_DEFAULTS = {
+    guessGameTitle: 'Guess Game',
+    guessWhoTitle: 'Guess Who',
+    guessWhereTitle: 'Guess Where',
+    guessWhatTitle: 'Guess What',
+    selectCategoryTitle: 'Select a Category',
+    selectCategorySubtitle: 'Choose a category for this game',
+    chooseModeTitle: 'Choose a Game Mode',
+    chooseModeSubtitle: 'How do you want to play?',
+    selectYourItemTitle: 'Select Your Person',
+    selectYourItemSubtitle: 'Choose who you want Player 2 to guess',
+    selectClueTitle: 'Select a Clue to Give',
+    clueTargetPrefix: 'Player 2 needs to guess:',
+    playerGuessTitle: "Player 2's Guess",
+    isThisCorrect: 'Is this correct?',
+    gameOverTitle: 'Game Over!',
+    cluesGiven: 'Clues given:',
+    guessesLeft: 'Guesses left:',
+    goBack: 'Go Back',
+    iPick: 'I pick',
+    youPick: 'You pick',
+    somethingElse: 'Something Else',
+    makeYourGuess: 'Make your guess:',
+    playerGuessedPrefix: 'Player 2 guessed:',
+    enterAdminPin: 'Enter Admin PIN',
+    pinPlaceholder: 'Enter PIN',
+    invalidPin: 'Invalid PIN. Please try again.',
+    pinLengthError: 'PIN must be 3-10 characters.',
+    cancel: 'Cancel',
+    submit: 'Submit',
+    manageCustomCategories: 'Manage Custom Categories',
+    resetToDefaults: 'Reset to Defaults',
+    saveCategories: 'Save Categories',
+    startTypingPreview: 'Start typing to see preview...',
+    noCategoriesEntered: 'No categories entered yet...',
+    playAgain: 'Play Again',
+    failedLoadCategories: 'Failed to load categories. Please try again.',
+    failedGeneratePeople: 'Failed to generate people. Please try again.',
+    failedGenerateClues: 'Failed to generate clues. Please try again.',
+    failedGenerateGuesses: 'Failed to generate guesses. Please try again.',
+    enterAtLeastOneCategory: 'Please enter at least one category.',
+    saveCategoriesSuccessPrefix: 'Successfully saved',
+    saveCategoriesSuccessSuffix: 'custom categories!',
+    failedSaveCategories: 'Failed to save categories. Please try again.',
+    resetToDefaultsConfirm: 'Are you sure you want to reset to default categories? This will remove all custom categories.',
+    resetToDefaultsSuccess: 'Successfully reset to default categories!',
+    failedResetCategories: 'Failed to reset categories. Please try again.'
+};
+let guessGamesUiText = { ...GUESS_GAMES_UI_TEXT_DEFAULTS };
+let guessGamesTargetLocale = 'en-US';
+let guessGamesPartnerLocale = 'en-US';
+const guessGamesRuntimeTranslationCache = new Map();
+
+function getGamesLocalizedText(key, fallback) {
+    const candidate = String(guessGamesUiText[key] || '').trim();
+    return candidate || fallback;
+}
+
+async function translateGuessGamesRuntimeLine(line, locale) {
+    const source = String(line || '').trim();
+    if (!source) {
+        return source;
+    }
+    const targetLocale = locale || guessGamesTargetLocale;
+    if (!targetLocale || targetLocale.toLowerCase() === 'en-us') {
+        return source;
+    }
+    const cacheKey = `${targetLocale}:${source}`;
+    if (guessGamesRuntimeTranslationCache.has(cacheKey)) {
+        return guessGamesRuntimeTranslationCache.get(cacheKey);
+    }
+
+    try {
+        const response = await authenticatedFetch('/api/translate-lines', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                lines: [source],
+                source_locale: 'en-US',
+                target_locale: targetLocale
+            })
+        });
+        if (response.ok) {
+            const payload = await response.json();
+            const translated = String(payload?.translated_lines?.[0] || '').trim() || source;
+            guessGamesRuntimeTranslationCache.set(cacheKey, translated);
+            return translated;
+        }
+    } catch (error) {
+        console.warn('[GUESS GAMES I18N] Runtime line translation failed:', error);
+    }
+
+    guessGamesRuntimeTranslationCache.set(cacheKey, source);
+    return source;
+}
+
+async function localizeGuessGamesOptionLabel(labelText) {
+    const source = String(labelText || '').trim();
+    if (!source) {
+        return source;
+    }
+    return translateGuessGamesRuntimeLine(source, guessGamesTargetLocale);
+}
+
+function getCurrentGameTitleText() {
+    if (GAME_TYPE === 'where') {
+        return getGamesLocalizedText('guessWhereTitle', CONFIG.title);
+    }
+    if (GAME_TYPE === 'what') {
+        return getGamesLocalizedText('guessWhatTitle', CONFIG.title);
+    }
+    return getGamesLocalizedText('guessWhoTitle', CONFIG.title);
+}
+
+function applyGuessGamesLocalization() {
+    const setText = (id, value) => {
+        const element = document.getElementById(id);
+        if (element) {
+            element.textContent = value;
+        }
+    };
+
+    const localizedGameTitle = getCurrentGameTitleText();
+    document.title = localizedGameTitle;
+    setText('game-title', localizedGameTitle);
+    setText('page-title', localizedGameTitle);
+
+    setText('category-screen-title', getGamesLocalizedText('selectCategoryTitle', 'Select a Category'));
+    setText('category-screen-subtitle', getGamesLocalizedText('selectCategorySubtitle', 'Choose a category for this game'));
+    setText('mode-screen-title', getGamesLocalizedText('chooseModeTitle', 'Choose a Game Mode'));
+    setText('mode-screen-subtitle', getGamesLocalizedText('chooseModeSubtitle', 'How do you want to play?'));
+    setText('person-screen-title', getGamesLocalizedText('selectYourItemTitle', 'Select Your Person'));
+    setText('person-screen-subtitle', getGamesLocalizedText('selectYourItemSubtitle', 'Choose who you want Player 2 to guess'));
+    setText('clue-screen-title', getGamesLocalizedText('selectClueTitle', 'Select a Clue to Give'));
+    setText('clue-target-prefix', getGamesLocalizedText('clueTargetPrefix', 'Player 2 needs to guess:'));
+    setText('guess-screen-title', getGamesLocalizedText('playerGuessTitle', "Player 2's Guess"));
+    setText('guess-screen-subtitle', getGamesLocalizedText('isThisCorrect', 'Is this correct?'));
+    setText('game-over-title', getGamesLocalizedText('gameOverTitle', 'Game Over!'));
+    setText('pin-title', getGamesLocalizedText('enterAdminPin', 'Enter Admin PIN'));
+    setText('custom-categories-title', getGamesLocalizedText('manageCustomCategories', 'Manage Custom Categories'));
+    setText('reset-to-defaults-text', getGamesLocalizedText('resetToDefaults', 'Reset to Defaults'));
+    setText('cancel-categories-text', getGamesLocalizedText('cancel', 'Cancel'));
+    setText('save-categories-text', getGamesLocalizedText('saveCategories', 'Save Categories'));
+
+    const pinInput = document.getElementById('pin-input');
+    if (pinInput) {
+        pinInput.placeholder = getGamesLocalizedText('pinPlaceholder', 'Enter PIN');
+    }
+
+    const pinCancel = document.getElementById('pin-cancel');
+    if (pinCancel) {
+        pinCancel.textContent = getGamesLocalizedText('cancel', 'Cancel');
+    }
+    const pinSubmit = document.getElementById('pin-submit');
+    if (pinSubmit) {
+        pinSubmit.textContent = getGamesLocalizedText('submit', 'Submit');
+    }
+
+    const cluesLabel = document.getElementById('clues-given-label');
+    if (cluesLabel) {
+        cluesLabel.childNodes[0].textContent = `${getGamesLocalizedText('cluesGiven', 'Clues given:')} `;
+    }
+    const guessesLabel = document.getElementById('guesses-left-label');
+    if (guessesLabel) {
+        guessesLabel.childNodes[0].textContent = `${getGamesLocalizedText('guessesLeft', 'Guesses left:')} `;
+    }
+    const guessesLabel2 = document.getElementById('guesses-left-label-2');
+    if (guessesLabel2) {
+        guessesLabel2.childNodes[0].textContent = `${getGamesLocalizedText('guessesLeft', 'Guesses left:')} `;
+    }
+}
+
 // Helper function to build API URLs based on game type
 function getApiUrl(endpoint) {
     return `/api/${CONFIG.apiEndpoint}/${endpoint}`;
@@ -105,17 +277,6 @@ async function initializeGame() {
 
     screenHistory.length = 0;
     
-    // Set page title and heading
-    document.title = CONFIG.title;
-    const gameTitle = document.getElementById('game-title');
-    if (gameTitle) {
-        gameTitle.textContent = CONFIG.title;
-    }
-    const pageTitle = document.getElementById('page-title');
-    if (pageTitle) {
-        pageTitle.textContent = CONFIG.title;
-    }
-    
     // Check if user is authenticated
     const firebaseIdToken = sessionStorage.getItem('firebaseIdToken');
     const currentAacUserId = sessionStorage.getItem('currentAacUserId');
@@ -129,6 +290,7 @@ async function initializeGame() {
     
     // Load scan and wake word settings
     await loadGuessWhoSettings();
+    applyGuessGamesLocalization();
 
     // Load categories
     await showCategoryScreen();
@@ -141,6 +303,8 @@ async function loadGuessWhoSettings() {
             return;
         }
         const settings = await response.json();
+        guessGamesTargetLocale = String(settings?.userLanguage || 'en-US').trim() || 'en-US';
+        guessGamesPartnerLocale = String(settings?.defaultPartnerLanguage || 'en-US').trim() || 'en-US';
 
         if (settings && typeof settings.scanDelay === 'number' && !isNaN(settings.scanDelay)) {
             defaultDelay = Math.max(100, parseInt(settings.scanDelay));
@@ -155,6 +319,46 @@ async function loadGuessWhoSettings() {
 
         if (settings && typeof settings.gridColumns === 'number' && !isNaN(settings.gridColumns)) {
             gridColumns = Math.max(2, Math.min(12, parseInt(settings.gridColumns)));
+        }
+
+        const targetLocale = String(settings?.userLanguage || 'en-US').trim() || 'en-US';
+        if (targetLocale.toLowerCase() !== 'en-us') {
+            const pretranslated = settings?.specialPageTranslations?.games?.[targetLocale];
+            const missingKeys = [];
+
+            if (pretranslated && typeof pretranslated === 'object') {
+                Object.keys(GUESS_GAMES_UI_TEXT_DEFAULTS).forEach((key) => {
+                    const candidate = String(pretranslated[key] || '').trim();
+                    if (candidate) {
+                        guessGamesUiText[key] = candidate;
+                    } else {
+                        missingKeys.push(key);
+                    }
+                });
+            }
+
+            if (missingKeys.length > 0) {
+                const response = await authenticatedFetch('/api/translate-lines', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        lines: missingKeys.map((key) => GUESS_GAMES_UI_TEXT_DEFAULTS[key]),
+                        source_locale: 'en-US',
+                        target_locale: targetLocale
+                    })
+                });
+
+                if (response.ok) {
+                    const payload = await response.json();
+                    const translatedLines = Array.isArray(payload.translated_lines) ? payload.translated_lines : [];
+                    missingKeys.forEach((key, index) => {
+                        const translatedValue = String(translatedLines[index] || '').trim();
+                        if (translatedValue) {
+                            guessGamesUiText[key] = translatedValue;
+                        }
+                    });
+                }
+            }
         }
 
         ScanningOff = settings.ScanningOff === true;
@@ -337,7 +541,7 @@ async function loadCategories() {
     } catch (error) {
         console.error('Error loading categories:', error);
         gameState.isLoading = false;
-        alert('Failed to load categories. Please try again.');
+        alert(getGamesLocalizedText('failedLoadCategories', 'Failed to load categories. Please try again.'));
     }
 }
 
@@ -354,13 +558,13 @@ async function showModeScreen() {
     const buttons = [
         createHomeButton(),
         {
-            text: 'I pick',
-            summary: 'I pick',
+            text: getGamesLocalizedText('iPick', 'I pick'),
+            summary: getGamesLocalizedText('iPick', 'I pick'),
             onClick: () => startModeA()
         },
         {
-            text: 'You pick',
-            summary: 'You pick',
+            text: getGamesLocalizedText('youPick', 'You pick'),
+            summary: getGamesLocalizedText('youPick', 'You pick'),
             onClick: () => startModeB()
         }
     ];
@@ -393,16 +597,19 @@ async function startModeA() {
         updatePageContent('person-screen');
         
         // Create person buttons
-        const buttons = gameState.peopleOptions.map(person => ({
+        const localizedPeopleLabels = await Promise.all(
+            gameState.peopleOptions.map(person => localizeGuessGamesOptionLabel(person))
+        );
+        const buttons = gameState.peopleOptions.map((person, index) => ({
             text: person,
-            summary: person,
+            summary: localizedPeopleLabels[index] || person,
             onClick: () => selectPerson(person)
         }));
         
         // Add "Something Else" button to refresh the list
         buttons.push({
-            text: 'Something Else',
-            summary: 'Something Else',
+            text: getGamesLocalizedText('somethingElse', 'Something Else'),
+            summary: getGamesLocalizedText('somethingElse', 'Something Else'),
             onClick: () => refreshPeopleOptions()
         });
         
@@ -416,7 +623,7 @@ async function startModeA() {
     } catch (error) {
         console.error('Error generating people:', error);
         gameState.isLoading = false;
-        alert('Failed to generate people. Please try again.');
+        alert(getGamesLocalizedText('failedGeneratePeople', 'Failed to generate people. Please try again.'));
     }
 }
 
@@ -437,15 +644,18 @@ async function refreshPeopleOptions() {
         gameState.peopleOptions = data.people;
         
         // Redisplay person selection with new options
-        const buttons = gameState.peopleOptions.map(person => ({
+        const localizedPeopleLabels = await Promise.all(
+            gameState.peopleOptions.map(person => localizeGuessGamesOptionLabel(person))
+        );
+        const buttons = gameState.peopleOptions.map((person, index) => ({
             text: person,
-            summary: person,
+            summary: localizedPeopleLabels[index] || person,
             onClick: () => selectPerson(person)
         }));
         
         buttons.push({
-            text: 'Something Else',
-            summary: 'Something Else',
+            text: getGamesLocalizedText('somethingElse', 'Something Else'),
+            summary: getGamesLocalizedText('somethingElse', 'Something Else'),
             onClick: () => refreshPeopleOptions()
         });
         
@@ -489,7 +699,7 @@ async function selectPerson(person) {
     } catch (error) {
         console.error('Error generating clues:', error);
         gameState.isLoading = false;
-        alert('Failed to generate clues. Please try again.');
+        alert(getGamesLocalizedText('failedGenerateClues', 'Failed to generate clues. Please try again.'));
     }
 }
 
@@ -673,7 +883,7 @@ async function generateAndShowGuesses() {
     } catch (error) {
         console.error('Error generating guesses:', error);
         gameState.isLoading = false;
-        alert('Failed to generate guesses. Please try again.');
+        alert(getGamesLocalizedText('failedGenerateGuesses', 'Failed to generate guesses. Please try again.'));
     }
 }
 
@@ -695,17 +905,20 @@ async function displayModeBGuessOptions() {
     gameState.guessOptionsShown.push(...guessesToShow);
     
     // Create buttons
-    const buttons = guessesToShow.map(guess => ({
+    const localizedGuessLabels = await Promise.all(
+        guessesToShow.map(guess => localizeGuessGamesOptionLabel(guess))
+    );
+    const buttons = guessesToShow.map((guess, index) => ({
         text: guess,
-        summary: guess,
+        summary: localizedGuessLabels[index] || guess,
         onClick: () => selectGuess(guess)
     }));
     
     // Add Something Else button if there are more guesses available
     if (availableGuesses.length > llmOptions) {
         buttons.push({
-            text: 'Something Else',
-            summary: 'Something Else',
+            text: getGamesLocalizedText('somethingElse', 'Something Else'),
+            summary: getGamesLocalizedText('somethingElse', 'Something Else'),
             onClick: () => refreshModeBGuesses()
         });
     }
@@ -715,7 +928,7 @@ async function displayModeBGuessOptions() {
     
     // Update page to show guesses
     updatePageContent('guess-screen');
-    document.getElementById('guess-display').textContent = `Make your guess:`;
+    document.getElementById('guess-display').textContent = getGamesLocalizedText('makeYourGuess', 'Make your guess:');
     document.getElementById('guesses-left-count-2').textContent = gameState.guessesRemaining;
     
     const container = document.querySelector('#guess-screen .gridContainer');
@@ -940,7 +1153,7 @@ async function showClueScreen() {
         }
         
         // Create buttons from available clues
-        const buttons = availableClues.map(clueObj => {
+        const clueButtonBlueprints = availableClues.map(clueObj => {
             // Handle both string and object clue formats
             let clueText = '';
             let clueSummary = '';
@@ -966,17 +1179,22 @@ async function showClueScreen() {
             
             console.log('[GUESS_WHO CLUE]', { type: typeof clueObj, clueText, clueSummary });
             
-            return {
-                text: clueText,
-                summary: clueSummary,
-                onClick: () => selectClue(clueText)
-            };
+            return { clueText, clueSummary };
         });
+        const localizedClueSummaries = await Promise.all(
+            clueButtonBlueprints.map(({ clueSummary }) => localizeGuessGamesOptionLabel(clueSummary))
+        );
+        const buttons = clueButtonBlueprints.map(({ clueText, clueSummary }, index) => ({
+            text: clueText,
+            summary: localizedClueSummaries[index] || clueSummary,
+            onClick: () => selectClue(clueText)
+        }));
         
         // Add "Something Else" button before Home button
+        const somethingElseLabel = getGamesLocalizedText('somethingElse', 'Something Else');
         buttons.push({
-            text: 'Something Else',
-            summary: 'Something Else',
+            text: somethingElseLabel,
+            summary: somethingElseLabel,
             onClick: () => refreshClueOptions()
         });
         
@@ -1282,8 +1500,20 @@ function listenForModeBGuess() {
 function showListeningIndicator(message) {
     const indicator = document.getElementById('listening-status');
     if (indicator) {
-        indicator.textContent = message;
-        indicator.classList.add('active');
+        const fallbackMessage = String(message || '').trim();
+        if (!guessGamesTargetLocale || guessGamesTargetLocale.toLowerCase() === 'en-us') {
+            indicator.textContent = fallbackMessage;
+            indicator.classList.add('active');
+            return;
+        }
+
+        translateGuessGamesRuntimeLine(fallbackMessage).then((translated) => {
+            indicator.textContent = translated;
+            indicator.classList.add('active');
+        }).catch(() => {
+            indicator.textContent = fallbackMessage;
+            indicator.classList.add('active');
+        });
     }
 }
 
@@ -1307,13 +1537,17 @@ async function handleGuessHeard(guessText) {
 async function showGuessResponseScreen(guessText) {
     gameState.phase = 'guesses';
     updatePageContent('guess-screen');
-    document.getElementById('guess-display').textContent = `Player 2 guessed: ${guessText}`;
+    const playerGuessedPrefix = getGamesLocalizedText('playerGuessedPrefix', 'Player 2 guessed:');
+    document.getElementById('guess-display').textContent = `${playerGuessedPrefix} ${guessText}`;
     document.getElementById('guesses-left-count-2').textContent = Math.max(0, gameState.guessesRemaining);
 
     const responseOptions = await generateGuessResponseOptions(guessText);
-    const buttons = responseOptions.map(option => ({
+    const localizedResponseSummaries = await Promise.all(
+        responseOptions.map(option => localizeGuessGamesOptionLabel(option.summary || option.text))
+    );
+    const buttons = responseOptions.map((option, index) => ({
         text: option.text,
-        summary: option.summary,
+        summary: localizedResponseSummaries[index] || option.summary,
         onClick: () => handleGuessResponse(option)
     }));
 
@@ -1446,13 +1680,13 @@ function endGame() {
     
     const buttons = [
         {
-            text: 'Play Again',
-            summary: 'Play Again',
+            text: getGamesLocalizedText('playAgain', 'Play Again'),
+            summary: getGamesLocalizedText('playAgain', 'Play Again'),
             onClick: () => initializeGame()
         },
         {
-            text: 'Go Back',
-            summary: 'Go Back',
+            text: getGamesLocalizedText('goBack', 'Go Back'),
+            summary: getGamesLocalizedText('goBack', 'Go Back'),
             onClick: () => goBackToPreviousStep()
         }
     ];
@@ -1467,9 +1701,10 @@ function endGame() {
 
 // Helper functions
 function createGoBackButton() {
+    const goBackLabel = getGamesLocalizedText('goBack', 'Go Back');
     return {
-        text: 'Go Back',
-        summary: 'Go Back',
+        text: goBackLabel,
+        summary: goBackLabel,
         onClick: () => {
             goBackToPreviousStep();
         }
@@ -1802,8 +2037,9 @@ function createButton(config) {
     return button;
 }
 
-function announceText(text, recordHistory = false) {
-    return announce(text, 'system', recordHistory, true);
+async function announceText(text, recordHistory = false) {
+    const localizedText = await translateGuessGamesRuntimeLine(text, guessGamesPartnerLocale);
+    return announce(localizedText, 'system', recordHistory, true);
 }
 
 function base64ToArrayBuffer(base64) {
@@ -1911,7 +2147,11 @@ async function processAnnouncementQueue() {
         const response = await authenticatedFetch('/play-audio', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: textToAnnounce, routing_target: 'system' })
+            body: JSON.stringify({
+                text: textToAnnounce,
+                routing_target: 'system',
+                language_code_override: (guessGamesPartnerLocale && guessGamesPartnerLocale.toLowerCase() !== 'en-us') ? guessGamesPartnerLocale : null
+            })
         });
 
         if (!response.ok) {
@@ -2151,7 +2391,8 @@ function setupCustomCategoriesUI() {
         
         if (categoriesPreview) {
             if (categories.length === 0) {
-                categoriesPreview.innerHTML = '<p class=\"text-gray-400 text-sm italic\">No categories entered yet...</p>';
+                const noCategories = getGamesLocalizedText('noCategoriesEntered', 'No categories entered yet...');
+                categoriesPreview.innerHTML = `<p class=\"text-gray-400 text-sm italic\">${escapeHtml(noCategories)}</p>`;
             } else {
                 categoriesPreview.innerHTML = categories.map((cat, index) => 
                     `<span class=\"inline-block bg-blue-100 text-blue-800 px-3 py-1 rounded-full text-sm mr-2 mb-2\">
@@ -2173,7 +2414,7 @@ function setupCustomCategoriesUI() {
         const categories = parseCategories(text);
         
         if (categories.length === 0) {
-            alert('Please enter at least one category.');
+            alert(getGamesLocalizedText('enterAtLeastOneCategory', 'Please enter at least one category.'));
             return;
         }
         
@@ -2185,7 +2426,9 @@ function setupCustomCategoriesUI() {
             });
             
             if (response.ok) {
-                alert(`Successfully saved ${categories.length} custom categories!`);
+                const successPrefix = getGamesLocalizedText('saveCategoriesSuccessPrefix', 'Successfully saved');
+                const successSuffix = getGamesLocalizedText('saveCategoriesSuccessSuffix', 'custom categories!');
+                alert(`${successPrefix} ${categories.length} ${successSuffix}`);
                 hideCustomCategoriesModal();
                 
                 // Reload the game if we're on category selection screen
@@ -2193,16 +2436,16 @@ function setupCustomCategoriesUI() {
                     await loadCategories();
                 }
             } else {
-                alert('Failed to save categories. Please try again.');
+                alert(getGamesLocalizedText('failedSaveCategories', 'Failed to save categories. Please try again.'));
             }
         } catch (error) {
             console.error('Error saving categories:', error);
-            alert('Failed to save categories. Please try again.');
+            alert(getGamesLocalizedText('failedSaveCategories', 'Failed to save categories. Please try again.'));
         }
     }
     
     async function resetToDefaults() {
-        if (!confirm('Are you sure you want to reset to default categories? This will remove all custom categories.')) {
+        if (!confirm(getGamesLocalizedText('resetToDefaultsConfirm', 'Are you sure you want to reset to default categories? This will remove all custom categories.'))) {
             return;
         }
         
@@ -2212,7 +2455,7 @@ function setupCustomCategoriesUI() {
             });
             
             if (response.ok) {
-                alert('Successfully reset to default categories!');
+                alert(getGamesLocalizedText('resetToDefaultsSuccess', 'Successfully reset to default categories!'));
                 hideCustomCategoriesModal();
                 
                 // Reload the game if we're on category selection screen
@@ -2220,11 +2463,11 @@ function setupCustomCategoriesUI() {
                     await loadCategories();
                 }
             } else {
-                alert('Failed to reset categories. Please try again.');
+                alert(getGamesLocalizedText('failedResetCategories', 'Failed to reset categories. Please try again.'));
             }
         } catch (error) {
             console.error('Error resetting categories:', error);
-            alert('Failed to reset categories. Please try again.');
+            alert(getGamesLocalizedText('failedResetCategories', 'Failed to reset categories. Please try again.'));
         }
     }
     
@@ -2242,7 +2485,7 @@ function setupCustomCategoriesUI() {
                     showCustomCategoriesModal();
                 } else {
                     if (pinError) {
-                        pinError.textContent = 'Invalid PIN. Please try again.';
+                        pinError.textContent = getGamesLocalizedText('invalidPin', 'Invalid PIN. Please try again.');
                         pinError.classList.remove('hidden');
                     }
                     if (pinInput) {
@@ -2252,7 +2495,7 @@ function setupCustomCategoriesUI() {
                 }
             } else {
                 if (pinError) {
-                    pinError.textContent = 'PIN must be 3-10 characters.';
+                    pinError.textContent = getGamesLocalizedText('pinLengthError', 'PIN must be 3-10 characters.');
                     pinError.classList.remove('hidden');
                 }
             }

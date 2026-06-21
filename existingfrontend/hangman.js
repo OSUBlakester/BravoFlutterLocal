@@ -60,6 +60,123 @@ let isSettingUpRecognition = false;
 let waitingForWakeWord = false;
 let waitingForGuess = false;
 let skipOnendRestart = false;
+let hangmanTargetLocale = 'en-US';
+let hangmanPartnerLocale = 'en-US';
+
+const HANGMAN_UI_TEXT_DEFAULTS = {
+    hangmanTitle: 'Hangman',
+    hangmanSelectCategory: 'Select a Category',
+    hangmanChooseCategory: 'Choose a category for Hangman',
+    hangmanChooseMode: 'Choose a Game Mode',
+    hangmanWhoIsGuessing: 'Who is guessing?',
+    hangmanPickWord: 'Pick a Word',
+    hangmanPickWordSubtitle: 'Choose a word for your partner to guess',
+    hangmanGuessTheWord: 'Guess the word!',
+    hangmanWrongGuesses: 'Wrong guesses:',
+    hangmanDone: 'Done',
+    hangmanWaitingPartner: 'Waiting for your partner',
+    hangmanSetupSubtitle: 'Get ready to play Hangman.',
+    hangmanGameOver: 'Game Over!',
+    hangmanPlayAgain: 'Play Again',
+    hangmanModeIGuess: 'I guess',
+    hangmanModeYouGuess: 'You guess',
+    hangmanLetterCountReady: 'Say "ready" when you have your word.',
+    hangmanListeningReady: 'Listening for: "ready"',
+    hangmanListeningLetterCount: 'Listening for: letter count',
+    hangmanGreatHowMany: 'Great! How many letters are in your word? Say the number.',
+    hangmanLetterCountTooSmall: 'Please say a number between 1 and 20.',
+    hangmanGotItKeepGuessing: 'Got it. Keep guessing!',
+    hangmanOutOfGuessesYouWin: 'Oh no! I\'m out of guesses. You win!',
+    hangmanWrongGuessesLeft: 'wrong guesses left.',
+    hangmanIsLetterInWord: 'Is the letter',
+    hangmanSayYesNo: 'in your word? Say yes or no.',
+    hangmanGreatTapBlanks: 'Great! Tap the blanks where',
+    hangmanTapDone: 'goes, then tap Done.',
+    hangmanNeedAtLeastOneBlank: 'You need to tap at least one blank. Try again.',
+    hangmanIWinWordIs: 'I win! The word is',
+    hangmanNopeLetterNotInWord: 'is not in the word.',
+    hangmanTooBad: 'Too bad!',
+    hangmanBetterLuck: 'Better luck next time!',
+    hangmanYouGotIt: 'You got it! The word was',
+    hangmanWrongAllowed: 'wrong guesses allowed.',
+    hangmanIPickedWord: 'I picked my word! It has',
+    hangmanLetters: 'letters. Say',
+    hangmanThenGuess: 'then guess a letter!',
+    hangmanAlreadyGuessed: 'You already guessed',
+    hangmanTryAnotherLetter: 'Try another letter.',
+    hangmanNeedWakeWord: 'Say',
+    hangmanNoCatchLetter: "I didn't catch a letter. Say",
+    hangmanGoBack: 'Go Back',
+    hangmanYesOrNo: 'yes or no',
+    hangmanWhatLetter: 'What letter?',
+    hangmanListeningYesNo: 'Listening for: "yes" or "no"',
+    hangmanListeningWakeWord: 'Listening for your wake word',
+    hangmanListeningAnyLetter: 'Listening for: a letter',
+    hangmanNoSavedStoriesYet: 'No saved stories yet.'
+};
+let hangmanUiText = { ...HANGMAN_UI_TEXT_DEFAULTS };
+const hangmanRuntimeTranslationCache = new Map();
+
+function getHangmanLocalizedText(key, fallback) {
+    const candidate = String(hangmanUiText[key] || '').trim();
+    return candidate || fallback;
+}
+
+async function translateHangmanRuntimeLine(line, locale) {
+    const source = String(line || '').trim();
+    if (!source) return source;
+    const targetLocale = locale || hangmanTargetLocale;
+    if (!targetLocale || targetLocale.toLowerCase() === 'en-us') return source;
+    const cacheKey = `${targetLocale}:${source}`;
+    if (hangmanRuntimeTranslationCache.has(cacheKey)) return hangmanRuntimeTranslationCache.get(cacheKey);
+
+    try {
+        const response = await authenticatedFetch('/api/translate-lines', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ lines: [source], source_locale: 'en-US', target_locale: targetLocale })
+        });
+        if (response.ok) {
+            const payload = await response.json();
+            const translated = String(payload?.translated_lines?.[0] || '').trim() || source;
+            hangmanRuntimeTranslationCache.set(cacheKey, translated);
+            return translated;
+        }
+    } catch (error) {
+        console.warn('[HANGMAN I18N] runtime translation failed:', error);
+    }
+
+    hangmanRuntimeTranslationCache.set(cacheKey, source);
+    return source;
+}
+
+async function localizeHangmanOptionLabel(labelText) {
+    const source = String(labelText || '').trim();
+    if (!source) return source;
+    return translateHangmanRuntimeLine(source, hangmanTargetLocale);
+}
+
+async function applyHangmanLocalization() {
+    const setText = (id, key, fallback) => {
+        const element = document.getElementById(id);
+        if (element) element.textContent = getHangmanLocalizedText(key, fallback);
+    };
+
+    const title = document.getElementById('game-title');
+    if (title) title.textContent = getHangmanLocalizedText('hangmanTitle', 'Hangman');
+    setText('hangman-category-title', 'hangmanSelectCategory', 'Select a Category');
+    setText('hangman-category-subtitle', 'hangmanChooseCategory', 'Choose a category for Hangman');
+    setText('hangman-mode-title', 'hangmanChooseMode', 'Choose a Game Mode');
+    setText('hangman-mode-subtitle', 'hangmanWhoIsGuessing', 'Who is guessing?');
+    setText('hangman-word-title', 'hangmanPickWord', 'Pick a Word');
+    setText('hangman-word-subtitle', 'hangmanPickWordSubtitle', 'Choose a word for your partner to guess');
+    setText('playing-title', 'hangmanGuessTheWord', 'Guess the word!');
+    setText('wrong-guesses-label', 'hangmanWrongGuesses', 'Wrong guesses:');
+    setText('position-done-label', 'hangmanDone', 'Done');
+    setText('setup-title', 'hangmanWaitingPartner', 'Waiting for your partner');
+    setText('setup-subtitle', 'hangmanSetupSubtitle', 'Get ready to play Hangman.');
+    setText('hangman-game-over-title', 'hangmanGameOver', 'Game Over!');
+}
 
 // ===== INITIALIZATION =====
 async function initializeGame() {
@@ -97,6 +214,7 @@ async function initializeGame() {
     }
 
     await loadSettings();
+    await applyHangmanLocalization();
     await showCategoryScreen();
 }
 
@@ -105,6 +223,42 @@ async function loadSettings() {
         const response = await authenticatedFetch('/api/settings', { method: 'GET' });
         if (!response.ok) return;
         const settings = await response.json();
+        hangmanTargetLocale = String(settings?.userLanguage || 'en-US').trim() || 'en-US';
+        hangmanPartnerLocale = String(settings?.defaultPartnerLanguage || 'en-US').trim() || 'en-US';
+
+        if (hangmanTargetLocale.toLowerCase() !== 'en-us') {
+            const pretranslated = settings?.specialPageTranslations?.games?.[hangmanTargetLocale];
+            if (pretranslated && typeof pretranslated === 'object') {
+                hangmanUiText = { ...HANGMAN_UI_TEXT_DEFAULTS, ...pretranslated };
+            } else {
+                hangmanUiText = { ...HANGMAN_UI_TEXT_DEFAULTS };
+                try {
+                    const translateResponse = await authenticatedFetch('/api/translate-lines', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            lines: Object.values(HANGMAN_UI_TEXT_DEFAULTS),
+                            source_locale: 'en-US',
+                            target_locale: hangmanTargetLocale
+                        })
+                    });
+                    if (translateResponse.ok) {
+                        const translatedPayload = await translateResponse.json();
+                        const translatedLines = Array.isArray(translatedPayload?.translated_lines)
+                            ? translatedPayload.translated_lines
+                            : [];
+                        Object.keys(HANGMAN_UI_TEXT_DEFAULTS).forEach((key, index) => {
+                            const translated = String(translatedLines[index] || '').trim();
+                            if (translated) hangmanUiText[key] = translated;
+                        });
+                    }
+                } catch (translationError) {
+                    console.warn('[HANGMAN I18N] failed to hydrate bundle:', translationError);
+                }
+            }
+        } else {
+            hangmanUiText = { ...HANGMAN_UI_TEXT_DEFAULTS };
+        }
 
         if (settings && typeof settings.scanDelay === 'number' && !isNaN(settings.scanDelay)) {
             defaultDelay = Math.max(100, parseInt(settings.scanDelay));
@@ -139,6 +293,7 @@ function getWakeWordPhrase() {
 async function showCategoryScreen() {
     gameState.phase = 'category';
     updatePageContent('category-screen');
+    await applyHangmanLocalization();
 
     try {
         gameState.isLoading = true;
@@ -179,13 +334,13 @@ async function showModeScreen() {
     const buttons = [
         createGoBackButton(),
         {
-            text: 'I guess',
-            summary: 'I guess',
+            text: getHangmanLocalizedText('hangmanModeIGuess', 'I guess'),
+            summary: getHangmanLocalizedText('hangmanModeIGuess', 'I guess'),
             onClick: () => startModeA()
         },
         {
-            text: 'You guess',
-            summary: 'You guess',
+            text: getHangmanLocalizedText('hangmanModeYouGuess', 'You guess'),
+            summary: getHangmanLocalizedText('hangmanModeYouGuess', 'You guess'),
             onClick: () => startModeB()
         }
     ];
@@ -201,8 +356,8 @@ async function startModeA() {
     gameState.word = null; // Word is secret — app doesn't know it
 
     // Announce instructions and wait for "ready"
-    announceText(`Think of a ${gameState.selectedCategory}. Say "ready" when you have your word.`, false);
-    showListeningIndicator('Listening for: "ready"');
+    announceText(`Think of a ${gameState.selectedCategory}. ${getHangmanLocalizedText('hangmanLetterCountReady', 'Say "ready" when you have your word.')}`, false);
+    showListeningIndicator(getHangmanLocalizedText('hangmanListeningReady', 'Listening for: "ready"'));
     listenForReady();
 }
 
@@ -245,8 +400,8 @@ async function handleModeAReady() {
     gameState.modeAPhase = 'waitingLetterCount';
 
     // Ask for letter count
-    await announceText('Great! How many letters are in your word? Say the number.', false);
-    showListeningIndicator('Listening for: letter count');
+    await announceText(getHangmanLocalizedText('hangmanGreatHowMany', 'Great! How many letters are in your word? Say the number.'), false);
+    showListeningIndicator(getHangmanLocalizedText('hangmanListeningLetterCount', 'Listening for: letter count'));
     listenForLetterCount();
 }
 
@@ -355,14 +510,17 @@ async function startModeB() {
 
         updatePageContent('word-screen');
 
-        const buttons = gameState.wordOptions.map(word => ({
+        const localizedWordLabels = await Promise.all(
+            gameState.wordOptions.map(word => localizeHangmanOptionLabel(word))
+        );
+        const buttons = gameState.wordOptions.map((word, index) => ({
             text: word,
-            summary: word,
+            summary: localizedWordLabels[index] || word,
             onClick: () => selectWord(word)
         }));
         buttons.push({
-            text: 'Something Else',
-            summary: 'Something Else',
+            text: getHangmanLocalizedText('somethingElse', 'Something Else'),
+            summary: getHangmanLocalizedText('somethingElse', 'Something Else'),
             onClick: () => refreshWordOptions()
         });
         buttons.unshift(createGoBackButton());
@@ -390,14 +548,17 @@ async function refreshWordOptions() {
         const data = await response.json();
         gameState.wordOptions = data.words || data.people || [];
 
-        const buttons = gameState.wordOptions.map(word => ({
+        const localizedWordLabels = await Promise.all(
+            gameState.wordOptions.map(word => localizeHangmanOptionLabel(word))
+        );
+        const buttons = gameState.wordOptions.map((word, index) => ({
             text: word,
-            summary: word,
+            summary: localizedWordLabels[index] || word,
             onClick: () => selectWord(word)
         }));
         buttons.push({
-            text: 'Something Else',
-            summary: 'Something Else',
+            text: getHangmanLocalizedText('somethingElse', 'Something Else'),
+            summary: getHangmanLocalizedText('somethingElse', 'Something Else'),
             onClick: () => refreshWordOptions()
         });
         buttons.unshift(createGoBackButton());
@@ -424,7 +585,7 @@ async function selectWord(word) {
     gameState.guessedLetters = [];
     gameState.wrongGuesses = 0;
 
-    await announceText(`I picked my word! It has ${gameState.wordLength} letters. Say ${getWakeWordPhrase()} then guess a letter!`, false);
+    await announceText(`${getHangmanLocalizedText('hangmanIPickedWord', 'I picked my word! It has')} ${gameState.wordLength} ${getHangmanLocalizedText('hangmanLetters', 'letters. Say')} ${getWakeWordPhrase()} ${getHangmanLocalizedText('hangmanThenGuess', 'then guess a letter!')}`, false);
     showPlayingScreen();
     startModeBListening();
 }
@@ -707,8 +868,8 @@ async function handleModeALetterGuess(letter) {
     gameState.currentGuessedLetter = letter;
     gameState.modeAPhase = 'waitingYesNo';
 
-    await announceText(`Is the letter ${letter} in your word? Say yes or no.`, false);
-    showListeningIndicator('Listening for: "yes" or "no"');
+    await announceText(`${getHangmanLocalizedText('hangmanIsLetterInWord', 'Is the letter')} ${letter} ${getHangmanLocalizedText('hangmanSayYesNo', 'in your word? Say yes or no.')}`, false);
+    showListeningIndicator(getHangmanLocalizedText('hangmanListeningYesNo', 'Listening for: "yes" or "no"'));
     listenForModeAYesNo();
 }
 
@@ -776,7 +937,7 @@ async function handleModeALetterCorrect() {
     markAlphabetLetter(letter, true);
     gameState.modeAPhase = 'waitingPositions';
 
-    await announceText(`Great! Tap the blanks where ${letter} goes, then tap Done.`, false);
+    await announceText(`${getHangmanLocalizedText('hangmanGreatTapBlanks', 'Great! Tap the blanks where')} ${letter} ${getHangmanLocalizedText('hangmanTapDone', 'goes, then tap Done.')}`, false);
     enableBlankSelection();
 }
 
@@ -843,7 +1004,7 @@ async function confirmPositions() {
     if (doneBtn) doneBtn.style.display = 'none';
 
     if (positionsRevealed === 0) {
-        await announceText(`You need to tap at least one blank. Try again.`, false);
+        await announceText(getHangmanLocalizedText('hangmanNeedAtLeastOneBlank', 'You need to tap at least one blank. Try again.'), false);
         enableBlankSelection();
         return;
     }
@@ -855,14 +1016,14 @@ async function confirmPositions() {
     // Check win
     if (checkModeAWin()) {
         const word = gameState.revealedLetters.join('');
-        await announceText(`I win! The word is ${word}!`, false);
+        await announceText(`${getHangmanLocalizedText('hangmanIWinWordIs', 'I win! The word is')} ${word}!`, false);
         endGame(true);
         return;
     }
 
     // Continue playing
     gameState.modeAPhase = 'playing';
-    await announceText('Got it. Keep guessing!', false);
+    await announceText(getHangmanLocalizedText('hangmanGotItKeepGuessing', 'Got it. Keep guessing!'), false);
     startAlphabetScanning();
 }
 
@@ -884,13 +1045,13 @@ async function handleModeALetterWrong() {
     updateWrongCount();
 
     if (gameState.wrongGuesses >= gameState.maxWrong) {
-        await announceText('Oh no! I\'m out of guesses. You win!', false);
+        await announceText(getHangmanLocalizedText('hangmanOutOfGuessesYouWin', 'Oh no! I\'m out of guesses. You win!'), false);
         endGame(false);
         return;
     }
 
     const remaining = gameState.maxWrong - gameState.wrongGuesses;
-    await announceText(`Nope! ${remaining} wrong ${remaining === 1 ? 'guess' : 'guesses'} left.`, false);
+    await announceText(`${remaining} ${getHangmanLocalizedText('hangmanWrongGuessesLeft', 'wrong guesses left.')}`, false);
     gameState.modeAPhase = 'playing';
     startAlphabetScanning();
 }
@@ -898,7 +1059,7 @@ async function handleModeALetterWrong() {
 // ===== MODE B: You guess via voice =====
 function startModeBListening() {
     waitingForWakeWord = true;
-    showListeningIndicator(`Listening for: "${getWakeWordPhrase()}"`);
+    showListeningIndicator(getHangmanLocalizedText('hangmanListeningWakeWord', `Listening for: "${getWakeWordPhrase()}"`));
     setupWakeWordRecognition();
 }
 
@@ -937,8 +1098,8 @@ function setupWakeWordRecognition() {
             if (recognition) { try { recognition.stop(); } catch (e) {} recognition = null; }
             isSettingUpRecognition = false;
 
-            await announceText('What letter?', false);
-            showListeningIndicator('Listening for: a letter');
+            await announceText(getHangmanLocalizedText('hangmanWhatLetter', 'What letter?'), false);
+            showListeningIndicator(getHangmanLocalizedText('hangmanListeningAnyLetter', 'Listening for: a letter'));
             startLetterCapture();
         }
     };
@@ -1003,7 +1164,7 @@ function startLetterCapture() {
 
         if (detectedLetter) {
             if (gameState.guessedLetters.includes(detectedLetter)) {
-                await announceText(`You already guessed ${detectedLetter}. Try another letter. Say ${getWakeWordPhrase()} first.`, false);
+                await announceText(`${getHangmanLocalizedText('hangmanAlreadyGuessed', 'You already guessed')} ${detectedLetter}. ${getHangmanLocalizedText('hangmanTryAnotherLetter', 'Try another letter.')} ${getHangmanLocalizedText('hangmanNeedWakeWord', 'Say')} ${getWakeWordPhrase()} first.`, false);
                 startModeBListening();
             } else {
                 await handleLetterSelected(detectedLetter);
@@ -1096,26 +1257,26 @@ function endGame(playerWon) {
         // Mode A: I was guessing
         if (playerWon) {
             const word = gameState.revealedLetters.join('');
-            msgEl.textContent = `🎉 I figured it out! The word is "${word}"`;
-            detailsEl.textContent = `I made ${gameState.wrongGuesses} wrong guess${gameState.wrongGuesses !== 1 ? 'es' : ''}.`;
+            msgEl.textContent = `🎉 ${getHangmanLocalizedText('hangmanIWinWordIs', 'I win! The word is')} "${word}"`;
+            detailsEl.textContent = `${gameState.wrongGuesses} ${gameState.wrongGuesses !== 1 ? getHangmanLocalizedText('hangmanWrongGuessesLeft', 'wrong guesses left.') : getHangmanLocalizedText('hangmanWrongGuessesLeft', 'wrong guesses left.')}`;
         } else {
-            msgEl.textContent = `💀 Game Over! The hangman is complete.`;
-            detailsEl.textContent = `Better luck next time! I used all ${gameState.maxWrong} wrong guesses.`;
+            msgEl.textContent = `💀 ${getHangmanLocalizedText('hangmanGameOver', 'Game Over!')} ${getHangmanLocalizedText('hangmanTooBad', 'The hangman is complete.')}`;
+            detailsEl.textContent = `${getHangmanLocalizedText('hangmanBetterLuck', 'Better luck next time!')} ${gameState.maxWrong} ${getHangmanLocalizedText('hangmanWrongGuessesLeft', 'wrong guesses left.')}`;
         }
     } else {
         // Mode B: You were guessing
         if (playerWon) {
-            msgEl.textContent = `🎉 You got it! The word was "${gameState.word}"`;
-            detailsEl.textContent = `${gameState.wrongGuesses} wrong guess${gameState.wrongGuesses !== 1 ? 'es' : ''} out of ${gameState.maxWrong} allowed.`;
+            msgEl.textContent = `🎉 ${getHangmanLocalizedText('hangmanYouGotIt', 'You got it! The word was')} "${gameState.word}"`;
+            detailsEl.textContent = `${gameState.wrongGuesses} ${getHangmanLocalizedText('hangmanWrongGuessesLeft', 'wrong guesses left.')}`;
         } else {
-            msgEl.textContent = `💀 Game Over! The word was "${gameState.word}"`;
-            detailsEl.textContent = `You used all ${gameState.maxWrong} wrong guesses.`;
+            msgEl.textContent = `💀 ${getHangmanLocalizedText('hangmanGameOver', 'Game Over!')} ${getHangmanLocalizedText('hangmanYouGotIt', 'The word was')} "${gameState.word}"`;
+            detailsEl.textContent = `${gameState.maxWrong} ${getHangmanLocalizedText('hangmanWrongGuessesLeft', 'wrong guesses left.')}`;
         }
     }
 
     const buttons = [
-        { text: 'Play Again', summary: 'Play Again', onClick: () => initializeGame() },
-        { text: 'Go Back', summary: 'Go Back', onClick: () => goBackToPreviousStep() }
+        { text: getHangmanLocalizedText('hangmanPlayAgain', 'Play Again'), summary: getHangmanLocalizedText('hangmanPlayAgain', 'Play Again'), onClick: () => initializeGame() },
+        { text: getHangmanLocalizedText('hangmanGoBack', 'Go Back'), summary: getHangmanLocalizedText('hangmanGoBack', 'Go Back'), onClick: () => goBackToPreviousStep() }
     ];
     const container = document.querySelector('#game-over-screen .gridContainer');
     displayGridButtons(buttons, container).catch(err => console.error('Error displaying game over buttons:', err));
@@ -1161,8 +1322,8 @@ function goBackToPreviousStep() {
 
 function createGoBackButton() {
     return {
-        text: 'Go Back',
-        summary: 'Go Back',
+        text: getHangmanLocalizedText('hangmanGoBack', 'Go Back'),
+        summary: getHangmanLocalizedText('hangmanGoBack', 'Go Back'),
         onClick: () => goBackToPreviousStep()
     };
 }
@@ -1341,8 +1502,9 @@ function stopWakeWordRecognition() {
 }
 
 // ===== ANNOUNCE / TTS =====
-function announceText(text, recordHistory = false) {
-    return announce(text, 'system', recordHistory, true);
+async function announceText(text, recordHistory = false) {
+    const localizedText = await translateHangmanRuntimeLine(text, hangmanPartnerLocale);
+    return announce(localizedText, 'system', recordHistory, true);
 }
 
 async function announce(textToAnnounce, announcementType = 'system', recordHistory = false, showSplash = false) {
@@ -1368,7 +1530,11 @@ async function processAnnouncementQueue() {
         const response = await authenticatedFetch('/play-audio', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ text: textToAnnounce, routing_target: 'system' })
+            body: JSON.stringify({
+                text: textToAnnounce,
+                routing_target: 'system',
+                language_code_override: (hangmanPartnerLocale && hangmanPartnerLocale.toLowerCase() !== 'en-us') ? hangmanPartnerLocale : null
+            })
         });
         if (!response.ok) throw new Error(`Audio synthesis failed: ${response.status}`);
         const jsonResponse = await response.json();

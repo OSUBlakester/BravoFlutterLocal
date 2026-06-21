@@ -11,9 +11,22 @@ class SightWordService {
   Map<String, dynamic>? _sightWordsData;
   Set<String>? _currentSightWords;
   String _currentGradeLevel = 'pre_k';
+  Future<void>? _initializationFuture;
 
   /// Initialize the service by loading sight words data
   Future<void> initialize() async {
+    if (_sightWordsData != null) {
+      return;
+    }
+    if (_initializationFuture != null) {
+      return _initializationFuture!;
+    }
+
+    _initializationFuture = _doInitialize();
+    return _initializationFuture!;
+  }
+
+  Future<void> _doInitialize() async {
     try {
       final String jsonString = await rootBundle.loadString('assets/dolch_sight_words.json');
       _sightWordsData = jsonDecode(jsonString);
@@ -23,6 +36,8 @@ class SightWordService {
       debugPrint('🔤 SightWordService: Error loading sight words data: $e');
       _sightWordsData = null;
       _currentSightWords = null;
+    } finally {
+      _initializationFuture = null;
     }
   }
 

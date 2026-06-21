@@ -2,6 +2,10 @@
 <html>
 <head>
     <title>Hangman</title>
+    <!-- Firebase SDK for silent token refresh -->
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+    <script src="/static/token-refresh.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css">
     <link rel="stylesheet" href="/static/splash-screen.css">
@@ -440,8 +444,8 @@
             <!-- Category Selection Screen -->
             <div id="category-screen" class="visible-screen">
                 <div class="game-state-display">
-                    <p><strong>Select a Category</strong></p>
-                    <p style="font-size: 0.85rem; color: #64748b;">Choose a category for Hangman</p>
+                    <p><strong id="hangman-category-title">Select a Category</strong></p>
+                    <p id="hangman-category-subtitle" style="font-size: 0.85rem; color: #64748b;">Choose a category for Hangman</p>
                 </div>
                 <div class="gridContainer" style="display: grid; gap: 24px; padding: 24px; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));"></div>
             </div>
@@ -449,8 +453,8 @@
             <!-- Mode Selection Screen -->
             <div id="mode-screen" class="hidden-screen">
                 <div class="game-state-display">
-                    <p><strong>Choose a Game Mode</strong></p>
-                    <p style="font-size: 0.85rem; color: #64748b;">Who is guessing?</p>
+                    <p><strong id="hangman-mode-title">Choose a Game Mode</strong></p>
+                    <p id="hangman-mode-subtitle" style="font-size: 0.85rem; color: #64748b;">Who is guessing?</p>
                 </div>
                 <div class="gridContainer" style="display: grid; gap: 24px; padding: 24px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));"></div>
             </div>
@@ -458,8 +462,8 @@
             <!-- Word Selection Screen (Mode B - I pick word) -->
             <div id="word-screen" class="hidden-screen">
                 <div class="game-state-display">
-                    <p><strong>Pick a Word</strong></p>
-                    <p style="font-size: 0.85rem; color: #64748b;">Choose a word for your partner to guess</p>
+                    <p><strong id="hangman-word-title">Pick a Word</strong></p>
+                    <p id="hangman-word-subtitle" style="font-size: 0.85rem; color: #64748b;">Choose a word for your partner to guess</p>
                 </div>
                 <div class="gridContainer" style="display: grid; gap: 24px; padding: 24px; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));"></div>
             </div>
@@ -469,7 +473,7 @@
                 <div class="game-state-display" id="playing-status">
                     <p><strong id="playing-title">Guess the word!</strong></p>
                     <div class="game-stats">
-                        <div class="stat-badge">Wrong guesses: <span id="wrong-count">0</span>/6</div>
+                        <div class="stat-badge"><span id="wrong-guesses-label">Wrong guesses:</span> <span id="wrong-count">0</span>/6</div>
                     </div>
                 </div>
                 <div class="hangman-play-area">
@@ -481,7 +485,7 @@
                             <div class="word-blanks" id="word-blanks">
                                 <!-- Letter blanks inserted by JS -->
                             </div>
-                            <button id="position-done-btn" style="display: none;">✓ Done</button>
+                            <button id="position-done-btn" style="display: none;">✓ <span id="position-done-label">Done</span></button>
                         </div>
                     </div>
                     <div class="alphabet-grid" id="alphabet-grid">
@@ -495,7 +499,7 @@
             <div id="setup-screen" class="hidden-screen">
                 <div class="game-state-display">
                     <p><strong id="setup-title">Waiting for your partner</strong></p>
-                    <p id="setup-subtitle" style="font-size: 0.85rem; color: #64748b;"></p>
+                    <p id="setup-subtitle" style="font-size: 0.85rem; color: #64748b;">Get ready to play Hangman.</p>
                 </div>
                 <div class="gridContainer" style="display: grid; gap: 24px; padding: 24px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));"></div>
             </div>
@@ -503,7 +507,7 @@
             <!-- Game Over Screen -->
             <div id="game-over-screen" class="hidden-screen">
                 <div class="game-state-display">
-                    <p style="font-size: 1.2rem; font-weight: 600; color: #1e293b; margin-top: 2rem;">Game Over!</p>
+                    <p id="hangman-game-over-title" style="font-size: 1.2rem; font-weight: 600; color: #1e293b; margin-top: 2rem;">Game Over!</p>
                     <p id="game-over-message" style="font-size: 1rem; margin-top: 1rem;"></p>
                     <p id="game-over-details" style="font-size: 0.9rem; margin-top: 1rem;"></p>
                 </div>

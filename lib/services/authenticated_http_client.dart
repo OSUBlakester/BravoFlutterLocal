@@ -24,7 +24,9 @@ class AuthenticatedHttpClient {
 
     if (user != null) {
       try {
-        final token = await user.getIdToken();
+        final token = await user
+            .getIdToken()
+            .timeout(const Duration(seconds: 6));
         if (token != null && token.isNotEmpty) {
           return _rememberValidToken(token);
         }
@@ -33,7 +35,9 @@ class AuthenticatedHttpClient {
       }
 
       try {
-        final forcedToken = await user.getIdToken(true);
+        final forcedToken = await user
+            .getIdToken(true)
+            .timeout(const Duration(seconds: 6));
         if (forcedToken != null && forcedToken.isNotEmpty) {
           return _rememberValidToken(forcedToken);
         }
@@ -86,6 +90,7 @@ class AuthenticatedHttpClient {
         }
 
         final headers = {
+          if (body != null) 'Content-Type': 'application/json',
           ...baseHeaders,
           'Authorization': 'Bearer $idToken',
         };

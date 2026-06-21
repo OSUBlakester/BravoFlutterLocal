@@ -5,10 +5,9 @@
 # Example: ./scripts/deploy_to_ipad.sh prod
 
 ENVIRONMENT=$1
-IPAD_DEVICE_ID="00008110-0012443C0A30A01E"  # Brady's iPad mini
 
 if [ -z "$ENVIRONMENT" ]; then
-    echo "Usage: $0 [dev|test|prod]"
+    echo "Usage: $0 [dev|test|prod] [device_id]"
     echo "Example: $0 prod"
     exit 1
 fi
@@ -23,15 +22,29 @@ echo "📱 Deploying $ENVIRONMENT environment to iPad..."
 
 # Check if iPad is connected
 echo "🔍 Checking for connected devices..."
-flutter devices
+DEVICES_OUTPUT=$(flutter devices)
+echo "$DEVICES_OUTPUT"
 
-if ! flutter devices | grep -q "$IPAD_DEVICE_ID"; then
-    echo "❌ iPad not found. Please make sure Brady's iPad mini is connected and trusted."
+# Auto-detect connected iOS device
+IPAD_DEVICE_ID=$2
+if [ -z "$IPAD_DEVICE_ID" ]; then
+    # Try to find a physically connected iOS device first (excluding wireless)
+    IPAD_DEVICE_ID=$(echo "$DEVICES_OUTPUT" | grep -i "ios" | grep -v "wireless" | head -n 1 | awk -F' • ' '{print $2}' | tr -d ' ')
+    
+    # Fallback to wireless iOS device if no physical device is connected
+    if [ -z "$IPAD_DEVICE_ID" ]; then
+        IPAD_DEVICE_ID=$(echo "$DEVICES_OUTPUT" | grep -i "ios" | head -n 1 | awk -F' • ' '{print $2}' | tr -d ' ')
+    fi
+fi
+
+if [ -z "$IPAD_DEVICE_ID" ]; then
+    echo "❌ No iOS device detected. Please make sure your iPad is connected and trusted."
     echo "💡 Try disconnecting and reconnecting the iPad, then run 'flutter devices' to verify."
     exit 1
 fi
 
-echo "✅ iPad detected: Brady's iPad mini"
+DEVICE_NAME=$(echo "$DEVICES_OUTPUT" | grep "$IPAD_DEVICE_ID" | head -n 1 | awk -F' • ' '{print $1}' | xargs)
+echo "✅ iOS Device detected: $DEVICE_NAME ($IPAD_DEVICE_ID)"
 
 # Switch to the specified environment
 echo "🔄 Switching to $ENVIRONMENT environment..."

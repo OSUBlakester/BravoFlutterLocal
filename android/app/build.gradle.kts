@@ -65,3 +65,12 @@ android {
 flutter {
     source = "../.."
 }
+
+// POC: local LLM native library
+repositories {
+    flatDir { dirs("libs") }
+}
+
+dependencies {
+    implementation(files("libs/llama-cpp-dart.aar"))
+}

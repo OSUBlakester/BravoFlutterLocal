@@ -613,6 +613,11 @@ class _SpellingScanPageState extends State<SpellingScanPage> {
     if (textToClean.trim().isEmpty) return textToClean;
 
     try {
+      final settingsProvider = Provider.of<UserSettingsProvider>(
+        context,
+        listen: false,
+      );
+      final userLanguage = settingsProvider.settings?.userLanguage ?? 'en-US';
       final response = await http.post(
         Uri.parse('${EnvironmentConfig.apiBaseUrl}/api/freestyle/cleanup-text'),
         headers: {
@@ -620,7 +625,10 @@ class _SpellingScanPageState extends State<SpellingScanPage> {
           'X-User-ID': widget.aacUserId,
           'Content-Type': 'application/json',
         },
-        body: json.encode({'text_to_cleanup': textToClean}),
+        body: json.encode({
+          'text_to_cleanup': textToClean,
+          'target_locale': userLanguage,
+        }),
       );
 
       if (response.statusCode != 200) return textToClean;

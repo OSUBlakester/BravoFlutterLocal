@@ -79,6 +79,10 @@
             font-weight: 700;
         }
 
+        body.freestyle-localization-pending .localizable-text {
+            visibility: hidden;
+        }
+
         .image-spinner {
             width: 56px;
             height: 56px;
@@ -89,12 +93,41 @@
             from { transform: rotate(0deg); }
             to { transform: rotate(360deg); }
         }
+
+        .freestyle-top-row {
+            display: grid;
+            grid-template-columns: minmax(140px, 180px) minmax(0, 1fr);
+            gap: 9px;
+            align-items: stretch;
+        }
+
+        .freestyle-exit-standalone {
+            align-self: stretch;
+            min-height: 100%;
+            white-space: normal;
+        }
+
+        .freestyle-exit-standalone.exit-btn {
+            background: #fff1f2;
+            border-color: #fda4af;
+            color: #9f1239;
+        }
+
+        @media (max-width: 700px) {
+            .freestyle-top-row {
+                grid-template-columns: 1fr;
+            }
+
+            .freestyle-exit-standalone {
+                min-height: 42px;
+            }
+        }
     </style>
 </head>
-<body>
+<body class="freestyle-localization-pending">
     <div id="app-container">
         <div class="page-banner">
-            <h1 id="page-title">Free Style Communication</h1>
+            <h1 id="page-title" class="localizable-text">Free Style Communication</h1>
             <div class="admin-toolbar">
                 <button id="lock-icon" title="Admin Toolbar" class="h-8 w-8 flex items-center justify-center text-gray-600 bg-gray-100 rounded-full transition-colors duration-200 text-sm hover:bg-blue-100 hover:text-blue-600">
                     <i class="fas fa-lock"></i>
@@ -133,38 +166,41 @@
         </div>
 
         <main class="compose-page">
-            <section id="action-section" data-section-id="action" class="compose-section scan-section">
-                <h2 class="section-title">Build Space</h2>
-                <div class="current-word-wrap">
-                    <textarea id="current-word" class="current-word-input" rows="3" placeholder="Build your message here..."></textarea>
-                    <div class="word-controls">
-                        <button id="read-creation-btn" class="word-control-btn compose-button read-btn">Speak Display</button>
-                        <button id="exit-creation-btn" class="word-control-btn compose-button exit-btn">Exit Freestyle</button>
-                        <button id="backspace-btn" class="word-control-btn compose-button backspace-btn">Backspace</button>
-                        <button id="clear-word-btn" class="word-control-btn compose-button clear-btn">Clear Display</button>
-                        <button id="ai-edit-btn" class="word-control-btn compose-button ai-edit-btn">Clean Up</button>
-                        <button id="new-row-btn" class="word-control-btn compose-button new-row-btn">New Row</button>
-                        <button id="action-go-back-btn" class="word-control-btn compose-button">Go Back</button>
+            <div class="freestyle-top-row">
+                <button id="exit-creation-btn" class="word-control-btn compose-button exit-btn freestyle-exit-standalone localizable-text">Exit Freestyle</button>
+
+                <section id="action-section" data-section-id="action" class="compose-section scan-section">
+                    <h2 class="section-title localizable-text">Build Space</h2>
+                    <div class="current-word-wrap">
+                        <textarea id="current-word" class="current-word-input" rows="3" placeholder=""></textarea>
+                        <div class="word-controls">
+                            <button id="read-creation-btn" class="word-control-btn compose-button read-btn localizable-text">Speak Display</button>
+                            <button id="backspace-btn" class="word-control-btn compose-button backspace-btn localizable-text">Backspace</button>
+                            <button id="clear-word-btn" class="word-control-btn compose-button clear-btn localizable-text">Clear Display</button>
+                            <button id="ai-edit-btn" class="word-control-btn compose-button ai-edit-btn localizable-text">Clean Up</button>
+                            <button id="new-row-btn" class="word-control-btn compose-button new-row-btn localizable-text">New Row</button>
+                            <button id="action-go-back-btn" class="word-control-btn compose-button localizable-text">Go Back</button>
+                        </div>
                     </div>
-                </div>
-            </section>
+                </section>
+            </div>
 
             <section id="choose-word-section" data-section-id="choose-word" class="compose-section predictions-section scan-section">
-                <h2 class="section-title" id="words-section-title">Suggested Words</h2>
+                <h2 class="section-title localizable-text" id="words-section-title">Suggested Words</h2>
                 <div id="word-predictions" class="word-predictions-grid"></div>
             </section>
 
             <section id="tool-toggle-section" data-section-id="tool-toggle" class="compose-section scan-section">
-                <h2 class="section-title">Tools</h2>
+                <h2 class="section-title localizable-text">Tools</h2>
                 <div class="tool-selector-grid">
-                    <button id="categories-tool-btn" class="tool-select-btn compose-button">Word Categories</button>
-                    <button id="spelling-tool-btn" class="tool-select-btn compose-button">Spelling</button>
-                    <button id="numbers-tool-btn" class="tool-select-btn compose-button">Numbers</button>
+                    <button id="categories-tool-btn" class="tool-select-btn compose-button localizable-text">Word Categories</button>
+                    <button id="spelling-tool-btn" class="tool-select-btn compose-button localizable-text">Spelling</button>
+                    <button id="numbers-tool-btn" class="tool-select-btn compose-button localizable-text">Numbers</button>
                 </div>
             </section>
 
             <section id="tool-panel-section" data-section-id="tool-panel" class="compose-section scan-section" hidden>
-                <h2 class="section-title" id="tool-panel-title">Word Categories</h2>
+                <h2 class="section-title localizable-text" id="tool-panel-title">Word Categories</h2>
                 <div id="category-panel" class="tool-panel-content" hidden>
                     <div id="category-grid" class="category-grid"></div>
                 </div>
@@ -177,7 +213,7 @@
 
     <div id="loading-indicator">
         <img src="/static/images/speech_bubble_spinner.png" alt="Loading..." class="image-spinner">
-        <p>Loading...</p>
+        <p>...</p>
     </div>
 
     <script src="/static/splash-screen.js"></script>

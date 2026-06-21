@@ -15,12 +15,12 @@ class EnvironmentConfig {
   // API Base URLs
   static const String _devApiUrl = 'https://dev.talkwithbravo.com';
   static const String _testApiUrl = 'https://test.talkwithbravo.com';
-  static const String _prodApiUrl = 'https://bravo-aac-api-222892987413.us-central1.run.app';
+  static const String _prodApiUrl = 'https://app.talkwithbravo.com';
   
   // Firebase Web Configuration
   static const Map<Environment, Map<String, String>> _firebaseWebConfig = {
     Environment.dev: {
-      'apiKey': 'AIzaSyBN3usyIJ25HDEoOgHIU2w71K5iUXB2ANk',
+      'apiKey': 'AIzaSyAS7GVK_A34iE56IJoSAN2KbG2w9rxlWTM',
       'authDomain': 'bravo-dev-465400.firebaseapp.com',
       'projectId': 'bravo-dev-465400',
       'storageBucket': 'bravo-dev-465400.firebasestorage.app',
@@ -50,7 +50,7 @@ class EnvironmentConfig {
   // Firebase iOS Configuration
   static const Map<Environment, Map<String, String>> _firebaseIosConfig = {
     Environment.dev: {
-      'apiKey': 'AIzaSyBN3usyIJ25HDEoOgHIU2w71K5iUXB2ANk',
+      'apiKey': 'AIzaSyAS7GVK_A34iE56IJoSAN2KbG2w9rxlWTM',
       'appId': '1:894197055102:ios:3a98ab000ecec15aba222f',
       'messagingSenderId': '894197055102',
       'projectId': 'bravo-dev-465400',

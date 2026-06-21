@@ -1806,7 +1806,16 @@ class ThreadsPageState extends State<ThreadsPage> with RouteAware {
       try {
         final user = FirebaseAuth.instance.currentUser;
         if (user != null) {
-          final refreshedToken = await user.getIdToken(true);
+          String? refreshedToken;
+          try {
+            refreshedToken = await user
+                .getIdToken(true)
+                .timeout(const Duration(seconds: 6));
+          } catch (_) {
+            refreshedToken = await user
+                .getIdToken()
+                .timeout(const Duration(seconds: 4));
+          }
           if (refreshedToken != null && refreshedToken.isNotEmpty) {
             idToken = refreshedToken;
           }

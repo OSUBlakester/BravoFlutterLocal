@@ -20,6 +20,7 @@ import 'services/audio_device_service.dart';
 import 'services/chat_history_service.dart';
 import 'services/authenticated_http_client.dart';
 import 'services/auth_session_manager.dart';
+import 'services/llm_engine.dart';
 import 'services/compose_session_service.dart';
 import 'admin_pages_buttons.dart';
 import 'user_current_admin_page.dart';
@@ -45,8 +46,17 @@ import 'app_loading_page.dart';
 import 'email_page.dart';
 import 'spelling_scan_page.dart';
 import 'numbers_scan_page.dart';
+import 'music_page.dart';
+import 'services/music_playback_service.dart';
+import 'package:intl/intl.dart' hide TextDirection;
 
 bool hasPlayedInitialWaitForSwitchVoicePrompt = false;
+class _InFlightLlmRequest {
+  final String source;
+  final Future<http.Response> future;
+
+  _InFlightLlmRequest({required this.source, required this.future});
+}
 
 String? _safeRobotoCondensed() {
   return null;
@@ -1979,6 +1989,9 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider<AudioDeviceProvider>(
           create: (_) => AudioDeviceProvider(),
         ),
+        ChangeNotifierProvider<MusicPlaybackService>(
+          create: (_) => MusicPlaybackService(),
+        ),
       ],
       child: MaterialApp(
         title: 'Bravo AAC',
@@ -2061,6 +2074,9 @@ class GridPage extends StatefulWidget {
 
 class _GridPageState extends State<GridPage>
     with RouteAware, WidgetsBindingObserver {
+  // --- LLM engine (cloud by default; swap via PocConfig.llmEngineMode) ---
+  final LlmEngine _llmEngine = LlmEngineFactory.getEngine();
+
   // --- Prevent scanning until announcement and grid update are complete ---
   bool _suppressScanning = false;
   // Orientation lock code removed: always landscape left via platform config
@@ -2188,18 +2204,23 @@ class _GridPageState extends State<GridPage>
         listen: false,
       );
 
+      final rawInterjection =
+          (settingsProvider.settings?.wakeWordInterjection ?? '').trim();
       _wakeWordInterjection =
-          (settingsProvider.settings?.wakeWordInterjection ?? 'hey')
-              .trim()
-              .toLowerCase();
-      _wakeWordName = (settingsProvider.settings?.wakeWordName ?? 'bravo')
-          .trim()
-          .toLowerCase();
-      _wakeWordVariants = [
+          rawInterjection.isEmpty ? 'hey' : rawInterjection.toLowerCase();
+      final rawWakeWordName =
+          (settingsProvider.settings?.wakeWordName ?? '').trim();
+      _wakeWordName =
+          rawWakeWordName.isEmpty ? 'bravo' : rawWakeWordName.toLowerCase();
+      final wakeWordVariantsSet = <String>{
         '${_wakeWordInterjection} ${_wakeWordName}',
         '${_wakeWordInterjection}, ${_wakeWordName}',
         '${_wakeWordInterjection},${_wakeWordName}',
-      ];
+        'hey $_wakeWordName',
+        'hey, $_wakeWordName',
+        'hey,$_wakeWordName',
+      };
+      _wakeWordVariants = wakeWordVariantsSet.toList();
 
       // Configure group wake word from settings (defaults to 'hey friends' if not set)
       final groupWakeWord =
@@ -2208,6 +2229,11 @@ class _GridPageState extends State<GridPage>
               .toLowerCase();
       WakeWordService.setGroupWakeWord(
         groupWakeWord.isEmpty ? 'hey friends' : groupWakeWord,
+      );
+
+      // Use partner language locale for wake-word recognition.
+      WakeWordService.setWakeWordLocale(
+        settingsProvider.effectivePartnerLanguage,
       );
 
       debugPrint(
@@ -2286,6 +2312,60 @@ class _GridPageState extends State<GridPage>
     debugPrint('Wake word service callbacks initialized successfully');
   }
 
+  /// Keep the grid wake-word service aligned with current user settings.
+  /// Prevents stale wake-word names/locales when switching users/pages.
+  void _syncGridWakeWordServiceConfig() {
+    final settingsProvider = Provider.of<UserSettingsProvider>(
+      context,
+      listen: false,
+    );
+
+    final rawInterjection =
+        (settingsProvider.settings?.wakeWordInterjection ?? '').trim();
+    _wakeWordInterjection =
+        rawInterjection.isEmpty ? 'hey' : rawInterjection.toLowerCase();
+
+    final rawWakeWordName =
+        (settingsProvider.settings?.wakeWordName ?? '').trim();
+    _wakeWordName =
+        rawWakeWordName.isEmpty ? 'bravo' : rawWakeWordName.toLowerCase();
+
+    final desiredVariantsSet = <String>{
+      '${_wakeWordInterjection} ${_wakeWordName}',
+      '${_wakeWordInterjection}, ${_wakeWordName}',
+      '${_wakeWordInterjection},${_wakeWordName}',
+      'hey $_wakeWordName',
+      'hey, $_wakeWordName',
+      'hey,$_wakeWordName',
+    };
+    _wakeWordVariants = desiredVariantsSet.toList();
+
+    final groupWakeWord =
+        (settingsProvider.settings?.groupWakeWord ?? 'hey friends')
+            .trim()
+            .toLowerCase();
+    WakeWordService.setGroupWakeWord(
+      groupWakeWord.isEmpty ? 'hey friends' : groupWakeWord,
+    );
+    WakeWordService.setWakeWordLocale(settingsProvider.effectivePartnerLanguage);
+
+    final existing = WakeWordService.getCurrentInstance();
+    final shouldRecreate =
+        existing == null ||
+        _wakeWordVariants.any((variant) => !existing.wakeWords.contains(variant));
+
+    if (shouldRecreate) {
+      debugPrint(
+        '[WakeWord] Recreating wake-word service to match current user config: ${_wakeWordVariants.join(" | ")}',
+      );
+      _wakeWordService = WakeWordService(wakeWords: _wakeWordVariants);
+    } else {
+      _wakeWordService = existing;
+    }
+
+    _setupWakeWordCallbacks();
+  }
+
   // Initialize wake word service callbacks - separate method for reuse
   void _initializeWakeWordCallbacks() {
     if (_wakeWordService == null) return;
@@ -2293,6 +2373,9 @@ class _GridPageState extends State<GridPage>
     _wakeWordService!.onWakeWord = (transcript) async {
       final callbackStart = DateTime.now().millisecondsSinceEpoch;
       debugPrint('[TIMER] CALLBACK START: onWakeWord at $callbackStart');
+
+      _questionNoSpeechTimer?.cancel();
+      _questionSpeechDetectedInSession = false;
 
       debugPrint('Wake word detected in transcript: $transcript');
 
@@ -2441,7 +2524,11 @@ class _GridPageState extends State<GridPage>
           '[TIMER] Question listening call START at $questionListenStart',
         );
 
-        await _wakeWordService!.startQuestionListening();
+        // Pass the partner's locale so the recognizer transcribes partner speech correctly.
+        final partnerLocale = mounted
+            ? (Provider.of<UserSettingsProvider>(context, listen: false).effectivePartnerLanguage)
+            : 'en-US';
+        await _wakeWordService!.startQuestionListening(localeId: partnerLocale);
 
         final questionListenEnd = DateTime.now().millisecondsSinceEpoch;
         debugPrint(
@@ -2460,11 +2547,12 @@ class _GridPageState extends State<GridPage>
         return;
       }
 
-      // Set up timeout protection for stuck listening states (reduced to 10 seconds)
-      Timer(const Duration(seconds: 10), () {
-        if (_inQuestionMode && _listeningForQuestion) {
+      // Initial no-speech timeout: only applies before first detected speech.
+      _questionNoSpeechTimer?.cancel();
+      _questionNoSpeechTimer = Timer(const Duration(seconds: 10), () {
+        if (_inQuestionMode && !_questionSpeechDetectedInSession) {
           debugPrint(
-            '[WakeWord] TIMEOUT: Question listening stuck after 10 seconds, forcing reset...',
+            '[WakeWord] TIMEOUT: No speech detected in first 10 seconds, forcing reset...',
           );
 
           // Restore Android notification sounds on timeout
@@ -2495,6 +2583,10 @@ class _GridPageState extends State<GridPage>
                 'Listening timed out. Say "Hey Brady" to try again.';
           });
           _forceRestartWakeWordService();
+        } else {
+          debugPrint(
+            '[WakeWord] Initial no-speech timeout ignored (speech already detected or question mode ended).',
+          );
         }
       });
 
@@ -2510,6 +2602,8 @@ class _GridPageState extends State<GridPage>
     _wakeWordService!.onQuestion = (question) async {
       debugPrint('Question detected: $question');
 
+      _questionNoSpeechTimer?.cancel();
+
       // CRITICAL: Check if widget is still mounted before setState
       if (!mounted) {
         debugPrint(
@@ -2522,29 +2616,75 @@ class _GridPageState extends State<GridPage>
       final wasScanningPaused = _isScanningPaused && _waitingForUserInput;
       debugPrint('onQuestion: Captured paused state: $wasScanningPaused');
 
+      // Translate question from partner's language → user's language so the AAC
+      // user sees the question in their own language and the LLM generates options
+      // in the user's language.
+      String translatedQuestion = question;
+      if (mounted) {
+        final langProvider = Provider.of<UserSettingsProvider>(
+          context,
+          listen: false,
+        );
+        final userLang = langProvider.settings?.userLanguage ?? 'en-US';
+        final partnerLang = langProvider.effectivePartnerLanguage;
+        if (userLang != partnerLang) {
+          String idToken = widget.idToken;
+          try {
+            final token = await AuthenticatedHttpClient.getRefreshedIdToken();
+            if (token != null && token.isNotEmpty) idToken = token;
+          } catch (_) {}
+          translatedQuestion = await _translateForPartner(
+            question,
+            fromLocale: partnerLang,
+            toLocale: userLang,
+            idToken: idToken,
+            aacUserId: widget.aacUserId,
+          );
+          debugPrint('onQuestion: translated "$question" ($partnerLang→$userLang) → "$translatedQuestion"');
+        }
+      }
+
       setState(() {
-        _questionText = question;
-        questionDisplay = question;
+        _questionText = translatedQuestion;
+        questionDisplay = translatedQuestion;
         // Add question to speech history immediately (answer will update this row)
         speechHistory =
-            'Q: $question${speechHistory.isNotEmpty ? '\n' : ''}$speechHistory';
+            'Q: $translatedQuestion${speechHistory.isNotEmpty ? '\n' : ''}$speechHistory';
         _listeningForQuestion = false;
         _isProcessingLLM = true;
         _showBottomStatusText = true;
-        statusMessage = 'Okay, I heard $question. Give me a moment to respond.';
+        statusMessage = 'I heard: $translatedQuestion. Give me a moment to respond.';
         _microphoneListening = false;
       });
 
+      // System announcement confirms to the partner their question was heard
+      // (announceViaBackend handles userLang→partnerLang translation of the phrase).
       await _announceWithTimeout(
         'Okay, I heard $question. Give me a moment to respond.',
         routing: 'system',
         speechRate: 140,
       );
 
+      // Prompt the AAC user in their own language via personal speaker.
+      if (translatedQuestion != question) {
+        await _speakPersonalVoice(translatedQuestion);
+      }
+
       await Future.delayed(const Duration(milliseconds: 300));
       _inQuestionMode = false;
 
-      await _getLLMResponse(question, wasInPausedState: wasScanningPaused);
+      await _getLLMResponse(translatedQuestion, wasInPausedState: wasScanningPaused);
+    };
+
+    _wakeWordService!.onTimeout = () {
+      _questionNoSpeechTimer?.cancel();
+      _questionSpeechDetectedInSession = false;
+      _inQuestionMode = false;
+      if (!mounted) return;
+      setState(() {
+        _listeningForQuestion = false;
+        _microphoneListening = false;
+      });
     };
 
     // Enhanced restart logic wrapper
@@ -2563,6 +2703,8 @@ class _GridPageState extends State<GridPage>
 
       // Special handling for timeout announcements
       if (msg.contains("I didn't hear anything") || msg.contains("Try again")) {
+        _questionNoSpeechTimer?.cancel();
+        _questionSpeechDetectedInSession = false;
         debugPrint(
           '🟢 Main.dart - Detected timeout announcement, PAUSING wake word service first',
         );
@@ -2680,6 +2822,14 @@ class _GridPageState extends State<GridPage>
 
     // Add callback for first speech detection to reset audio routing
     _wakeWordService!.onFirstSpeechDetected = () async {
+      if (!_questionSpeechDetectedInSession) {
+        _questionSpeechDetectedInSession = true;
+        _questionNoSpeechTimer?.cancel();
+        debugPrint(
+          '[WakeWord] Confirmed first speech detected; initial no-speech timeout cancelled.',
+        );
+      }
+
       debugPrint(
         '[WakeWord] First speech detected - SKIPPING audio routing reset to maintain transcription accuracy',
       );
@@ -2743,6 +2893,8 @@ class _GridPageState extends State<GridPage>
   // Add a comprehensive wake word service restart method
   Future<void> _forceRestartWakeWordService() async {
     debugPrint('[WakeWord] _forceRestartWakeWordService called');
+
+    _syncGridWakeWordServiceConfig();
 
     // Check if wake word should be active before attempting restart
     if (!WakeWordService.wakeWordShouldBeActive) {
@@ -3199,6 +3351,219 @@ class _GridPageState extends State<GridPage>
       '🔍 RESULT: Returning rawOptions unchanged (type: ${rawOptions.runtimeType})',
     );
     return rawOptions;
+  }
+
+  List<Map<String, dynamic>> _coerceLlmOptions(dynamic parsedOptions) {
+    if (parsedOptions is! List) return [];
+
+    final normalized = <Map<String, dynamic>>[];
+    for (final item in parsedOptions) {
+      if (item is! Map) continue;
+
+      final summaryRaw = item['summary'];
+      dynamic optionRaw = item['option'];
+
+      if (optionRaw == null) {
+        final otherKey = item.keys
+            .map((key) => key.toString())
+            .firstWhere(
+              (key) => key != 'summary' && key != 'keywords',
+              orElse: () => '',
+            );
+        if (otherKey.isNotEmpty) {
+          optionRaw = item[otherKey];
+        }
+      }
+
+      if (summaryRaw == null || optionRaw == null) {
+        continue;
+      }
+
+      final optionText = optionRaw.toString().trim();
+      final summaryText = summaryRaw.toString().trim();
+      if (optionText.isEmpty) continue;
+
+      final rawKeywords = item['keywords'];
+      final keywords = rawKeywords is List
+          ? rawKeywords
+                .map((e) => e.toString().trim())
+                .where((e) => e.isNotEmpty)
+                .take(5)
+                .toList()
+          : <String>[];
+
+      normalized.add({
+        'option': optionText,
+        'summary': summaryText,
+        'keywords': keywords,
+      });
+    }
+
+    return normalized;
+  }
+
+  List<Map<String, dynamic>> _dedupeLlmOptions(
+    List<Map<String, dynamic>> options,
+  ) {
+    final seen = <String>{};
+    final deduped = <Map<String, dynamic>>[];
+
+    for (final item in options) {
+      final optionText = (item['option'] ?? '').toString().trim();
+      if (optionText.isEmpty) continue;
+      final key = _normalizeForComparison(optionText);
+      if (key.isEmpty || seen.contains(key)) continue;
+      seen.add(key);
+      deduped.add(item);
+    }
+
+    return deduped;
+  }
+
+  Future<List<Map<String, dynamic>>> _ensureRequestedLlmOptionCount({
+    required List<Map<String, dynamic>> parsedOptions,
+    required int requestedCount,
+    required String originalPrompt,
+    required String userId,
+    required String contextTag,
+  }) async {
+    final deduped = _dedupeLlmOptions(parsedOptions);
+    if (requestedCount <= 0) {
+      return deduped;
+    }
+    if (deduped.length >= requestedCount) {
+      return deduped.take(requestedCount).toList();
+    }
+
+    // Loop up to 2 top-up attempts so that a single underfilled top-up response
+    // doesn't silently leave us short of the requested count.
+    var current = deduped;
+    for (int attempt = 1; attempt <= 2 && current.length < requestedCount; attempt++) {
+      final missingCount = requestedCount - current.length;
+      final existingOptions = current
+          .map((e) => (e['option'] ?? '').toString().trim())
+          .where((e) => e.isNotEmpty)
+          .toList();
+
+      debugPrint(
+        '🤖 [$contextTag] Option underfill detected (attempt $attempt): got ${current.length}/$requestedCount. Requesting $missingCount top-up option(s).',
+      );
+
+      // Ask for a small buffer above the missing count to absorb dedup losses.
+      final topUpAsk = missingCount + 2;
+      final topUpPrompt =
+          'You previously returned ${current.length} options, but I require exactly $requestedCount total options.\n'
+          'Generate exactly $topUpAsk ADDITIONAL unique options for the same request.\n'
+          'Do not repeat any of these existing options:\n'
+          '${existingOptions.join('\n')}\n\n'
+          'Original request:\n'
+          '$originalPrompt\n\n'
+          'Return ONLY a valid JSON list where each item has "option", "summary", and "keywords" keys.';
+
+      try {
+        final topUpStart = DateTime.now();
+        final topUpResponse = await _queryLlmWithDedup(
+          body: _buildLlmRequestBody(topUpPrompt),
+          userId: userId,
+          timeoutSeconds: 20,
+          source: 'top-up',
+        );
+        final topUpMs = DateTime.now().difference(topUpStart).inMilliseconds;
+        debugPrint(
+          '🤖 [$contextTag] Top-up response status=${topUpResponse.statusCode} in ${topUpMs}ms',
+        );
+
+        if (topUpResponse.statusCode != 200) {
+          break;
+        }
+
+        var topUpBody = topUpResponse.body;
+        if (topUpBody.contains('```json')) {
+          topUpBody = topUpBody
+              .replaceAll('```json', '')
+              .replaceAll('```', '')
+              .trim();
+        }
+
+        final parsedTopUp = _parseLLMResponse(json.decode(topUpBody));
+        current = _dedupeLlmOptions([
+          ...current,
+          ..._coerceLlmOptions(parsedTopUp),
+        ]);
+
+        debugPrint(
+          '🤖 [$contextTag] After top-up attempt $attempt: ${current.length}/$requestedCount option(s).',
+        );
+      } catch (e) {
+        debugPrint('🤖 [$contextTag] Top-up attempt $attempt failed: $e');
+        break;
+      }
+    }
+
+    return current.take(requestedCount).toList();
+  }
+
+  Future<List<Map<String, dynamic>>> _topUpButtonOptionsOnce({
+    required List<Map<String, dynamic>> parsedOptions,
+    required int requestedCount,
+    required String originalPrompt,
+    required String userId,
+  }) async {
+    if (requestedCount <= 0 || parsedOptions.length >= requestedCount) {
+      return parsedOptions.take(requestedCount).toList();
+    }
+
+    final missingCount = requestedCount - parsedOptions.length;
+    final existingOptions = parsedOptions
+        .map((e) => (e['option'] ?? '').toString().trim())
+        .where((e) => e.isNotEmpty)
+        .toList();
+
+    final topUpPrompt =
+        'You previously returned ${parsedOptions.length} options, but I need exactly $requestedCount total options.\n'
+        'Generate exactly $missingCount additional options for the same request.\n'
+        'Avoid repeating these existing options:\n'
+        '${existingOptions.join('\n')}\n\n'
+        'Original request:\n'
+        '$originalPrompt\n\n'
+        'Return ONLY a valid JSON list where each item has "option", "summary", and "keywords" keys.';
+
+    try {
+      final topUpStart = DateTime.now();
+      final response = await _queryLlmWithDedup(
+        body: _buildLlmRequestBody(topUpPrompt),
+        userId: userId,
+        timeoutSeconds: 20,
+        source: 'top-up',
+      );
+      final topUpMs = DateTime.now().difference(topUpStart).inMilliseconds;
+      debugPrint(
+        '🤖 [button-query] one-shot top-up status=${response.statusCode} in ${topUpMs}ms',
+      );
+
+      if (response.statusCode != 200) {
+        return parsedOptions.take(requestedCount).toList();
+      }
+
+      var body = response.body;
+      if (body.contains('```json')) {
+        body = body.replaceAll('```json', '').replaceAll('```', '').trim();
+      }
+
+      final parsedTopUp = _parseLLMResponse(json.decode(body));
+      final merged = <Map<String, dynamic>>[
+        ...parsedOptions,
+        ..._coerceLlmOptions(parsedTopUp),
+      ];
+
+      debugPrint(
+        '🤖 [button-query] after one-shot top-up: ${merged.length}/$requestedCount',
+      );
+      return merged.take(requestedCount).toList();
+    } catch (e) {
+      debugPrint('🤖 [button-query] one-shot top-up failed: $e');
+      return parsedOptions.take(requestedCount).toList();
+    }
   }
 
   void _resetFollowUpConversation() {
@@ -3873,9 +4238,10 @@ class _GridPageState extends State<GridPage>
       final exclusionLine = excludedOptionsText.trim().isNotEmpty
           ? 'Avoid repeating these existing options: "$excludedOptionsText".\n'
           : '';
+      final languageInstruction = _getUserLanguageInstruction();
       return '''
   AAC COMPOSE MODE - GENERATING THE USER'S NEXT WRITTEN OPTIONS
-
+${languageInstruction.isNotEmpty ? '\n$languageInstruction\n' : ''}
   SCENARIO:
   The user is actively writing a document using AAC.
   This is written composition for someone who may NOT be physically present.
@@ -3903,7 +4269,7 @@ class _GridPageState extends State<GridPage>
   Return ONLY a JSON list where each item has "option", "summary", and "keywords" keys.
   The "option" key should contain the FULL option text.
   $summaryInstruction
-  The "keywords" key should contain 3-5 words that match available symbols. Focus on concrete, simple words.
+  The "keywords" key should contain 3-5 simple, concrete English words that match available symbols. ALWAYS in English, even if the option/summary is in another language.
   ''';
     }
     final summaryInstruction = useSummary
@@ -3969,10 +4335,11 @@ RULES FOR GENERATION:
 7. Include at least 4 partner-engagement QUESTIONS that end with "?"
 
 $moodLine$exclusionLine
+${_getUserLanguageInstruction()}
 Return ONLY a JSON list where each item has "option", "summary", and "keywords" keys.
 The "option" key should contain the FULL option text.
 $summaryInstruction
-The "keywords" key should contain 3-5 words that match available symbols. Focus on concrete, simple words.
+The "keywords" key should contain 3-5 simple, concrete English words that match available symbols. ALWAYS in English, even if the option/summary is in another language.
 ''';
   }
 
@@ -3981,7 +4348,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
   ) {
     final buttons = <Map<String, dynamic>>[];
     buttons.add({
-      'text': 'Home',
+      'text': _localizeUiLabel('Home'),
       'speechPhrase': 'Home',
       'isLLMGenerated': true,
       'llmSpecial': 'home',
@@ -4015,7 +4382,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       });
     }
     buttons.add({
-      'text': 'Free Style',
+      'text': _localizeUiLabel('Free Style'),
       'speechPhrase': 'Free Style',
       'isLLMGenerated': true,
       'llmSpecial': 'freeStyle',
@@ -4028,7 +4395,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       'enablePictograms': true,
     });
     buttons.add({
-      'text': 'Something Else',
+      'text': _localizeUiLabel('Something Else'),
       'speechPhrase': 'Something Else',
       'isLLMGenerated': true,
       'llmSpecial': 'somethingElse',
@@ -4079,15 +4446,11 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       excludedOptionsText: excludedOptionsText,
     );
 
-    final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
-      'POST',
-      '${EnvironmentConfig.apiBaseUrl}/llm',
-      baseHeaders: {
-        'X-User-ID': widget.aacUserId,
-        'Content-Type': 'application/json',
-      },
-      body: json.encode(_buildLlmRequestBody(followUpPrompt)),
+    final response = await _queryLlmWithDedup(
+      body: _buildLlmRequestBody(followUpPrompt),
+      userId: widget.aacUserId,
       timeoutSeconds: 30,
+      source: 'follow-up',
     );
 
     if (response.statusCode != 200) {
@@ -4195,6 +4558,25 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       return;
     }
 
+    if (_isHandlingButtonActionFlow) {
+      debugPrint(
+        'maybeStartScanning: button action flow in progress, blocking scan restart',
+      );
+      return;
+    }
+
+    if (_isProcessingLLM) {
+      debugPrint('maybeStartScanning: LLM processing in progress, skipping');
+      return;
+    }
+
+    if (_isAnnouncementPlaying) {
+      debugPrint(
+        'maybeStartScanning: announcement in progress, skipping scan start',
+      );
+      return;
+    }
+
     final settingsProvider = Provider.of<UserSettingsProvider>(
       context,
       listen: false,
@@ -4234,12 +4616,22 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       if (!hasPlayedInitialWaitForSwitchVoicePrompt) {
         unawaited(() async {
           await _speakPersonalVoice('Press switch to begin scanning');
-          await _playWaitForSwitchNotification();
+          if (_shouldPlayWaitForSwitchChimeForCurrentGrid()) {
+            await _playWaitForSwitchNotification();
+          } else {
+            debugPrint(
+              'maybeStartScanning: Skipping wait chime for non-LLM grid',
+            );
+          }
         }());
         hasPlayedInitialWaitForSwitchVoicePrompt = true;
         _hasPlayedWaitPromptThisSession = true;
       } else {
-        unawaited(_playWaitForSwitchNotification());
+        if (_shouldPlayWaitForSwitchChimeForCurrentGrid()) {
+          unawaited(_playWaitForSwitchNotification());
+        } else {
+          debugPrint('maybeStartScanning: Skipping wait chime for non-LLM grid');
+        }
       }
 
       return; // IMPORTANT: Don't start scanning yet, wait for switch press
@@ -4250,7 +4642,22 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
     _startAuditoryScanning();
   }
 
+  bool _shouldPlayWaitForSwitchChimeForCurrentGrid() {
+    return gridButtons.any((button) => button['isLLMGenerated'] == true);
+  }
+
   Future<void> _playWaitForSwitchNotification() async {
+    final settingsProvider = Provider.of<UserSettingsProvider>(
+      context,
+      listen: false,
+    );
+    final playChime =
+        settingsProvider.settings?.playWaitForSwitchChime ?? false;
+    if (!playChime) {
+      debugPrint('waitForSwitchNotification: Chime disabled in settings');
+      return;
+    }
+
     final now = DateTime.now();
     if (_lastWaitForSwitchNotificationAt != null &&
         now.difference(_lastWaitForSwitchNotificationAt!).inMilliseconds <
@@ -4264,7 +4671,36 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
 
     final player = _createTrackedAudioPlayer('wait_for_switch_notification');
     try {
-      await player.setAsset('assets/notification_v2.mp3');
+      // Match routing used by personal prompts so the chime plays on the
+      // same output path (Bluetooth/default personal route).
+      if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+        try {
+          final platform = MethodChannel('audio_routing');
+          if (Platform.isIOS) {
+            await platform.invokeMethod('routeToPersonal');
+          } else {
+            await platform.invokeMethod('resetToDefault');
+          }
+        } catch (e) {
+          debugPrint(
+            'waitForSwitchNotification: Personal routing setup failed (non-critical): $e',
+          );
+        }
+      }
+
+      final personalVolume = await _getEffectivePersonalVolume();
+      // Chimes are typically mastered louder than TTS voice. Apply a
+      // compensation factor so perceived loudness matches personal prompts.
+      const chimeCompensation = 0.18;
+      const chimeMaxCap = 0.16;
+      final chimeVolume = ((personalVolume / 10.0) * chimeCompensation)
+          .clamp(0.0, chimeMaxCap);
+      debugPrint(
+        'waitForSwitchNotification: Applying personal volume $personalVolume/10 with compensation $chimeCompensation and max cap $chimeMaxCap (level: $chimeVolume)',
+      );
+
+      await player.setAsset('assets/notification.mp3');
+      await player.setVolume(chimeVolume);
       await player.play();
       await player.playerStateStream
           .firstWhere(
@@ -4285,6 +4721,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
     if (ModalRoute.of(context)?.isCurrent == false) return false;
     if (_suppressScanning) return false;
     if (_isHandlingSwitchSelection) return false;
+    if (_isHandlingButtonActionFlow) return false;
     if (_isScanningPaused && _waitingForUserInput) return false;
     if (_waitingForInitialSwitch) return false;
     if (_isProcessingLLM || _inQuestionMode || _listeningForQuestion) {
@@ -4342,6 +4779,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
     if (!_shouldAutoScanBeRunning()) return;
 
     _scanRecoveryInProgress = true;
+    _scanStepInProgress = false; // Reset progress flag on recovery
     try {
       debugPrint('scanRecovery: attempting recovery (reason=$reason)');
       scanningTimer?.cancel();
@@ -4367,12 +4805,30 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
 
   void _runScanStepSafe(String source) {
     if (!mounted) return;
+    if (_scanStepInProgress) {
+      debugPrint('scanStepSafe: skipping overlapping scan step from $source');
+      return;
+    }
+    _scanStepInProgress = true;
     _lastScanStepAt = DateTime.now();
+
+    final settingsProvider = Provider.of<UserSettingsProvider>(
+      context,
+      listen: false,
+    );
+    final delay = settingsProvider.settings?.scanDelay ?? 3500;
+    final timeoutDuration = Duration(milliseconds: (delay + 1500).clamp(4000, 15000));
+
     unawaited(
-      _scanStep().catchError((error, stackTrace) {
-        debugPrint('scanStepSafe: error from $source: $error');
-        _recoverAuditoryScanning('scan_step_error_$source');
-      }),
+      _scanStep()
+          .timeout(timeoutDuration)
+          .catchError((error, stackTrace) {
+            debugPrint('scanStepSafe: error from $source: $error');
+            _recoverAuditoryScanning('scan_step_error_$source');
+          })
+          .whenComplete(() {
+            _scanStepInProgress = false;
+          }),
     );
   }
 
@@ -4380,6 +4836,14 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
     debugPrint(
       'startAuditoryScanning: called, isScanning=' + isScanning.toString(),
     );
+    _scanStepInProgress = false; // Reset progress flag on start
+
+    if (_isHandlingButtonActionFlow || _suppressScanning || _isAnnouncementPlaying) {
+      debugPrint(
+        'startAuditoryScanning: blocked (buttonAction=$_isHandlingButtonActionFlow, suppress=$_suppressScanning, announcement=$_isAnnouncementPlaying)',
+      );
+      return;
+    }
 
     final settingsProvider = Provider.of<UserSettingsProvider>(
       context,
@@ -4476,6 +4940,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
 
     setState(() {
       isScanning = false;
+      _scanStepInProgress = false; // Reset progress flag on stop
       scanningTimer?.cancel();
       _scanWatchdogTimer?.cancel();
       scanningIndex = null;
@@ -4502,43 +4967,69 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
 
   Future<void> _resumeScanning() async {
     debugPrint('resumeScanning: called');
-    if (!_isScanningPaused) return;
+    if (!_isScanningPaused || _isResumeInProgress) return;
+    _isResumeInProgress = true;
 
-    setState(() {
-      _isScanningPaused = false;
-      _waitingForUserInput = false;
-      _currentScanCycle = 0; // Reset cycle counter when resuming
-    });
+    try {
+      // Keep paused state during resume announcements so watchdog does not
+      // attempt an auto-recovery and create a competing scan timer.
+      _scanWatchdogTimer?.cancel();
+      scanningTimer?.cancel();
+      _scanStepInProgress = false; // Reset progress flag on resume
 
-    // Play "Scanning resumed" using the same voice as button scanning
-    await _speakPersonalVoice("Scanning resumed");
+      // Play "Scanning resumed" using the same voice as button scanning
+      await _speakPersonalVoice("Scanning resumed");
 
-    // Speak the current button (where we paused) before starting the timer
-    final definedButtons = _effectiveGridButtons();
-    if (definedButtons.isNotEmpty &&
-        scanningIndex != null &&
-        scanningIndex! < definedButtons.length) {
-      final btn = definedButtons[scanningIndex!];
-      await _speakPersonalVoice(
-        btn['text'] ?? btn['summary'] ?? btn['option'] ?? '',
+      // Speak the current button (where we paused) before starting the timer
+      final definedButtons = _effectiveGridButtons();
+      if (definedButtons.isNotEmpty &&
+          scanningIndex != null &&
+          scanningIndex! < definedButtons.length) {
+        final btn = definedButtons[scanningIndex!];
+        await _speakPersonalVoice(
+          btn['text'] ?? btn['summary'] ?? btn['option'] ?? '',
+        );
+      }
+
+      // Restart the scanning timer
+      final settingsProvider = Provider.of<UserSettingsProvider>(
+        context,
+        listen: false,
       );
-    }
+      int delay = settingsProvider.settings?.scanDelay ?? 3500;
 
-    // Restart the scanning timer
-    final settingsProvider = Provider.of<UserSettingsProvider>(
-      context,
-      listen: false,
-    );
-    int delay = settingsProvider.settings?.scanDelay ?? 3500;
-    scanningTimer = Timer.periodic(
-      Duration(milliseconds: delay),
-      (_) => _runScanStepSafe('resume_periodic'),
-    );
-    _ensureScanWatchdogRunning();
+      if (!mounted) return;
+      setState(() {
+        _isScanningPaused = false;
+        _waitingForUserInput = false;
+        _currentScanCycle = 0; // Reset cycle counter when resuming
+      });
+      _lastScanStepAt = DateTime.now();
+
+      scanningTimer = Timer.periodic(
+        Duration(milliseconds: delay),
+        (_) => _runScanStepSafe('resume_periodic'),
+      );
+      _ensureScanWatchdogRunning();
+    } finally {
+      _isResumeInProgress = false;
+    }
   }
 
   Future<void> _scanStep() async {
     debugPrint('scanStep: called');
+
+    if (ModalRoute.of(context)?.isCurrent == false) {
+      debugPrint('scanStep: main page is not the current route, ignoring scan step');
+      return;
+    }
+
+    if (_isHandlingButtonActionFlow || _suppressScanning || _isAnnouncementPlaying) {
+      debugPrint(
+        'scanStep: blocked (buttonAction=$_isHandlingButtonActionFlow, suppress=$_suppressScanning, announcement=$_isAnnouncementPlaying)',
+      );
+      return;
+    }
 
     // Re-suppress Android notification sounds during each scan step
     if (!kIsWeb && Platform.isAndroid) {
@@ -4571,19 +5062,21 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
     );
     final scanLoopLimit = settingsProvider.settings?.scanLoopLimit ?? 3;
 
+    final previousScanIndex = scanningIndex;
     setState(() {
-      scanningIndex = scanningIndex == null
+      scanningIndex = previousScanIndex == null
           ? 0
-          : (scanningIndex! + 1) % definedButtons.length;
+          : (previousScanIndex + 1) % definedButtons.length;
 
-      // Check if we've completed a full cycle (back to index 0)
-      if (scanningIndex == 0 && _currentScanCycle > 0) {
-        _currentScanCycle++;
-        debugPrint('scanStep: Completed scan cycle $_currentScanCycle');
-      } else if (scanningIndex == 0) {
-        // First time reaching index 0, start counting cycles
-        _currentScanCycle = 1;
-        debugPrint('scanStep: Starting scan cycle 1');
+      // Only count a completed cycle when we truly wrap from a previous index.
+      if (scanningIndex == 0) {
+        if (previousScanIndex == null || previousScanIndex < 0) {
+          _currentScanCycle = 1;
+          debugPrint('scanStep: Starting scan cycle 1');
+        } else {
+          _currentScanCycle++;
+          debugPrint('scanStep: Completed scan cycle $_currentScanCycle');
+        }
       }
     });
 
@@ -4671,6 +5164,8 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
 
   int? scanningIndex;
   Timer? scanningTimer;
+  Timer? _scheduleCheckTimer;
+  final Set<String> _handledSchedules = {};
   FocusNode? gridFocusNode;
   bool isScanning = false;
 
@@ -4679,14 +5174,23 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
   bool _isScanningPaused = false; // Track if scanning is paused
   bool _isAnnouncementPlaying =
       false; // Track if announcement is currently playing
+    bool _hasPrimedFirstSystemAnnouncement =
+      false; // One-time guard to stabilize first system announcement routing
   bool _waitingForUserInput =
       false; // Track if we're waiting for user to resume
+  bool _scanStepInProgress = false; // Prevent overlapping scan steps
+  bool _isResumeInProgress = false; // Prevent concurrent resume execution
 
   // Wait-for-switch feature tracking
   bool _waitingForInitialSwitch =
       false; // Track if waiting for initial switch press to start scanning
   bool _switchStartRequested =
       false; // Track explicit switch press for scan start
+    bool _suppressDidPopNextRestart =
+      false; // Prevent duplicate scan restart when compose flow controls restart timing
+    bool _isPageVisible = true; // Track if page is active (not hidden by another route)
+    bool _isHandlingButtonActionFlow =
+      false; // Prevent scanning while a button action flow is in progress
   bool _hasPlayedWaitPromptThisSession =
       false; // Track if we've already played the wait-for-switch prompt (only play once per session)
   DateTime? _lastWaitForSwitchNotificationAt;
@@ -4707,6 +5211,208 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
   String? _lastLLMQuery; // Store last query for retry
   Map<String, dynamic>? _lastLLMButtonData; // Store button data for retry
   bool _lastWasScanningPaused = false; // Store scanning state for retry
+  final Map<String, _InFlightLlmRequest> _llmInFlightRequests = {};
+  final Map<String, DateTime> _llmPrefetchHistory = {};
+  final Map<String, String> _translationCache = {};
+  Timer? _llmPrefetchTimer;
+  static const int _llmPrefetchMaxButtonsPerPage = 2;
+  static const Duration _llmPrefetchDelay = Duration(milliseconds: 300);
+  static const Duration _llmPrefetchHistoryTtl = Duration(minutes: 3);
+
+  String _getUserLanguageInstruction() {
+    final locale = mounted
+        ? (Provider.of<UserSettingsProvider>(context, listen: false).settings?.userLanguage ?? 'en-US')
+        : (_settingsProvider?.settings?.userLanguage ?? 'en-US');
+    if (locale == 'en-US') return '';
+    return 'IMPORTANT LANGUAGE RULE: Return the "option" and "summary" values in $locale only. '
+        'Even if the prompt or context text is in another language, translate internally and return $locale output for those fields. '
+        'The "keywords" field MUST ALWAYS be in English (en-US) regardless of the option language — keywords are used to find images in an English image library. ';
+  }
+
+  static const _uiLabelTranslations = <String, Map<String, String>>{
+    'Free Style': {
+      'es-US': 'Estilo libre',
+      'fr-FR': 'Style libre',
+      'de-DE': 'Freies Sprechen',
+      'it-IT': 'Stile libero',
+      'pt-BR': 'Estilo livre',
+      'ar-XA': 'أسلوب حر',
+    },
+    'Something Else': {
+      'es-US': 'Algo más',
+      'fr-FR': 'Autre chose',
+      'de-DE': 'Etwas anderes',
+      'it-IT': 'Qualcos\'altro',
+      'pt-BR': 'Outra coisa',
+      'ar-XA': 'شيء آخر',
+    },
+    'Go Back': {
+      'es-US': 'Regresar',
+      'fr-FR': 'Retour',
+      'de-DE': 'Zurück',
+      'it-IT': 'Indietro',
+      'pt-BR': 'Voltar',
+      'ar-XA': 'رجوع',
+    },
+    'Home': {
+      'es-US': 'Inicio',
+      'fr-FR': 'Accueil',
+      'de-DE': 'Startseite',
+      'it-IT': 'Home',
+      'pt-BR': 'Início',
+      'ar-XA': 'الرئيسية',
+    },
+    'Please ask me again': {
+      'es-US': 'Por favor, pregúntame de nuevo',
+      'fr-FR': 'Pose-moi la question à nouveau',
+      'de-DE': 'Bitte frag mich nochmal',
+      'it-IT': 'Per favore, ripetimielo',
+      'pt-BR': 'Por favor, pergunte-me novamente',
+      'ar-XA': 'من فضلك اسألني مجدداً',
+    },
+  };
+
+  String _localizeUiLabel(String label) {
+    final locale = _settingsProvider?.settings?.userLanguage ?? 'en-US';
+    return _uiLabelTranslations[label]?[locale] ?? label;
+  }
+
+  String _buildButtonLlmPrompt({
+    required String llmQuery,
+    required bool useSummary,
+  }) {
+    // Match the web grid prompt style so summary quality is consistent across clients.
+    // We explicitly request option/summary/keywords JSON and concise summaries.
+    final rawPrompt = _composeSession.active
+        ? _sanitizeComposePrompt(llmQuery)
+        : llmQuery;
+
+    final llmOptions = _settingsProvider?.settings?.llmOptions ?? 10;
+
+    final summaryOverride = useSummary
+        ? 'If the generated option is more than 5 words, the "summary" key should be a 3-5 word abbreviation of each option, including the exact key words from the option. If the option is 5 words or less, the "summary" key should contain the exact same FULL text as the "option" key.'
+        : 'The "summary" key should contain the exact same FULL text as the "option" key.';
+
+    final languageInstruction = _getUserLanguageInstruction();
+
+    return '''
+Generate up to "$llmOptions" short, single-phrase options for this AAC context:
+"${rawPrompt.trim()}"
+
+Do not include introductions or conclusions.
+Each option should be a clear, selectable phrase for AAC use.
+Return ONLY a JSON list where each item has "option", "summary", and "keywords" keys.
+The "option" key should contain the FULL option text.
+$summaryOverride
+The "keywords" key should contain 3-5 simple, concrete English words that match available symbols. ALWAYS in English, even if the option/summary is in another language.
+$languageInstruction${_getComposePromptContext()}
+Example: [{"option": "I need a break", "summary": "Need a break", "keywords": ["break", "rest", "pause"]}]
+''';
+  }
+
+  String _buildLlmRequestKey(Map<String, dynamic> body, String userId) {
+    return '$userId:${json.encode(body)}';
+  }
+
+  void _pruneLlmPrefetchHistory() {
+    final cutoff = DateTime.now().subtract(_llmPrefetchHistoryTtl);
+    _llmPrefetchHistory.removeWhere((_, ts) => ts.isBefore(cutoff));
+  }
+
+  void _cancelScheduledLlmPrefetch([String reason = 'interactive request']) {
+    if (_llmPrefetchTimer != null) {
+      _llmPrefetchTimer?.cancel();
+      _llmPrefetchTimer = null;
+      debugPrint('🛑 Cancelled scheduled LLM prefetch: $reason');
+    }
+  }
+
+  Future<http.Response> _queryLlmWithDedup({
+    required Map<String, dynamic> body,
+    required String userId,
+    int timeoutSeconds = 30,
+    String source = 'interactive',
+  }) {
+    if (source != 'prefetch') {
+      _cancelScheduledLlmPrefetch('$source request started');
+    }
+
+    final requestKey = _buildLlmRequestKey(body, userId);
+    final existing = _llmInFlightRequests[requestKey];
+    if (existing != null) {
+      debugPrint(
+        '♻️ Reusing in-flight /llm request (existing=${existing.source}, requested=$source) for body length ${json.encode(body).length}',
+      );
+      return existing.future;
+    }
+
+    final future = _llmEngine.query(
+      body: body,
+      userId: userId,
+      timeoutSeconds: timeoutSeconds,
+    );
+    final entry = _InFlightLlmRequest(source: source, future: future);
+    _llmInFlightRequests[requestKey] = entry;
+
+    return future.whenComplete(() {
+      if (_llmInFlightRequests[requestKey] == entry) {
+        _llmInFlightRequests.remove(requestKey);
+      }
+    });
+  }
+
+  void _scheduleLlmPrefetchForVisibleButtons(List<Map<String, dynamic>> buttons) {
+    if (_composeSession.active || _isProcessingLLM || !mounted) return;
+
+    _cancelScheduledLlmPrefetch('reschedule');
+    _llmPrefetchTimer = Timer(_llmPrefetchDelay, () async {
+      try {
+        final settingsProvider = Provider.of<UserSettingsProvider>(
+          context,
+          listen: false,
+        );
+        final useSummary =
+            settingsProvider.settings?.useShortSummaryOnButtons ?? false;
+
+        _pruneLlmPrefetchHistory();
+        final llmButtons = buttons
+            .where((btn) => ((btn['LLMQuery'] ?? '').toString().trim().isNotEmpty))
+            .take(_llmPrefetchMaxButtonsPerPage)
+            .toList();
+
+        for (final btn in llmButtons) {
+          final llmQuery = (btn['LLMQuery'] ?? '').toString().trim();
+          if (llmQuery.isEmpty) continue;
+
+          final prompt = _buildButtonLlmPrompt(
+            llmQuery: llmQuery,
+            useSummary: useSummary,
+          );
+          final body = _buildLlmRequestBody(prompt);
+          final key = _buildLlmRequestKey(body, widget.aacUserId);
+          if (_llmPrefetchHistory.containsKey(key)) continue;
+
+          _llmPrefetchHistory[key] = DateTime.now();
+          unawaited(
+            _queryLlmWithDedup(
+              body: body,
+              userId: widget.aacUserId,
+              timeoutSeconds: 20,
+              source: 'prefetch',
+            ).then((response) {
+              debugPrint(
+                '⚡ LLM prefetch complete: status=${response.statusCode}, bytes=${response.body.length}',
+              );
+            }).catchError((e) {
+              debugPrint('⚡ LLM prefetch failed: $e');
+            }),
+          );
+        }
+      } catch (e) {
+        debugPrint('⚡ Failed to schedule LLM prefetch: $e');
+      }
+    });
+  }
 
   // --- Microphone Status Tracking ---
   bool _microphoneListening = false;
@@ -4739,6 +5445,8 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
 
   // --- STATUS MESSAGE AUTO-RESET ---
   Timer? _statusMessageTimer; // Timer to auto-reset long status messages
+  Timer? _questionNoSpeechTimer; // Initial no-speech timeout after wake word
+  bool _questionSpeechDetectedInSession = false;
 
   // --- STEP MODE SCANNING ---
   bool _isAnnouncingScanningPrompt =
@@ -4809,6 +5517,9 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       debugPrint(
         '🔊 VOLUME: initState: Settings loaded successfully - personal volume: ${settingsProvider.settings?.personalVolume}, system volume: ${settingsProvider.settings?.systemVolume}',
       );
+
+      // Start schedule check after auth/settings are ready
+      _startScheduleCheck();
 
       // Initialize audio session AFTER settings are loaded
       if (!_audioSessionInitialized) {
@@ -4988,10 +5699,15 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
 
   @override
   void dispose() {
+    _cancelScheduledLlmPrefetch('widget dispose');
+    _llmInFlightRequests.clear();
+    _llmPrefetchHistory.clear();
     scanningTimer?.cancel();
     _scanWatchdogTimer?.cancel();
     _speechBubbleTimer?.cancel(); // Clean up speech bubble timer
     _statusMessageTimer?.cancel(); // Clean up status message timer
+    _questionNoSpeechTimer?.cancel();
+    _scheduleCheckTimer?.cancel();
     gridFocusNode?.dispose();
 
     // Restore notification sounds on Android when app is actually closing
@@ -5058,6 +5774,16 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
     debugPrint(
       '🔴 MAIN PAGE didPushNext: Global wake word flag kept active for next page',
     );
+
+    // PERFORMANCE: Stop image loading when page hidden by another route
+    if (mounted) {
+      setState(() {
+        _isPageVisible = false;
+        debugPrint(
+          '🔴 MAIN PAGE didPushNext: Hiding grid to stop image loading',
+        );
+      });
+    }
   }
 
   // Update the didPopNext method to use the existing setter methods
@@ -5065,6 +5791,34 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
   void didPopNext() {
     // Returned to grid page
     print('🔴 MAIN PAGE didPopNext: CALLED - Returned to grid page');
+
+    // PERFORMANCE: Resume image loading when page becomes visible again
+    if (mounted) {
+      setState(() {
+        _isPageVisible = true;
+        debugPrint(
+          '🟢 MAIN PAGE didPopNext: Showing grid to resume image loading',
+        );
+      });
+    }
+
+    if (_suppressDidPopNextRestart) {
+      print(
+        '🔄 MAIN PAGE didPopNext: Suppressing default scan restart for compose return',
+      );
+
+      // Resume wake word service that was paused in didPushNext, but let
+      // compose grid loading decide exactly when scanning should restart.
+      _syncGridWakeWordServiceConfig();
+      if (_wakeWordService != null) {
+        _wakeWordService!.resumeWakeWordAutoRestart();
+        _wakeWordService!.startWakeWordListening();
+      }
+
+      super.didPopNext();
+      return;
+    }
+
     final settingsProvider = Provider.of<UserSettingsProvider>(
       context,
       listen: false,
@@ -5140,6 +5894,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       });
 
       // Resume wake word service that was paused in didPushNext
+      _syncGridWakeWordServiceConfig();
       if (_wakeWordService != null) {
         print('🎤 MAIN PAGE didPopNext: Resuming wake word service');
         _wakeWordService!.resumeWakeWordAutoRestart();
@@ -5488,6 +6243,12 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       case 'numberspage':
       case 'numbers':
         return 'numbers';
+      case 'music-page':
+      case 'musicpage':
+      case 'music':
+      case 'songs':
+      case 'spotify':
+        return 'music';
       default:
         return normalized;
     }
@@ -5650,6 +6411,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
               )
               .toList();
           visibleButtons = _ensureEmailButtonVisible(buttons, visibleButtons);
+            visibleButtons = _dedupeVisibleGridButtons(visibleButtons);
           final emailCandidates = buttons.where(_isEmailSpecialButton).length;
           final emailVisible = visibleButtons
               .where(_isEmailSpecialButton)
@@ -5739,102 +6501,153 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
 
   // --- Auditory scanning and announcement routing ---
 
-  /// Announce for grid scanning via personal audio (Bluetooth headphones) with selected voice
-  Future<void> _speakPersonalVoice(String text) async {
-    debugPrint('_speakPersonalVoice: Starting TTS for: $text');
-    debugPrint(
-      '_speakPersonalVoice: _settingsProvider is null? ${_settingsProvider == null}',
-    );
-    debugPrint(
-      '_speakPersonalVoice: _settingsProvider.settings is null? ${_settingsProvider?.settings == null}',
-    );
-
-    // CRITICAL: Get the saved personal volume (use local override if available)
-    final finalVolume = await _getEffectivePersonalVolume();
-    final ttsVolume = (finalVolume / 10.0).clamp(0.0, 1.0);
-    debugPrint(
-      '_speakPersonalVoice: Effective personal volume = $finalVolume/10 (TTS: $ttsVolume)',
-    );
-
-    // CRITICAL: Always ensure audio routing is reset to default/personal before speaking
-    // This ensures scanning announcements go to Bluetooth/default device, not built-in speaker
-    if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
-      try {
-        debugPrint(
-          '_speakPersonalVoice: Routing audio to personal device (Bluetooth/default)...',
-        );
-        final platform = MethodChannel('audio_routing');
-        if (Platform.isIOS) {
-          // On iOS, use routeToPersonal to remove speaker override and route to Bluetooth
-          await platform.invokeMethod('routeToPersonal');
-        } else {
-          await platform.invokeMethod('resetToDefault');
-        }
-        await Future.delayed(const Duration(milliseconds: 100));
-        debugPrint(
-          '_speakPersonalVoice: Audio routing to personal device completed',
-        );
-      } catch (e) {
-        debugPrint(
-          '_speakPersonalVoice: Audio routing reset failed (non-critical): $e',
-        );
-      }
+  Future<void> _primeFirstSystemAnnouncementIfNeeded() async {
+    if (_hasPrimedFirstSystemAnnouncement || kIsWeb) {
+      return;
     }
 
-    // Wait for any ongoing announcements to complete before starting personal voice
-    if (_isAnnouncementPlaying) {
-      debugPrint(
-        '_speakPersonalVoice: Waiting for ongoing announcement to complete...',
-      );
-      int waitCount = 0;
-      while (_isAnnouncementPlaying && waitCount < 30) {
-        // Max 3 seconds
-        await Future.delayed(const Duration(milliseconds: 100));
-        waitCount++;
-      }
-      debugPrint(
-        '_speakPersonalVoice: Wait completed after ${waitCount * 100}ms',
-      );
+    if (!(Platform.isIOS || Platform.isAndroid)) {
+      _hasPrimedFirstSystemAnnouncement = true;
+      return;
     }
 
     try {
-      // Route audio to personal device (Bluetooth headphones) for scanning
-      final audioDeviceProvider = Provider.of<AudioDeviceProvider>(
-        context,
-        listen: false,
-      );
-      if (!kIsWeb && Platform.isWindows) {
-        debugPrint(
-          '_speakPersonalVoice: Routing to personal device: ${audioDeviceProvider.personalDeviceId}',
-        );
-        await AudioDeviceService().playAudioToDevice(
-          audioDeviceProvider.personalDeviceId ?? 'default',
-          isPersonal: true,
-        );
-      }
-
-      // For scanning audio, use simple local TTS to personal audio device (Bluetooth)
-      // Don't use announceViaBackend for scanning - only for button selections
-      await flutterTts.stop();
-      await flutterTts.setSpeechRate(0.5); // Slower speech for clarity
-
-      // Apply the admin personal volume setting as software volume on ALL platforms.
-      // This ensures volume persists through Bluetooth disconnect/reconnect cycles
-      // since software volume is independent of hardware/route state.
-      // On Android, setApplicationVolume also sets the stream volume.
-      // On iOS, the admin setting IS the software volume control.
       debugPrint(
-        '_speakPersonalVoice: Setting TTS volume to $ttsVolume (personalVolume: $finalVolume/10)',
+        '_primeFirstSystemAnnouncementIfNeeded: Priming first system announcement route...',
       );
-      await flutterTts.setVolume(ttsVolume);
 
-      await flutterTts.setPitch(1.0); // Normal pitch
-      await flutterTts.speak(text);
+      final platform = MethodChannel('audio_routing');
+
+      // Ensure no personal scan prompt is still speaking while we transition.
+      try {
+        await flutterTts.stop();
+      } catch (_) {}
+
+      // First-call routing hardening: force speaker twice with settle delays.
+      await platform.invokeMethod('forceSpeaker');
+      await Future.delayed(const Duration(milliseconds: 280));
+      await platform.invokeMethod('forceSpeaker');
+      await Future.delayed(const Duration(milliseconds: 420));
+
       debugPrint(
-        '_speakPersonalVoice: Local TTS completed with volume: $ttsVolume',
+        '_primeFirstSystemAnnouncementIfNeeded: First system route primed successfully',
       );
     } catch (e) {
-      debugPrint('_speakPersonalVoice: Local TTS failed: $e');
+      debugPrint(
+        '_primeFirstSystemAnnouncementIfNeeded: Priming failed (non-critical): $e',
+      );
+    } finally {
+      // Mark primed regardless to avoid repeated delays on subsequent announcements.
+      _hasPrimedFirstSystemAnnouncement = true;
+    }
+  }
+
+  /// Announce for grid scanning via personal audio (Bluetooth headphones) with selected voice
+  Future<void> _speakPersonalVoice(String text) async {
+    final wordCount = text.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).length;
+    final timeoutMs = (wordCount * 500) + 3500;
+    final timeout = Duration(milliseconds: timeoutMs.clamp(3500, 15000));
+
+    try {
+      await Future(() async {
+        debugPrint('_speakPersonalVoice: Starting TTS for: $text');
+        debugPrint(
+          '_speakPersonalVoice: _settingsProvider is null? ${_settingsProvider == null}',
+        );
+        debugPrint(
+          '_speakPersonalVoice: _settingsProvider.settings is null? ${_settingsProvider?.settings == null}',
+        );
+
+        // CRITICAL: Get the saved personal volume (use local override if available)
+        final finalVolume = await _getEffectivePersonalVolume();
+        final ttsVolume = (finalVolume / 10.0).clamp(0.0, 1.0);
+        debugPrint(
+          '_speakPersonalVoice: Effective personal volume = $finalVolume/10 (TTS: $ttsVolume)',
+        );
+
+        // CRITICAL: Always ensure audio routing is reset to default/personal before speaking
+        // This ensures scanning announcements go to Bluetooth/default device, not built-in speaker
+        if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
+          try {
+            debugPrint(
+              '_speakPersonalVoice: Routing audio to personal device (Bluetooth/default)...',
+            );
+            final platform = MethodChannel('audio_routing');
+            if (Platform.isIOS) {
+              // On iOS, use routeToPersonal to remove speaker override and route to Bluetooth
+              await platform.invokeMethod('routeToPersonal');
+            } else {
+              await platform.invokeMethod('resetToDefault');
+            }
+            await Future.delayed(const Duration(milliseconds: 100));
+            debugPrint(
+              '_speakPersonalVoice: Audio routing to personal device completed',
+            );
+          } catch (e) {
+            debugPrint(
+              '_speakPersonalVoice: Audio routing reset failed (non-critical): $e',
+            );
+          }
+        }
+
+        // Wait for any ongoing announcements to complete before starting personal voice
+        if (_isAnnouncementPlaying) {
+          debugPrint(
+            '_speakPersonalVoice: Waiting for ongoing announcement to complete...',
+          );
+          int waitCount = 0;
+          while (_isAnnouncementPlaying && waitCount < 30) {
+            // Max 3 seconds
+            await Future.delayed(const Duration(milliseconds: 100));
+            waitCount++;
+          }
+          debugPrint(
+            '_speakPersonalVoice: Wait completed after ${waitCount * 100}ms',
+          );
+        }
+
+        try {
+          // Route audio to personal device (Bluetooth headphones) for scanning
+          final audioDeviceProvider = Provider.of<AudioDeviceProvider>(
+            context,
+            listen: false,
+          );
+          if (!kIsWeb && Platform.isWindows) {
+            debugPrint(
+              '_speakPersonalVoice: Routing to personal device: ${audioDeviceProvider.personalDeviceId}',
+            );
+            await AudioDeviceService().playAudioToDevice(
+              audioDeviceProvider.personalDeviceId ?? 'default',
+              isPersonal: true,
+            );
+          }
+
+          // For scanning audio, use simple local TTS to personal audio device (Bluetooth)
+          // Don't use announceViaBackend for scanning - only for button selections
+          await flutterTts.stop();
+          await flutterTts.setSpeechRate(0.5); // Slower speech for clarity
+
+          // Apply the admin personal volume setting as software volume on ALL platforms.
+          // This ensures volume persists through Bluetooth disconnect/reconnect cycles
+          // since software volume is independent of hardware/route state.
+          // On Android, setApplicationVolume also sets the stream volume.
+          // On iOS, the admin setting IS the software volume control.
+          debugPrint(
+            '_speakPersonalVoice: Setting TTS volume to $ttsVolume (personalVolume: $finalVolume/10)',
+          );
+          await flutterTts.setVolume(ttsVolume);
+
+          await flutterTts.setPitch(1.0); // Normal pitch
+          await flutterTts.speak(text);
+          debugPrint(
+            '_speakPersonalVoice: Local TTS completed with volume: $ttsVolume',
+          );
+        } catch (e) {
+          debugPrint('_speakPersonalVoice: Local TTS failed: $e');
+        }
+      }).timeout(timeout);
+    } catch (e) {
+      debugPrint('_speakPersonalVoice: execution timed out or failed: $e');
     }
   }
 
@@ -5931,6 +6744,91 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
     }
   }
 
+  /// Translates text from [fromLocale] to [toLocale] using the backend /api/translate-lines endpoint.
+  /// Returns the translated text, or the original text if translation fails.
+  Future<String> _translateForPartner(
+    String text, {
+    required String fromLocale,
+    required String toLocale,
+    required String idToken,
+    required String aacUserId,
+  }) async {
+    if (text.isEmpty || fromLocale == toLocale) return text;
+    final cacheKey = '$fromLocale|$toLocale|$text';
+    if (_translationCache.containsKey(cacheKey)) {
+      debugPrint('_translateForPartner: cache hit for "$text"');
+      return _translationCache[cacheKey]!;
+    }
+    try {
+      final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+        'POST',
+        '${EnvironmentConfig.apiBaseUrl}/api/translate-lines',
+        baseHeaders: {
+          'X-User-ID': aacUserId,
+          'Content-Type': 'application/json',
+        },
+        body: json.encode({
+          'lines': [text],
+          'source_locale': fromLocale,
+          'target_locale': toLocale,
+        }),
+        timeoutSeconds: 10,
+      );
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final lines = data['translated_lines'];
+        if (lines is List && lines.isNotEmpty) {
+          final translated = lines[0].toString();
+          if (translated.isNotEmpty) {
+            _translationCache[cacheKey] = translated;
+            return translated;
+          }
+        }
+      } else {
+        debugPrint('_translateForPartner: HTTP ${response.statusCode} — ${response.body}');
+      }
+    } catch (e) {
+      debugPrint('_translateForPartner: translation error: $e');
+    }
+    return text;
+  }
+
+  /// Prefetches translations for all LLM option button speechPhrases so that
+  /// tapping an option feels instant (cache hit instead of live HTTP call).
+  Future<void> _prefetchTranslationsForButtons(
+    List<Map<String, dynamic>> buttons,
+  ) async {
+    if (!mounted) return;
+    final langProvider = Provider.of<UserSettingsProvider>(
+      context,
+      listen: false,
+    );
+    final userLang = langProvider.settings?.userLanguage ?? 'en-US';
+    final partnerLang = langProvider.effectivePartnerLanguage;
+    if (userLang == partnerLang) return;
+    String idToken = widget.idToken;
+    try {
+      final token = await AuthenticatedHttpClient.getRefreshedIdToken();
+      if (token != null && token.isNotEmpty) idToken = token;
+    } catch (_) {}
+    for (final btn in buttons) {
+      final phrase = (btn['speechPhrase'] ?? '').toString().trim();
+      if (phrase.isEmpty) continue;
+      final cacheKey = '$userLang|$partnerLang|$phrase';
+      if (!_translationCache.containsKey(cacheKey)) {
+        unawaited(
+          _translateForPartner(
+            phrase,
+            fromLocale: userLang,
+            toLocale: partnerLang,
+            idToken: idToken,
+            aacUserId: widget.aacUserId,
+          ),
+        );
+      }
+    }
+  }
+
   /// Fast local TTS announcement for voice prompts (faster and more reliable than backend)
   Future<void> announceLocal(String text) async {
     debugPrint('announceLocal: Starting TTS for: $text');
@@ -5982,35 +6880,41 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
 
   /// Show speech bubble overlay with announcement text
   void _showSpeechBubbleOverlay(String text) {
+    if (!mounted) return;
+
     final settingsProvider = Provider.of<UserSettingsProvider>(
       context,
       listen: false,
     );
 
-    // Check if speech bubble feature is enabled
-    if (settingsProvider.settings?.displaySplash != true) {
-      return; // Feature is disabled
+    // Check if speech bubble feature is enabled; default true when settings not yet loaded
+    final displaySplash = settingsProvider.settings?.displaySplash ?? true;
+    debugPrint(
+      'MainPage _showSpeechBubbleOverlay: text="$text" displaySplash=$displaySplash mounted=$mounted',
+    );
+    if (!displaySplash) {
+      debugPrint('MainPage _showSpeechBubbleOverlay: BLOCKED (displaySplash=$displaySplash)');
+      return;
     }
 
     // Cancel any existing timer
     _speechBubbleTimer?.cancel();
 
-    if (mounted) {
+    final duration = settingsProvider.settings?.displaySplashtime ?? 3000;
+
+    // Use addPostFrameCallback so the setState runs in the next stable frame,
+    // avoiding any mid-rebuild timing issues after navigation.
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       setState(() {
         _showSpeechBubble = true;
         _speechBubbleText = text;
       });
-    }
-
-    // Get duration from settings (default 3000ms)
-    final duration = settingsProvider.settings?.displaySplashtime ?? 3000;
-
-    // Auto-hide after specified duration
-    _speechBubbleTimer = Timer(Duration(milliseconds: duration), () {
-      _hideSpeechBubbleOverlay();
+      _speechBubbleTimer = Timer(Duration(milliseconds: duration), () {
+        _hideSpeechBubbleOverlay();
+      });
+      debugPrint('Speech bubble displayed for ${duration}ms: "$text"');
     });
-
-    debugPrint('Speech bubble displayed for ${duration}ms: "$text"');
   }
 
   /// Hide speech bubble overlay
@@ -6035,11 +6939,17 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
     bool preserveMicrophoneSession =
         false, // NEW: Don't reset audio during question listening
   }) async {
+    final shouldDuckMusic = routing == 'system';
+    final musicService = Provider.of<MusicPlaybackService>(
+      context,
+      listen: false,
+    );
     try {
-      // Android notification sounds suppressed globally
+      if (shouldDuckMusic) {
+        await musicService.beginAnnouncementDucking();
+      }
 
-      // Show speech bubble overlay if enabled in settings
-      _showSpeechBubbleOverlay(text);
+      // Android notification sounds suppressed globally
 
       // Set announcement playing flag to suppress chirps
       _isAnnouncementPlaying = true;
@@ -6057,19 +6967,72 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
         // Continue with original token
       }
 
-      // Request backend audio
-      final response = await http.post(
-        Uri.parse('${EnvironmentConfig.apiBaseUrl}/play-audio'),
-        headers: {
-          'Authorization': 'Bearer $idToken',
+      // Translate to partner language and resolve partner voice (same logic as announceViaBackend).
+      String announcedText = text;
+      String resolvedPartnerVoice = '';
+      if (routing == 'system' && mounted) {
+        await _primeFirstSystemAnnouncementIfNeeded();
+
+        final langProvider = Provider.of<UserSettingsProvider>(context, listen: false);
+        final userLang = langProvider.settings?.userLanguage ?? 'en-US';
+        final partnerLang = langProvider.effectivePartnerLanguage;
+        resolvedPartnerVoice = langProvider.effectivePartnerVoice;
+        if (userLang != partnerLang) {
+          announcedText = await _translateForPartner(
+            text,
+            fromLocale: userLang,
+            toLocale: partnerLang,
+            idToken: idToken,
+            aacUserId: aacUserId,
+          );
+        }
+      }
+
+      // Show speech bubble with partner-language text
+      _showSpeechBubbleOverlay(announcedText);
+
+      // Prepare routing before first playback so the initial prompt uses the
+      // same output path as subsequent system announcements.
+      if (!kIsWeb && (Platform.isIOS || Platform.isAndroid)) {
+        try {
+          final platform = MethodChannel('audio_routing');
+          if (routing == 'system') {
+            await platform.invokeMethod('forceSpeaker');
+          } else {
+            if (Platform.isIOS) {
+              await platform.invokeMethod('routeToPersonal');
+            } else {
+              await platform.invokeMethod('resetToDefault');
+            }
+          }
+          await Future.delayed(const Duration(milliseconds: 120));
+        } catch (e) {
+          debugPrint(
+            'announceViaBackendSimple: Initial routing prep failed (non-critical): $e',
+          );
+        }
+      }
+
+      // Request backend audio with authenticated client retries so first-call
+      // token staleness does not force a local TTS fallback.
+      final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+        'POST',
+        '${EnvironmentConfig.apiBaseUrl}/play-audio',
+        baseHeaders: {
           'X-User-ID': aacUserId,
           'Content-Type': 'application/json',
         },
         body: json.encode({
-          'text': text,
+          'text': announcedText,
           'routing_target': routing,
           if (speechRate != null) 'speech_rate': speechRate,
+          if (speechRate != null) 'speech_rate_override': speechRate,
+          if (routing == 'system' && resolvedPartnerVoice.isNotEmpty)
+            'partner_voice_name': resolvedPartnerVoice,
+          if (routing == 'system' && resolvedPartnerVoice.isNotEmpty)
+            'voice_name_override': resolvedPartnerVoice,
         }),
+        timeoutSeconds: 12,
       );
 
       bool backendAudioPlayed = false;
@@ -6089,9 +7052,11 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           final player = AudioPlayer();
 
           try {
-            // Simple audio routing like POC - force speaker before playing
-            if (!kIsWeb && Platform.isIOS) {
-              await platform.invokeMethod('forceSpeaker');
+            // Keep system announcements on speaker for both iOS and Android.
+            if (!kIsWeb && (Platform.isIOS || Platform.isAndroid)) {
+              if (routing == 'system') {
+                await platform.invokeMethod('forceSpeaker');
+              }
             }
 
             // Stop scanning for system announcements
@@ -6107,11 +7072,39 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
             ).create();
             await tempFile.writeAsBytes(bytes, flush: true);
             await player.setFilePath(tempFile.path);
+
+            // Apply system volume to backend playback for consistent first-call levels.
+            final savedSystemVolume = await _getEffectiveSystemVolume();
+            final playbackVolume = (savedSystemVolume / 10.0).clamp(0.0, 1.0);
+            await player.setVolume(playbackVolume);
+
+            final completer = Completer<void>();
+            final sub = player.playerStateStream.listen((state) {
+              if (state.processingState == ProcessingState.completed) {
+                if (!completer.isCompleted) completer.complete();
+              }
+            });
             await player.play();
+            await completer.future.timeout(
+              const Duration(seconds: 8),
+              onTimeout: () {
+                debugPrint(
+                  'announceViaBackendSimple: Backend audio completion timeout, continuing',
+                );
+                if (!completer.isCompleted) {
+                  completer.complete();
+                }
+              },
+            );
+            await sub.cancel();
 
             // Only reset to default if NOT preserving microphone session
-            if (!kIsWeb && Platform.isIOS && !preserveMicrophoneSession) {
-              await platform.invokeMethod('resetToDefault');
+            if (!kIsWeb && !preserveMicrophoneSession) {
+              if (Platform.isIOS) {
+                await platform.invokeMethod('resetToDefault');
+              } else if (Platform.isAndroid) {
+                await platform.invokeMethod('resetToDefault');
+              }
             } else if (preserveMicrophoneSession) {
               print('Preserving microphone session - skipping resetToDefault');
             }
@@ -6127,17 +7120,20 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
 
       // Simple TTS fallback if backend audio failed
       if (!backendAudioPlayed) {
-        if (routing == 'system' && !kIsWeb && Platform.isIOS) {
+        if (routing == 'system' && !kIsWeb && (Platform.isIOS || Platform.isAndroid)) {
           await platform.invokeMethod('forceSpeaker');
         }
 
-        await flutterTts.speak(text);
+        final savedSystemVolume = await _getEffectiveSystemVolume();
+        final ttsVolume = (savedSystemVolume / 10.0).clamp(0.0, 1.0);
+        await flutterTts.setVolume(ttsVolume);
+        await flutterTts.speak(announcedText);
 
         // Only reset if we're not preserving microphone session
         if (!preserveMicrophoneSession &&
             routing == 'system' &&
             !kIsWeb &&
-            Platform.isIOS) {
+            (Platform.isIOS || Platform.isAndroid)) {
           await platform.invokeMethod('resetToDefault');
         }
       }
@@ -6178,6 +7174,10 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       }
     } finally {
       _isAnnouncementPlaying = false;
+
+      if (shouldDuckMusic) {
+        await musicService.endAnnouncementDucking();
+      }
 
       // Android notification sounds managed globally
     }
@@ -6395,6 +7395,36 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
     }
   }
 
+  /// Force stop any in-progress announcement audio immediately.
+  Future<void> _stopActiveAnnouncementPlayback() async {
+    try {
+      debugPrint('🔇 FORCE STOP: Stopping active announcement playback');
+
+      _isAnnouncementPlaying = false;
+
+      try {
+        await flutterTts.stop();
+      } catch (e) {
+        debugPrint('🔇 FORCE STOP: Error stopping FlutterTts: $e');
+      }
+
+      if (_activeAudioPlayers.isNotEmpty) {
+        final players = List<AudioPlayer>.from(_activeAudioPlayers);
+        for (final player in players) {
+          try {
+            await _disposeAudioPlayer(player, 'force-stop announcement');
+          } catch (e) {
+            debugPrint('🔇 FORCE STOP: Error disposing active player: $e');
+          }
+        }
+      }
+
+      debugPrint('🔇 FORCE STOP: Active announcement playback stopped');
+    } catch (e) {
+      debugPrint('🔇 FORCE STOP: Unexpected stop error: $e');
+    }
+  }
+
   /// Comprehensive timeout recovery to reset audio system and restart scanning if needed
   Future<void> _performTimeoutRecovery() async {
     try {
@@ -6461,6 +7491,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
     bool showSpeechBubble =
         true, // Allow caller to disable speech bubble (for games page)
   }) async {
+    final suppressBeforeAnnouncement = _suppressScanning;
     final announceStart = DateTime.now().millisecondsSinceEpoch;
     debugPrint(
       '[TIMER] ANNOUNCE START: announceViaBackend("$text") at $announceStart',
@@ -6523,7 +7554,34 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
 
     String idToken = widget.idToken;
     final aacUserId = widget.aacUserId;
+
+    // Capture language settings synchronously before any awaits so that
+    // a transient mounted=false during async operations never silently
+    // skips translation.
+    String cachedUserLang = 'en-US';
+    String cachedPartnerLang = 'en-US';
+    String cachedPartnerVoice = '';
+    final shouldDuckMusic = routing == 'system';
+    final musicService = Provider.of<MusicPlaybackService>(
+      context,
+      listen: false,
+    );
+    if (routing == 'system') {
+      await _primeFirstSystemAnnouncementIfNeeded();
+
+      final langProvider = _settingsProvider ??
+          (mounted ? Provider.of<UserSettingsProvider>(context, listen: false) : null);
+      cachedUserLang = langProvider?.settings?.userLanguage ?? 'en-US';
+      cachedPartnerLang = langProvider?.effectivePartnerLanguage ?? 'en-US';
+      cachedPartnerVoice = langProvider?.effectivePartnerVoice ?? '';
+      debugPrint('announceViaBackend: userLang=$cachedUserLang partnerLang=$cachedPartnerLang partnerVoice=$cachedPartnerVoice');
+    }
+
     try {
+      if (shouldDuckMusic) {
+        await musicService.beginAnnouncementDucking();
+      }
+
       // Android notification sounds suppressed globally
 
       // CRITICAL SAFEGUARD: Detect if we're entering with flag already set (hung state)
@@ -6561,21 +7619,40 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       // Set announcement playing flag to suppress chirps
       _isAnnouncementPlaying = true;
 
-      // CRITICAL: Always ensure audio routing is reset to default before each announcement
-      // This prevents Android AudioFlinger from getting stuck in forceSpeaker mode
+      // While a system announcement is active, suppress any scan restarts from
+      // unrelated callbacks so routing cannot be stolen by scan prompts.
+      if (routing == 'system' && !_suppressScanning) {
+        _suppressScanning = true;
+        debugPrint(
+          'announceViaBackend: Temporarily suppressing scanning for system announcement',
+        );
+      }
+
+      // CRITICAL: Prepare Android routing per announcement target.
+      // System announcements should force speaker; personal announcements should
+      // stay on default/personal route.
       debugPrint(
-        'announceViaBackend: Resetting audio routing to default before announcement...',
+        'announceViaBackend: Preparing Android routing before announcement...',
       );
       if (!kIsWeb && Platform.isAndroid) {
         try {
           final platform = MethodChannel('audio_routing');
-          await platform.invokeMethod('resetToDefault');
-          debugPrint('announceViaBackend: Audio routing reset completed');
+          if (routing == 'system') {
+            await platform.invokeMethod('forceSpeaker');
+            debugPrint(
+              'announceViaBackend: Android system routing set to speaker',
+            );
+          } else {
+            await platform.invokeMethod('resetToDefault');
+            debugPrint(
+              'announceViaBackend: Android personal/default routing restored',
+            );
+          }
           // Small delay to let audio routing fully settle
           await Future.delayed(const Duration(milliseconds: 100));
         } catch (e) {
           debugPrint(
-            'announceViaBackend: Audio routing reset failed (non-critical): $e',
+            'announceViaBackend: Android routing prep failed (non-critical): $e',
           );
         }
       }
@@ -6607,23 +7684,48 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
         // Continue with original token - don't fail the entire function
       }
 
+      // Translate to partner language using values captured before any awaits.
+      String announcedText = text;
+      final String resolvedPartnerVoice = cachedPartnerVoice;
+      if (routing == 'system' && cachedUserLang != cachedPartnerLang) {
+        announcedText = await _translateForPartner(
+          text,
+          fromLocale: cachedUserLang,
+          toLocale: cachedPartnerLang,
+          idToken: idToken,
+          aacUserId: aacUserId,
+        );
+        debugPrint('announceViaBackend: Translated "$text" ($cachedUserLang→$cachedPartnerLang) → "$announcedText"');
+      }
+
+      // Show speech bubble with the partner-language text (translated or original).
+      if (showSpeechBubble && mounted) {
+        _showSpeechBubbleOverlay(announcedText);
+      }
+
       bool backendAudioPlayed = false;
       final startRequest = DateTime.now();
       debugPrint(
-        '[TIMER] announceViaBackend: Requesting backend audio for "$text" at ${startRequest.millisecondsSinceEpoch}',
+        '[TIMER] announceViaBackend: Requesting backend audio for "$announcedText" at ${startRequest.millisecondsSinceEpoch}',
       );
-      final response = await http.post(
-        Uri.parse('${EnvironmentConfig.apiBaseUrl}/play-audio'),
-        headers: {
-          'Authorization': 'Bearer $idToken',
+      final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+        'POST',
+        '${EnvironmentConfig.apiBaseUrl}/play-audio',
+        baseHeaders: {
           'X-User-ID': aacUserId,
           'Content-Type': 'application/json',
         },
         body: json.encode({
-          'text': text,
+          'text': announcedText,
           'routing_target': routing,
           if (speechRate != null) 'speech_rate': speechRate,
+          if (speechRate != null) 'speech_rate_override': speechRate,
+          if (routing == 'system' && resolvedPartnerVoice.isNotEmpty)
+            'partner_voice_name': resolvedPartnerVoice,
+          if (routing == 'system' && resolvedPartnerVoice.isNotEmpty)
+            'voice_name_override': resolvedPartnerVoice,
         }),
+        timeoutSeconds: 20,
       );
       final endRequest = DateTime.now();
       debugPrint(
@@ -6669,12 +7771,6 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
               'announceViaBackend: Setting iOS player volume to $iOSVolumeLevel (systemVolume: $systemVolume/10)',
             );
             await player.setVolume(iOSVolumeLevel);
-
-            // Show speech bubble overlay RIGHT BEFORE the stabilization delay
-            // This provides immediate visual feedback while audio routing stabilizes
-            if (showSpeechBubble) {
-              _showSpeechBubbleOverlay(text);
-            }
 
             // Wait for audio routing to fully stabilize to prevent audio cutoff
             debugPrint(
@@ -6770,11 +7866,6 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
             // Dispose the player to free AudioTrack resources
             await _disposeAudioPlayer(player, 'iOS announcement');
           } else if (!kIsWeb && Platform.isWindows) {
-            // Show speech bubble overlay immediately for Windows
-            if (showSpeechBubble) {
-              _showSpeechBubbleOverlay(text);
-            }
-
             // AUDIO PRIMING: Play silence.mp3 first to wake up the audio system
             debugPrint('Windows: Priming audio system with silence.mp3...');
             try {
@@ -6859,108 +7950,46 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
             await flutterTts.stop();
             await player.stop();
 
-            // SIMPLIFIED AUDIO ROUTING: Set speaker once and play without switching
+            // Android routing must match requested target to avoid speaker/personal mix-ups.
             debugPrint(
-              '[TIMER] announceViaBackend: Setting speaker routing once (Android) at ${DateTime.now().millisecondsSinceEpoch}',
+              '[TIMER] announceViaBackend: Applying Android routing target="$routing" at ${DateTime.now().millisecondsSinceEpoch}',
             );
             try {
-              await platform.invokeMethod('forceSpeaker');
-              debugPrint('Android forceSpeaker call completed successfully');
-
-              // Show speech bubble overlay RIGHT BEFORE the stabilization delay
-              // This provides immediate visual feedback while audio routing stabilizes
-              if (showSpeechBubble) {
-                _showSpeechBubbleOverlay(text);
+              if (routing == 'system') {
+                await platform.invokeMethod('forceSpeaker');
+                debugPrint('Android forceSpeaker call completed successfully');
+              } else {
+                await platform.invokeMethod('resetToDefault');
+                debugPrint(
+                  'Android resetToDefault call completed for personal/default routing',
+                );
               }
 
-              // Wait for audio routing to fully stabilize to prevent audio cutoff
-              debugPrint(
-                'Android: Waiting for audio routing to stabilize (v1.0.2+15 Extended Delay)...',
-              );
-              await Future.delayed(
-                const Duration(milliseconds: 1200),
-              ); // Dramatically increased for Play Store
-              debugPrint(
-                'Android: Audio routing stabilization complete (v1.0.2+15 Extended Delay)',
-              );
-
-              // CRITICAL FIX: Audio priming AFTER forceSpeaker to prime the correct audio device
-              // This ensures we prime the built-in speaker, not headphones/Bluetooth
-              debugPrint(
-                'Android: AGGRESSIVE audio priming on SPEAKER device for Play Store build compatibility...',
-              );
-              try {
-                // Strategy 1: Immediate short burst to wake speaker system
-                final quickPrimingPlayer = AudioPlayer();
-                await quickPrimingPlayer.setAsset('assets/silence.mp3');
-                await quickPrimingPlayer.play();
-                await quickPrimingPlayer.dispose();
-                debugPrint('Android: Quick speaker silence burst completed');
-
-                // Strategy 2: Longer 1-second priming with enhanced timeout handling on speaker
-                final earlyPrimingPlayer = AudioPlayer();
-                await earlyPrimingPlayer.setAsset('assets/silence_1000MS.mp3');
-
-                // Use timeout to prevent app crashes if silence file fails
-                await earlyPrimingPlayer.play().timeout(
-                  const Duration(milliseconds: 3000),
-                  onTimeout: () {
-                    debugPrint(
-                      'Android: 1-second speaker silence priming timed out, continuing anyway',
-                    );
-                  },
-                );
-
-                // Wait for the full 1-second silence playback to complete with timeout
-                final completer = Completer<void>();
-                StreamSubscription? sub;
-
-                sub = earlyPrimingPlayer.playerStateStream.listen((state) {
-                  if (state.processingState == ProcessingState.completed) {
-                    if (!completer.isCompleted) {
-                      completer.complete();
-                      sub?.cancel();
-                    }
-                  }
-                });
-
-                await completer.future.timeout(
-                  const Duration(
-                    milliseconds: 2000,
-                  ), // Should complete in ~1 second
-                  onTimeout: () {
-                    debugPrint(
-                      'Android: 1-second speaker silence completion timed out, continuing anyway',
-                    );
-                    sub?.cancel();
-                  },
-                );
-
-                await earlyPrimingPlayer.dispose();
+              // Keep routing settle short to reduce announcement startup lag.
+              if (routing == 'system') {
                 debugPrint(
-                  'Android: 1-second speaker silence audio priming completed successfully',
+                  'Android: Waiting briefly for speaker routing to stabilize...',
                 );
-
-                // Strategy 3: Additional short silence for Play Store builds
-                // This addresses the 5-second gap issue reported by user
-                final finalPrimingPlayer = AudioPlayer();
-                await finalPrimingPlayer.setAsset('assets/silence.mp3');
-                await finalPrimingPlayer.play();
-                await finalPrimingPlayer.dispose();
-                debugPrint(
-                  'Android: Final speaker priming burst completed - SPEAKER audio system fully primed',
+                await Future.delayed(
+                  const Duration(milliseconds: 250),
                 );
-              } catch (e) {
                 debugPrint(
-                  'Android: Aggressive SPEAKER audio priming failed: $e, continuing anyway',
+                  'Android: Speaker routing stabilization complete',
+                );
+              } else {
+                await Future.delayed(const Duration(milliseconds: 120));
+                debugPrint(
+                  'Android: Personal/default routing stabilization complete',
                 );
               }
             } catch (e) {
               debugPrint('Android forceSpeaker call FAILED: $e');
             }
 
-            debugPrint('Stopping scanning before backend audio playback');
-            _stopAuditoryScanning();
+            if (routing == 'system') {
+              debugPrint('Stopping scanning before system backend audio playback');
+              _stopAuditoryScanning();
+            }
 
             // --- PRIORITIZE BASE64 AUDIO (FASTER) OVER AUDIO URL ---
             if (base64Audio != null && base64Audio.isNotEmpty) {
@@ -6987,14 +8016,18 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
                 );
                 await player.setVolume(volumeLevel);
 
-                // Additional delay before starting playback to prevent cutoff
-                debugPrint(
-                  'Android: Adding pre-playback delay for audio cutoff prevention...',
-                );
-                await Future.delayed(const Duration(milliseconds: 200));
-                debugPrint(
-                  'Android: Pre-playback delay complete, starting audio...',
-                );
+                if (routing == 'system') {
+                  try {
+                    await platform.invokeMethod('forceSpeaker');
+                    debugPrint(
+                      'Android: Re-applied forceSpeaker immediately before base64 playback',
+                    );
+                  } catch (e) {
+                    debugPrint(
+                      'Android: Failed to re-apply forceSpeaker before base64 playback: $e',
+                    );
+                  }
+                }
 
                 // --- Wait for playback to finish ---
                 // CRITICAL FIX: Don't rely solely on ProcessingState.completed
@@ -7053,6 +8086,19 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
                   'announceViaBackend: Setting Android URL player volume to $volumeLevel (Level: $systemVolume/10)',
                 );
                 await player.setVolume(volumeLevel);
+
+                if (routing == 'system') {
+                  try {
+                    await platform.invokeMethod('forceSpeaker');
+                    debugPrint(
+                      'Android: Re-applied forceSpeaker immediately before URL playback',
+                    );
+                  } catch (e) {
+                    debugPrint(
+                      'Android: Failed to re-apply forceSpeaker before URL playback: $e',
+                    );
+                  }
+                }
 
                 // --- Wait for playback to finish ---
                 // CRITICAL FIX: Don't rely solely on ProcessingState.completed
@@ -7117,11 +8163,6 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
             debugPrint(
               'announceViaBackend: Using fallback just_audio for Web/other platforms',
             );
-
-            // Show speech bubble overlay immediately for fallback platforms
-            if (showSpeechBubble) {
-              _showSpeechBubbleOverlay(text);
-            }
 
             // AUDIO PRIMING: Play silence.mp3 first to wake up the audio system
             debugPrint('Fallback: Priming audio system with silence.mp3...');
@@ -7476,6 +8517,11 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       // Clear announcement playing flag and ensure audio routing has settled
       _isAnnouncementPlaying = false;
 
+      // Restore scan suppression state to whatever it was before this announcement.
+      if (_suppressScanning != suppressBeforeAnnouncement) {
+        _suppressScanning = suppressBeforeAnnouncement;
+      }
+
       // Always restore Android notification sounds
       if (!kIsWeb && Platform.isAndroid) {
         try {
@@ -7529,6 +8575,10 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           }
         }
       });
+
+      if (shouldDuckMusic) {
+        await musicService.endAnnouncementDucking();
+      }
     }
   }
 
@@ -7889,18 +8939,192 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
     debugPrint('_waitForAnnouncementComplete: Complete - ready for scanning');
   }
 
+  Future<void> _fetchAndLoadJokes() async {
+    setState(() {
+      statusMessage = 'Loading Jokes...';
+      isLoading = true;
+    });
+
+    try {
+      final settingsProvider = Provider.of<UserSettingsProvider>(
+        context,
+        listen: false,
+      );
+      final llmOptions = settingsProvider.settings?.llmOptions ?? 10;
+      debugPrint('Fetching jokes with limit: $llmOptions');
+
+      final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+        'GET',
+        '${EnvironmentConfig.apiBaseUrl}/api/jokes/contextual?limit=$llmOptions',
+        baseHeaders: {'X-User-ID': widget.aacUserId},
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body);
+        final List<dynamic> jokes = data['jokes'] ?? [];
+        debugPrint('Jokes response: ${jokes.length} jokes');
+
+        if (jokes.isNotEmpty) {
+          // Helper to add [PAUSE] to joke text if not already present
+          String addPauseToJokeText(String text) {
+            if (text.isEmpty) return '';
+            if (text.contains('[PAUSE]')) return text;
+            final questionIndex = text.indexOf('?');
+            if (questionIndex != -1 && questionIndex < text.length - 1) {
+              return '${text.substring(0, questionIndex + 1)} [PAUSE] ${text.substring(questionIndex + 1).trim()}';
+            }
+            if (text.contains(' - ')) {
+              return text.replaceFirst(' - ', ' [PAUSE] ');
+            }
+            if (text.contains(' — ')) {
+              return text.replaceFirst(' — ', ' [PAUSE] ');
+            }
+            if (text.contains(': ')) {
+              return text.replaceFirst(': ', ': [PAUSE] ');
+            }
+            return text;
+          }
+
+          // Map jokes to buttons (same format as LLM buttons)
+          List<Map<String, dynamic>> jokeButtons = jokes
+              .asMap()
+              .entries
+              .map<Map<String, dynamic>>((entry) {
+                final i = entry.key;
+                final joke = entry.value;
+                final jokeText = (joke['text'] ?? '').toString().trim();
+                final summary = (joke['summary'] ?? 'Joke').toString().trim();
+                final tags = joke['tags'];
+
+                return {
+                  'text': summary.isNotEmpty ? summary : 'Joke',
+                  'speechPhrase': addPauseToJokeText(jokeText),
+                  'isLLMGenerated': true,
+                  'targetPage': currentPageName,
+                  'row': i,
+                  'col': 0,
+                  'summary': summary,
+                  'keywords': tags != null
+                      ? (tags is List ? tags : [tags])
+                      : ['joke', 'humor'],
+                  'hidden': false,
+                  'queryType': '',
+                  'LLMQuery': '',
+                  'customAudioFile': null,
+                  'enablePictograms': true,
+                };
+              })
+              .where(
+                (btn) =>
+                    (btn['speechPhrase'] ?? '').toString().trim().isNotEmpty,
+              )
+              .toList();
+
+          // Track previous options for Something Else exclusion
+          llmPreviousOptions = jokeButtons
+              .map((btn) => btn['speechPhrase'].toString())
+              .toList();
+
+          // Add Something Else button (to get more jokes)
+          jokeButtons.add({
+            'text': _localizeUiLabel('Something Else'),
+            'speechPhrase': 'Something Else',
+            'isLLMGenerated': true,
+            'llmSpecial': 'somethingElse',
+            'row': jokeButtons.length,
+            'col': 0,
+            'hidden': false,
+            'queryType': '',
+            'LLMQuery': '',
+            'customAudioFile': null,
+            'enablePictograms': true,
+          });
+
+          // Add Go Back button
+          jokeButtons.add({
+            'text': _localizeUiLabel('Go Back'),
+            'speechPhrase': 'Go Back',
+            'isLLMGenerated': true,
+            'llmSpecial': 'goBack',
+            'row': jokeButtons.length,
+            'col': 0,
+            'hidden': false,
+            'queryType': '',
+            'LLMQuery': '',
+            'customAudioFile': null,
+            'enablePictograms': true,
+          });
+
+          // Store current grid to restore later
+          if (previousGridButtons == null) {
+            previousPageName = currentPageName;
+            previousGridButtons = List<Map<String, dynamic>>.from(
+              gridButtons,
+            );
+          }
+
+          // Mark current query type as jokes for Something Else handling
+          _currentQueryType = 'jokes';
+
+          setState(() {
+            gridButtons = jokeButtons;
+            statusMessage = 'Loaded ${jokes.length} jokes';
+            isLoading = false;
+          });
+
+          // Reset scanning for new joke buttons
+          WidgetsBinding.instance.addPostFrameCallback((_) async {
+            debugPrint(
+              'handleButtonAction: Jokes loaded, resetting scanning index',
+            );
+            setState(() {
+              scanningIndex = null;
+            });
+            await Future.delayed(const Duration(milliseconds: 500));
+            _maybeStartScanning();
+          });
+        } else {
+          setState(() {
+            statusMessage = 'No jokes found';
+            isLoading = false;
+          });
+        }
+      } else {
+        setState(() {
+          statusMessage = 'Error loading jokes: ${response.statusCode}';
+          isLoading = false;
+        });
+        debugPrint('Jokes error: ${response.statusCode} - ${response.body}');
+      }
+    } catch (e) {
+      setState(() {
+        statusMessage = 'Error loading jokes: $e';
+        isLoading = false;
+      });
+      debugPrint('Jokes exception: $e');
+    }
+  }
+
   Future<void> handleButtonAction(Map<String, dynamic> buttonData) async {
-    // Android notification sounds suppressed globally
+    if (_isHandlingButtonActionFlow) {
+      debugPrint('handleButtonAction: Ignoring duplicate action while processing');
+      return;
+    }
 
-    // *** CAPTURE PAUSED STATE BEFORE STOPPING SCANNING ***
-    final wasScanningPaused = _isScanningPaused && _waitingForUserInput;
-    debugPrint('handleButtonAction: Captured paused state: $wasScanningPaused');
+    _isHandlingButtonActionFlow = true;
 
-    // *** IMMEDIATELY STOP SCANNING ON ANY BUTTON CLICK ***
-    debugPrint(
-      'handleButtonAction: IMMEDIATELY stopping scanning for any button click',
-    );
-    _stopAuditoryScanning();
+    try {
+      // Android notification sounds suppressed globally
+
+      // *** CAPTURE PAUSED STATE BEFORE STOPPING SCANNING ***
+      final wasScanningPaused = _isScanningPaused && _waitingForUserInput;
+      debugPrint('handleButtonAction: Captured paused state: $wasScanningPaused');
+
+      // *** IMMEDIATELY STOP SCANNING ON ANY BUTTON CLICK ***
+      debugPrint(
+        'handleButtonAction: IMMEDIATELY stopping scanning for any button click',
+      );
+      _stopAuditoryScanning();
 
     // *** CHECK FOR TEMPORARY NAVIGATION AUTO-RETURN ***
     if (_temporaryNavigationReturnPage != null) {
@@ -8060,6 +9284,9 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
                 : _composeSession.text,
             routing: 'system',
           );
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _maybeStartScanning();
+          });
           return;
         case 'compose_export_menu':
           _openComposeExportGrid();
@@ -8104,6 +9331,9 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
                 : _composeSession.text,
             routing: 'system',
           );
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            _maybeStartScanning();
+          });
           return;
       }
       return;
@@ -8118,6 +9348,15 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
     );
     if (llmQuery != null && llmQuery.isNotEmpty) {
       debugLogLLM(stage: 'LLM Query Start', prompt: llmQuery);
+
+      // Prevent any concurrent restart path from re-enabling scanning while
+      // LLM options are still being fetched.
+      if (_isProcessingLLM) {
+        debugPrint('LLM is already processing, skipping duplicate call.');
+        return;
+      }
+      _isProcessingLLM = true;
+
       // Always store both previous grid and page before showing LLM options
       previousPageName = currentPageName;
       previousGridButtons = List<Map<String, dynamic>>.from(gridButtons);
@@ -8127,10 +9366,13 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
         statusMessage = 'Processing LLM...';
         isLoading = true;
       });
-      // Prevent double LLM calls: set a flag
-      if (_isProcessingLLM) {
-        debugPrint('LLM is already processing, skipping duplicate call.');
-        return;
+
+      // Prevent microphone contention: fully stop wake-word recognizers while
+      // button-query LLM work is in flight, then restart after completion.
+      if (_wakeWordService != null) {
+        debugPrint('⏸️ Pausing wake word service for button-query LLM request');
+        _wakeWordService!.pauseWakeWordAutoRestart();
+        await _wakeWordService!.stopAllRecognizers();
       }
 
       // Store query details for potential retry (only if not already retrying)
@@ -8143,71 +9385,25 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
         debugPrint('🔄 LLM: Retry attempt #$_llmRetryCount');
       }
 
-      _isProcessingLLM = true;
       try {
         final llmOptions = settingsProvider.settings?.llmOptions ?? 10;
         final useSummary =
             settingsProvider.settings?.useShortSummaryOnButtons ?? false;
-        final vocabularyLevel =
-            settingsProvider.settings?.vocabularyLevel ?? 'functional';
-
-        // Map vocabulary level to user-friendly description for LLM
-        String vocabularyInstruction;
-        switch (vocabularyLevel) {
-          case 'emergent':
-            vocabularyInstruction =
-                'Use basic everyday words appropriate for emergent communicators (e.g., want, help, happy, more, go, stop).';
-            break;
-          case 'functional':
-            vocabularyInstruction =
-                'Use practical daily living vocabulary suitable for functional communication (e.g., tired, wonderful, choose, delicious, uncomfortable).';
-            break;
-          case 'developing':
-            vocabularyInstruction =
-                'Use expanded academic vocabulary for developing communicators (e.g., anxious, fascinating, investigate, appreciate, collaborate).';
-            break;
-          case 'proficient':
-            vocabularyInstruction =
-                'Use sophisticated specialized vocabulary for proficient communicators (e.g., lethargic, magnificent, articulate, contemplative, exceptional).';
-            break;
-          default:
-            vocabularyInstruction =
-                'Use practical daily living vocabulary suitable for functional communication.';
-        }
-
-        String summaryInstruction = useSummary
-            ? 'If the generated option is more than 5 words, the "summary" key should be a 3-5 word abbreviation of each option, including the exact key words from the option. If the option is 5 words or less, the "summary" key should contain the exact same FULL text as the "option" key.'
-            : 'The "summary" key should contain the exact same FULL text as the "option" key.';
-        final rawPrompt = llmQuery.replaceAll(
-          '#LLMOptions',
-          llmOptions.toString(),
+        final prompt = _buildButtonLlmPrompt(
+          llmQuery: llmQuery,
+          useSummary: useSummary,
         );
-        final formatInstructions =
-            'Format your response as a JSON list where each item has "option", "summary", and "keywords" keys.\n'
-            'The "option" key should contain the FULL option text.\n'
-            'The "keywords" key should contain a list of 3-5 important words from the option.\n'
-            '${vocabularyInstruction}\n'
-            '${summaryInstruction}\n'
-            'Example:\n'
-            '[\n'
-            '  {"summary": "How are you?", "option": "Hello, how are you doing today?", "keywords": ["hello", "how", "you", "today", "doing"]},\n'
-            '  {"summary": "See You", "option": "Goodbye!  It was great seeing you. See you later!", "keywords": ["goodbye", "see", "you", "later", "great"]}\n'
-            ']';
-        final prompt = _composeSession.active
-            ? '"${_sanitizeComposePrompt(rawPrompt)}". '
-                  'Generate written composition options, not in-room conversation options. '
-                  'Ignore location, people present, nearby people, and current activity.\n'
-                  '$formatInstructions'
-                  '${_getComposePromptContext()}'
-            : rawPrompt.trim() + '\n' + formatInstructions;
-        llmOriginalPrompt = prompt; // Store for "Something Else"
+        // Only update original prompt for new queries, not for follow-up contexts (like "Something Else")
         if (!keepFollowUpContext) {
+          llmOriginalPrompt = llmQuery; // Store the raw query for follow-up prompts
           _initializeFollowUpConversation(llmQuery);
+        } else {
+          debugPrint('🔄 Keeping follow-up context: preserving llmOriginalPrompt and llmPreviousOptions');
         }
         originatingButtonText =
             buttonData['text'] as String?; // Store originating button text
         activeLLMPromptForContext =
-            prompt; // Store LLM query as primary context for freestyle
+            llmQuery; // Store raw LLM query as primary context for freestyle
         debugPrint('LLM PROMPT: ' + prompt);
         debugLogLLM(stage: 'LLM Prompt Sent', prompt: prompt);
         debugPrint('LLM REQUEST URL: ${EnvironmentConfig.apiBaseUrl}/llm');
@@ -8215,16 +9411,40 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           'LLM REQUEST BODY: ' + json.encode(_buildLlmRequestBody(prompt)),
         );
 
-        // Add 30-second timeout to LLM requests to prevent hanging
-        final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
-          'POST',
-          '${EnvironmentConfig.apiBaseUrl}/llm',
-          baseHeaders: {
-            'X-User-ID': widget.aacUserId,
-            'Content-Type': 'application/json',
-          },
-          body: json.encode(_buildLlmRequestBody(prompt)),
+        // Start the LLM request immediately so it can overlap with any button
+        // announcement audio.
+        final llmStart = DateTime.now();
+        final responseFuture = _queryLlmWithDedup(
+          body: _buildLlmRequestBody(prompt),
+          userId: widget.aacUserId,
           timeoutSeconds: 30,
+          source: 'interactive',
+        );
+
+        if (speechPhrase.isNotEmpty) {
+          setState(() {
+            _suppressScanning = true;
+          });
+          try {
+            await _announceWithTimeout(speechPhrase, routing: 'system');
+            if (customAudioFile != null && customAudioFile.isNotEmpty) {
+              await playCustomButtonAudio(customAudioFile);
+            }
+          } catch (e) {
+            debugPrint(
+              'handleButtonAction: LLM concurrent announcement failed: $e',
+            );
+          } finally {
+            _suppressScanning = false;
+          }
+        } else if (customAudioFile != null && customAudioFile.isNotEmpty) {
+          await playCustomButtonAudio(customAudioFile);
+        }
+
+        final response = await responseFuture;
+        final llmElapsedMs = DateTime.now().difference(llmStart).inMilliseconds;
+        debugPrint(
+          'LLM request completed in ${llmElapsedMs}ms, responseBytes=${response.body.length}',
         );
 
         if (response.statusCode == 200) {
@@ -8267,7 +9487,20 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           debugLogLLM(stage: 'LLM Raw Response', response: options);
           List<Map<String, dynamic>> llmButtons = [];
           llmPreviousOptions = [];
-          if (options is List && options.isNotEmpty) {
+          final rawCount = options is List ? options.length : -1;
+          var normalizedOptions = _coerceLlmOptions(options);
+          debugPrint(
+            '🤖 [button-query] response count normalization: raw=$rawCount, normalized=${normalizedOptions.length}',
+          );
+          if (normalizedOptions.length < llmOptions) {
+            normalizedOptions = await _topUpButtonOptionsOnce(
+              parsedOptions: normalizedOptions,
+              requestedCount: llmOptions,
+              originalPrompt: prompt,
+              userId: widget.aacUserId,
+            );
+          }
+          if (normalizedOptions.isNotEmpty) {
             // Track that this is an LLM query (not jokes/currentevents)
             _currentQueryType = 'llm';
             // Only update previousGridButtons if not already in an LLM grid
@@ -8277,7 +9510,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
               );
             }
             // Map LLM options: summary for label, option for speechPhrase
-            llmButtons = options.asMap().entries.map<Map<String, dynamic>>((
+            llmButtons = normalizedOptions.asMap().entries.map<Map<String, dynamic>>((
               entry,
             ) {
               final i = entry.key;
@@ -8285,21 +9518,11 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
               debugPrint(
                 'DEBUG: Processing LLM option $i: $opt (type: ${opt.runtimeType})',
               );
-              String summary = '';
-              String optionText = '';
-              if (opt is Map) {
-                summary = (opt['summary'] ?? '').toString();
-                optionText = (opt['option'] ?? '').toString();
-                debugPrint(
-                  'DEBUG: Map parsed - summary: "$summary", optionText: "$optionText"',
-                );
-              } else {
-                summary = opt.toString();
-                optionText = opt.toString();
-                debugPrint(
-                  'DEBUG: Non-map fallback - both set to: "$optionText"',
-                );
-              }
+              final summary = (opt['summary'] ?? '').toString();
+              final optionText = (opt['option'] ?? '').toString();
+              debugPrint(
+                'DEBUG: Map parsed - summary: "$summary", optionText: "$optionText"',
+              );
               String label = summary.trim().isNotEmpty ? summary : optionText;
               llmPreviousOptions.add(optionText);
               return {
@@ -8310,9 +9533,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
                 'row': i,
                 'col': 0,
                 'summary': summary, // Include summary for image matching
-                'keywords': opt is Map && opt['keywords'] != null
-                    ? opt['keywords']
-                    : null, // Include LLM keywords
+                'keywords': opt['keywords'], // Include LLM keywords
                 'hidden': false, // Ensure button is visible
                 'queryType': '', // Empty queryType to match category buttons
                 'LLMQuery': '', // Empty LLMQuery since these are result buttons
@@ -8335,7 +9556,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
 
             // Add "Free Style" button - allows user to construct their own response
             llmButtons.add({
-              'text': 'Free Style',
+              'text': _localizeUiLabel('Free Style'),
               'speechPhrase': 'Free Style',
               'isLLMGenerated': true,
               'llmSpecial': 'freeStyle',
@@ -8355,7 +9576,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
             // Add default buttons: Something Else, Go Back
             int nextIndex = llmButtons.length;
             llmButtons.add({
-              'text': 'Something Else',
+              'text': _localizeUiLabel('Something Else'),
               'speechPhrase': 'Something Else',
               'isLLMGenerated': true,
               'llmSpecial': 'somethingElse',
@@ -8369,7 +9590,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
             });
             nextIndex++;
             llmButtons.add({
-              'text': 'Go Back',
+              'text': _localizeUiLabel('Go Back'),
               'speechPhrase': 'Go Back',
               'isLLMGenerated': true,
               'llmSpecial': 'goBack',
@@ -8396,70 +9617,65 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
               isLoading = false;
             });
             debugLogLLM(stage: 'LLM Grid Set', gridButtons: llmButtons);
-            // Start scanning after the frame is built - check if we need to auto-resume
+            // Warm the translation cache for all displayed options so that
+            // tapping one announces immediately instead of waiting for a live
+            // HTTP translation round-trip.
+            unawaited(_prefetchTranslationsForButtons(llmButtons));
+            // Start scanning after the frame is built.
+            // Use a short delay (matching the follow-up options path) so that
+            // _isHandlingButtonActionFlow and _isAnnouncementPlaying are
+            // guaranteed clear before _maybeStartScanning is called.
             WidgetsBinding.instance.addPostFrameCallback((_) {
-              if (wasScanningPaused) {
-                debugPrint(
-                  'handleButtonAction LLM: Auto-resuming scanning because we were paused',
-                );
-                debugPrint(
-                  'handleButtonAction LLM: Current _suppressScanning state: $_suppressScanning',
-                );
-
-                // Ensure scanning is not suppressed for auto-resume
+              Future.delayed(const Duration(milliseconds: 120), () {
+                if (!mounted) return;
                 _suppressScanning = false;
+                _stopAuditoryScanning();
+                setState(() { scanningIndex = null; });
 
-                _maybeStartScanning();
+                if (wasScanningPaused) {
+                  debugPrint(
+                    'handleButtonAction LLM: Auto-resuming scanning because we were paused',
+                  );
+                  _maybeStartScanning();
 
-                final settingsProvider = Provider.of<UserSettingsProvider>(
-                  context,
-                  listen: false,
-                );
-                final waitForSwitch =
-                    settingsProvider.settings?.waitForSwitchToScan ?? false;
-                if (waitForSwitch && _waitingForInitialSwitch) {
-                  unawaited(_playWaitForSwitchNotification());
+                  final settingsProvider = Provider.of<UserSettingsProvider>(
+                    context,
+                    listen: false,
+                  );
+                  final waitForSwitch =
+                      settingsProvider.settings?.waitForSwitchToScan ?? false;
+                  if (waitForSwitch &&
+                      _waitingForInitialSwitch &&
+                      _shouldPlayWaitForSwitchChimeForCurrentGrid()) {
+                    unawaited(_playWaitForSwitchNotification());
+                  } else {
+                    Future.delayed(const Duration(milliseconds: 500), () async {
+                      await _speakPersonalVoice(
+                        "New options available. Scanning resumed.",
+                      );
+                    });
+                  }
                 } else {
-                  // Add a small delay to let scanning start, then announce that we have new options
-                  Future.delayed(const Duration(milliseconds: 500), () async {
-                    await _speakPersonalVoice(
-                      "New options available. Scanning resumed.",
-                    );
-                  });
+                  debugPrint(
+                    'handleButtonAction LLM: Starting normal scanning after LLM',
+                  );
+                  _maybeStartScanning();
+
+                  final settingsProvider = Provider.of<UserSettingsProvider>(
+                    context,
+                    listen: false,
+                  );
+                  final waitForSwitch =
+                      settingsProvider.settings?.waitForSwitchToScan ?? false;
+                  if (waitForSwitch &&
+                      _waitingForInitialSwitch &&
+                      _shouldPlayWaitForSwitchChimeForCurrentGrid()) {
+                    unawaited(_playWaitForSwitchNotification());
+                  }
                 }
 
-                // Resume wake word service after LLM options are displayed
-                debugPrint(
-                  'Resuming wake word listening after LLM options display (auto-resume)',
-                );
-                _wakeWordService?.resumeWakeWordAutoRestart();
-              } else {
-                debugPrint(
-                  'handleButtonAction LLM: Starting normal scanning after LLM',
-                );
-                debugPrint(
-                  'handleButtonAction LLM: Current _suppressScanning state: $_suppressScanning',
-                );
-                _maybeStartScanning();
-
-                final settingsProvider = Provider.of<UserSettingsProvider>(
-                  context,
-                  listen: false,
-                );
-                final waitForSwitch =
-                    settingsProvider.settings?.waitForSwitchToScan ?? false;
-                if (waitForSwitch && _waitingForInitialSwitch) {
-                  unawaited(_playWaitForSwitchNotification());
-                }
-
-                // Resume wake word service after LLM options are displayed
-                debugPrint(
-                  'Resuming wake word listening after LLM options display (normal)',
-                );
-                _wakeWordService?.resumeWakeWordAutoRestart();
-              }
-              //_stopAuditoryScanning();
-              //_startAuditoryScanning();
+                unawaited(_forceRestartWakeWordService());
+              });
             });
             if (nonEmptyButtons.isEmpty) {
               setState(() {
@@ -8503,6 +9719,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
               setState(() {
                 _isProcessingLLM = false;
               });
+              _isHandlingButtonActionFlow = false;
 
               await handleButtonAction(_lastLLMButtonData!);
               return; // Exit - let retry handle success/failure
@@ -8540,13 +9757,13 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
               );
               _suppressScanning = false;
               _maybeStartScanning();
-              _wakeWordService?.resumeWakeWordAutoRestart();
+              unawaited(_forceRestartWakeWordService());
             } else {
               debugPrint(
                 'handleButtonAction LLM Error: Resuming normal scanning',
               );
               _maybeStartScanning();
-              _wakeWordService?.resumeWakeWordAutoRestart();
+              unawaited(_forceRestartWakeWordService());
             }
           });
         }
@@ -8592,6 +9809,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
             setState(() {
               _isProcessingLLM = false;
             });
+            _isHandlingButtonActionFlow = false;
 
             await handleButtonAction(_lastLLMButtonData!);
             return; // Exit this catch block - let retry handle success/failure
@@ -8649,13 +9867,13 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
             );
             _suppressScanning = false;
             _maybeStartScanning();
-            _wakeWordService?.resumeWakeWordAutoRestart();
+            unawaited(_forceRestartWakeWordService());
           } else {
             debugPrint(
               'handleButtonAction LLM Exception: Resuming normal scanning',
             );
             _maybeStartScanning();
-            _wakeWordService?.resumeWakeWordAutoRestart();
+            unawaited(_forceRestartWakeWordService());
           }
         });
       } finally {
@@ -8733,7 +9951,9 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           );
           final waitForSwitch =
               settingsProvider.settings?.waitForSwitchToScan ?? false;
-          if (waitForSwitch && _waitingForInitialSwitch) {
+          if (waitForSwitch &&
+              _waitingForInitialSwitch &&
+              _shouldPlayWaitForSwitchChimeForCurrentGrid()) {
             unawaited(_playWaitForSwitchNotification());
           }
 
@@ -8787,55 +10007,38 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
         // Check if we're in jokes mode — re-fetch from jokes endpoint instead of LLM
         if (_currentQueryType == 'jokes') {
           debugPrint('Something Else for Jokes: re-fetching from jokes API');
-          handleButtonAction({'text': 'Jokes', 'queryType': 'jokes'});
+          await _fetchAndLoadJokes();
           return;
         }
         // Generate new LLM prompt excluding previous options
         final origPrompt = llmOriginalPrompt ?? '';
         final excludeList = llmPreviousOptions;
+        debugPrint('🔄 Something Else DEBUG:');
+        debugPrint('  - llmOriginalPrompt: "$origPrompt"');
+        debugPrint('  - llmPreviousOptions count: ${excludeList.length}');
+        debugPrint('  - llmPreviousOptions: $excludeList');
         final excludeText = excludeList.isNotEmpty
             ? ' IMPORTANTLY, exclude the following options if possible: "' +
                   excludeList.join('; ') +
                   '".'
             : '';
         final newPrompt = origPrompt + excludeText;
-        debugPrint('Something Else LLM prompt: $newPrompt');
+        debugPrint('🔄 Something Else LLM prompt: $newPrompt');
         setState(() {
           statusMessage = 'Requesting more LLM options...';
         });
-        final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
-          'POST',
-          '${EnvironmentConfig.apiBaseUrl}/llm',
-          baseHeaders: {
-            'X-User-ID': widget.aacUserId,
-            'Content-Type': 'application/json',
-          },
-          body: json.encode(_buildLlmRequestBody(newPrompt)),
-          timeoutSeconds: 30,
-        );
-        if (response.statusCode == 200) {
-          dynamic options = json.decode(response.body);
-
-          // Parse potentially malformed LLM response
-          options = _parseLLMResponse(options);
-
-          debugLogLLM(
-            stage: 'LLM Something Else Raw Response',
-            response: options,
-          );
-          // Recursively call handleButtonAction with a fake buttonData to trigger LLM mapping
-          handleButtonAction({
-            'LLMQuery': newPrompt,
-            'queryType': buttonData['queryType'] ?? 'question',
-            'keepFollowUpContext': true,
-          });
-        } else {
-          setState(() {
-            statusMessage =
-                'LLM error (${response.statusCode}) on Something Else. Raw: ' +
-                response.body.toString();
-          });
-        }
+        // Re-enter the normal LLM query path with the exclusion prompt.
+        // This intentionally performs exactly one network call.
+        debugPrint('🔄 Something Else: Calling handleButtonAction recursively with keepFollowUpContext=true');
+        // Clear both processing flags so the recursive call is not blocked
+        _isProcessingLLM = false;
+        _isHandlingButtonActionFlow = false;
+        await handleButtonAction({
+          'LLMQuery': newPrompt,
+          'queryType': buttonData['queryType'] ?? 'question',
+          'keepFollowUpContext': true,
+        });
+        debugPrint('🔄 Something Else: Recursive call completed');
         return;
       } else if (buttonData['llmSpecial'] == 'freeStyle') {
         // Navigate to Freestyle page for custom response construction
@@ -8845,6 +10048,9 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
         await _announceWithTimeout(
           'I\'m choosing my own words.  Please give me a moment.',
         );
+
+        // Pause scanning immediately before navigating
+        _stopAuditoryScanning();
 
         // Determine context from stored LLM prompt and button data (matching web app approach)
         String? sourceContext;
@@ -8898,7 +10104,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
         );
         await Future.delayed(const Duration(milliseconds: 500));
         previousPageName = currentPageName;
-        _wakeWordService?.startQuestionListening();
+        await WakeWordService.startQuestionListeningForRepeat();
         return;
       }
       final optionText = buttonData['speechPhrase'] as String;
@@ -9014,73 +10220,107 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           'LLM AUDIO FIX: Final status check: isListening=$finalListening',
         );
 
-        // Reduced safety delay for faster response
+        // Keep a very short settle delay so announcement starts quickly.
         debugPrint(
-          'LLM AUDIO FIX: Adding 300ms safety delay for audio cleanup...',
+          'LLM AUDIO FIX: Adding 80ms safety delay for audio cleanup...',
         );
         await Future.delayed(
-          const Duration(milliseconds: 300),
-        ); // Reduced from 1000ms to 300ms
+          const Duration(milliseconds: 80),
+        );
         debugPrint(
           'LLM AUDIO FIX: Wake word service shutdown complete - proceeding with audio playback',
         );
 
-        // --- Suppress scanning until announcement and grid update are complete ---
-        _suppressScanning = true;
-        await _announceWithTimeout(optionText);
+        // Suppress scanning until both the selection announcement and any
+        // follow-up LLM generation have completed and the next grid is ready.
+        final shouldGenerateFollowUpOptions = _currentQueryType != 'jokes';
+        Future<List<Map<String, dynamic>>>? followUpButtonsFuture;
 
-        // For jokes, keep the old behavior of exiting to Home after selection.
-        if (_currentQueryType == 'jokes') {
-          _resetFollowUpConversation();
-          await fetchGridDataForPage('home', addToHistory: false);
-        } else {
-          final followUpButtons = await _generateFollowUpButtonsAfterSelection(
+        _suppressScanning = true;
+        if (shouldGenerateFollowUpOptions) {
+          setState(() {
+            _isProcessingLLM = true;
+            isLoading = true;
+          });
+          followUpButtonsFuture = _generateFollowUpButtonsAfterSelection(
             optionText,
           );
-          setState(() {
-            gridButtons = followUpButtons;
-            statusMessage =
-                'Next-step options ready (${followUpButtons.length} total, Home first).';
-          });
         }
 
-        // Only allow scanning after the grid is updated and frame is built
-        WidgetsBinding.instance.addPostFrameCallback((_) {
-          // add delay to ensure grid is updated
-          int delay = settingsProvider.settings?.scanDelay ?? 3500;
-          Future.delayed(Duration(milliseconds: delay), () {
-            _suppressScanning = false;
-            // Stop any existing scanning and restart from first option
-            _stopAuditoryScanning();
-            // *** RESET SCANNING INDEX TO START FROM FIRST OPTION ***
-            debugPrint(
-              'handleButtonAction: Resetting scanning index to start from first option after LLM response',
-            );
-            setState(() {
-              scanningIndex = null; // Reset to start from first button
-            });
+        try {
+          await _announceWithTimeout(optionText);
 
-            // Add delay to allow audio routing to reset before starting scanning
-            Future.delayed(const Duration(milliseconds: 500), () {
+          // For jokes, keep the old behavior of exiting to Home after selection.
+          if (!shouldGenerateFollowUpOptions) {
+            _resetFollowUpConversation();
+            await fetchGridDataForPage('home', addToHistory: false);
+          } else {
+            final followUpButtons = await followUpButtonsFuture!;
+            setState(() {
+              gridButtons = followUpButtons;
+              statusMessage =
+                  'Next-step options ready (${followUpButtons.length} total, Home first).';
+            });
+          }
+
+          // Restart scanning as soon as the follow-up grid is painted.
+          WidgetsBinding.instance.addPostFrameCallback((_) {
+            Future.delayed(const Duration(milliseconds: 120), () {
+              _suppressScanning = false;
+              _stopAuditoryScanning();
               debugPrint(
-                'handleButtonAction: Audio routing reset delay completed after LLM response',
+                'handleButtonAction: Resetting scanning index to start from first option after LLM response',
+              );
+              setState(() {
+                scanningIndex = null;
+              });
+
+              debugPrint(
+                'handleButtonAction: Follow-up grid ready, restarting scanning immediately',
               );
               _maybeStartScanning();
 
               final waitForSwitch =
                   settingsProvider.settings?.waitForSwitchToScan ?? false;
-              if (waitForSwitch && _waitingForInitialSwitch) {
+              if (waitForSwitch &&
+                  _waitingForInitialSwitch &&
+                  _shouldPlayWaitForSwitchChimeForCurrentGrid()) {
                 unawaited(_playWaitForSwitchNotification());
               }
 
-              // Resume wake word service after LLM response is complete
               debugPrint(
                 'Resuming wake word listening after LLM response and navigation',
               );
               _wakeWordService?.resumeWakeWordAutoRestart();
             });
           });
-        });
+        } catch (e) {
+          debugPrint(
+            'handleButtonAction: Failed to load follow-up options after LLM selection: $e',
+          );
+
+          _suppressScanning = false;
+          setState(() {
+            statusMessage = 'Unable to load AI follow-up options. Scanning restarted.';
+          });
+          _updateStatusMessageWithAutoReset(
+            'Unable to load AI follow-up options. Scanning restarted.',
+            resetAfter: const Duration(seconds: 3),
+          );
+
+          await _speakPersonalVoice(
+            'Unable to load AI follow-up options. Scanning restarted.',
+          );
+          _maybeStartScanning();
+          _wakeWordService?.resumeWakeWordAutoRestart();
+        } finally {
+          if (shouldGenerateFollowUpOptions) {
+            setState(() {
+              isLoading = false;
+              _isProcessingLLM = false;
+            });
+          }
+        }
       }
     } else if (queryType == 'currentevents') {
       setState(() {
@@ -9147,7 +10387,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
 
             // Add Go Back button
             eventButtons.add({
-              'text': 'Go Back',
+              'text': _localizeUiLabel('Go Back'),
               'speechPhrase': 'Go Back',
               'isLLMGenerated': true,
               'llmSpecial': 'goBack',
@@ -9208,170 +10448,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
         debugPrint('Current events exception: $e');
       }
     } else if (queryType == 'jokes') {
-      // Handle jokes query type - fetch from jokes API (like gridpage.js does)
-      setState(() {
-        statusMessage = 'Loading Jokes...';
-        isLoading = true;
-      });
-
-      try {
-        final settingsProvider = Provider.of<UserSettingsProvider>(
-          context,
-          listen: false,
-        );
-        final llmOptions = settingsProvider.settings?.llmOptions ?? 10;
-        debugPrint('Fetching jokes with limit: $llmOptions');
-
-        final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
-          'GET',
-          '${EnvironmentConfig.apiBaseUrl}/api/jokes/contextual?limit=$llmOptions',
-          baseHeaders: {'X-User-ID': widget.aacUserId},
-        );
-
-        if (response.statusCode == 200) {
-          final data = json.decode(response.body);
-          final List<dynamic> jokes = data['jokes'] ?? [];
-          debugPrint('Jokes response: ${jokes.length} jokes');
-
-          if (jokes.isNotEmpty) {
-            // Helper to add [PAUSE] to joke text if not already present
-            String addPauseToJokeText(String text) {
-              if (text.isEmpty) return '';
-              if (text.contains('[PAUSE]')) return text;
-              final questionIndex = text.indexOf('?');
-              if (questionIndex != -1 && questionIndex < text.length - 1) {
-                return '${text.substring(0, questionIndex + 1)} [PAUSE] ${text.substring(questionIndex + 1).trim()}';
-              }
-              if (text.contains(' - ')) {
-                return text.replaceFirst(' - ', ' [PAUSE] ');
-              }
-              if (text.contains(' — ')) {
-                return text.replaceFirst(' — ', ' [PAUSE] ');
-              }
-              if (text.contains(': ')) {
-                return text.replaceFirst(': ', ': [PAUSE] ');
-              }
-              return text;
-            }
-
-            // Map jokes to buttons (same format as LLM buttons)
-            List<Map<String, dynamic>> jokeButtons = jokes
-                .asMap()
-                .entries
-                .map<Map<String, dynamic>>((entry) {
-                  final i = entry.key;
-                  final joke = entry.value;
-                  final jokeText = (joke['text'] ?? '').toString().trim();
-                  final summary = (joke['summary'] ?? 'Joke').toString().trim();
-                  final tags = joke['tags'];
-
-                  return {
-                    'text': summary.isNotEmpty ? summary : 'Joke',
-                    'speechPhrase': addPauseToJokeText(jokeText),
-                    'isLLMGenerated': true,
-                    'targetPage': currentPageName,
-                    'row': i,
-                    'col': 0,
-                    'summary': summary,
-                    'keywords': tags != null
-                        ? (tags is List ? tags : [tags])
-                        : ['joke', 'humor'],
-                    'hidden': false,
-                    'queryType': '',
-                    'LLMQuery': '',
-                    'customAudioFile': null,
-                    'enablePictograms': true,
-                  };
-                })
-                .where(
-                  (btn) =>
-                      (btn['speechPhrase'] ?? '').toString().trim().isNotEmpty,
-                )
-                .toList();
-
-            // Track previous options for Something Else exclusion
-            llmPreviousOptions = jokeButtons
-                .map((btn) => btn['speechPhrase'].toString())
-                .toList();
-
-            // Add Something Else button (to get more jokes)
-            jokeButtons.add({
-              'text': 'Something Else',
-              'speechPhrase': 'Something Else',
-              'isLLMGenerated': true,
-              'llmSpecial': 'somethingElse',
-              'row': jokeButtons.length,
-              'col': 0,
-              'hidden': false,
-              'queryType': '',
-              'LLMQuery': '',
-              'customAudioFile': null,
-              'enablePictograms': true,
-            });
-
-            // Add Go Back button
-            jokeButtons.add({
-              'text': 'Go Back',
-              'speechPhrase': 'Go Back',
-              'isLLMGenerated': true,
-              'llmSpecial': 'goBack',
-              'row': jokeButtons.length,
-              'col': 0,
-              'hidden': false,
-              'queryType': '',
-              'LLMQuery': '',
-              'customAudioFile': null,
-              'enablePictograms': true,
-            });
-
-            // Store current grid to restore later
-            if (previousGridButtons == null) {
-              previousPageName = currentPageName;
-              previousGridButtons = List<Map<String, dynamic>>.from(
-                gridButtons,
-              );
-            }
-
-            // Mark current query type as jokes for Something Else handling
-            _currentQueryType = 'jokes';
-
-            setState(() {
-              gridButtons = jokeButtons;
-              statusMessage = 'Loaded ${jokes.length} jokes';
-              isLoading = false;
-            });
-
-            // Reset scanning for new joke buttons
-            WidgetsBinding.instance.addPostFrameCallback((_) async {
-              debugPrint(
-                'handleButtonAction: Jokes loaded, resetting scanning index',
-              );
-              setState(() {
-                scanningIndex = null;
-              });
-              await Future.delayed(const Duration(milliseconds: 500));
-              _maybeStartScanning();
-            });
-          } else {
-            setState(() {
-              statusMessage = 'No jokes found';
-              isLoading = false;
-            });
-          }
-        } else {
-          setState(() {
-            statusMessage = 'Error loading jokes: ${response.statusCode}';
-            isLoading = false;
-          });
-          debugPrint('Jokes error: ${response.statusCode} - ${response.body}');
-        }
-      } catch (e) {
-        setState(() {
-          statusMessage = 'Error loading jokes: $e';
-          isLoading = false;
-        });
-        debugPrint('Jokes exception: $e');
-      }
+      await _fetchAndLoadJokes();
     } else if (queryType == 'thread') {
       // Handle thread query type by navigating to threads page
       setState(() {
@@ -9489,6 +10566,9 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
             statusMessage = 'Opening Freestyle Communication...';
           });
 
+          // Pause scanning immediately before navigating
+          _stopAuditoryScanning();
+
           // Use LLM query as primary context (matching web app approach), or fallback to page context
           String? sourceContext =
               activeLLMPromptForContext ??
@@ -9533,6 +10613,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
                 idToken: widget.idToken,
                 aacUserId: widget.aacUserId,
                 announceFunction: announceViaBackend,
+                stopAnnouncementFunction: _stopActiveAnnouncementPlayback,
               ),
             ),
           );
@@ -9601,12 +10682,8 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
             ),
           );
         } else if (specialPage == 'jokes') {
-          setState(() {
-            statusMessage = 'Loading Jokes...';
-          });
-
-          // Load jokes inline (same pattern as gridpage.js)
-          handleButtonAction({'text': 'Jokes', 'queryType': 'jokes'});
+          // Load jokes inline directly using the helper (reentrancy safe)
+          await _fetchAndLoadJokes();
         } else if (specialPage == 'guess-who' || specialPage == 'guesswho') {
           setState(() {
             statusMessage = 'Opening Guess Who...';
@@ -9620,6 +10697,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
                 idToken: widget.idToken,
                 aacUserId: widget.aacUserId,
                 announceFunction: announceViaBackend,
+                stopAnnouncementFunction: _stopActiveAnnouncementPlayback,
                 initialGame: 'guess_who',
               ),
             ),
@@ -9653,6 +10731,42 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
                 announceFunction: announceViaBackend,
                 scanPromptFunction: _speakPersonalVoice,
                 onComposeAppend: _appendToComposeText,
+              ),
+            ),
+          );
+        } else if (specialPage == 'music' || specialPage == 'spotify') {
+          setState(() {
+            statusMessage = 'Opening Music...';
+          });
+
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => MusicPage(
+                idToken: widget.idToken,
+                aacUserId: widget.aacUserId,
+                displayName: widget.displayName,
+                onTalkAboutMusic: (musicContext) async {
+                  Navigator.of(context).pop();
+                  await handleButtonAction({
+                    'LLMQuery': 'Discuss the Spotify playlist: $musicContext',
+                    'queryType': 'question',
+                    'text': 'Talk About Music',
+                    'isLLMGenerated': true,
+                  });
+                },
+                onTalkAboutSomethingElse: () async {
+                  await Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => FreestylePage(
+                        idToken: widget.idToken,
+                        aacUserId: widget.aacUserId,
+                        displayName: widget.displayName,
+                        sourcePage: 'music',
+                        onComposeAppend: _appendToComposeText,
+                      ),
+                    ),
+                  );
+                },
               ),
             ),
           );
@@ -9857,16 +10971,20 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       });
     }
 
-    // Always restore Android notification sounds after button action processing
-    if (!kIsWeb && Platform.isAndroid) {
-      try {
-        const platform = MethodChannel('audio_routing');
-        platform.invokeMethod('restoreNotificationSounds');
-        debugPrint('handleButtonAction: Notification sounds restored');
-      } catch (e) {
-        debugPrint(
-          'handleButtonAction: Failed to restore notification sounds: $e',
-        );
+    } finally {
+      _isHandlingButtonActionFlow = false;
+
+      // Always restore Android notification sounds after button action processing
+      if (!kIsWeb && Platform.isAndroid) {
+        try {
+          const platform = MethodChannel('audio_routing');
+          platform.invokeMethod('restoreNotificationSounds');
+          debugPrint('handleButtonAction: Notification sounds restored');
+        } catch (e) {
+          debugPrint(
+            'handleButtonAction: Failed to restore notification sounds: $e',
+          );
+        }
       }
     }
   }
@@ -9913,6 +11031,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           )
           .toList();
       visibleButtons = _ensureEmailButtonVisible(buttons, visibleButtons);
+        visibleButtons = _dedupeVisibleGridButtons(visibleButtons);
       final emailCandidates = buttons.where(_isEmailSpecialButton).length;
       final emailVisible = visibleButtons.where(_isEmailSpecialButton).length;
       debugPrint(
@@ -9959,6 +11078,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           }
         }
       });
+      _scheduleLlmPrefetchForVisibleButtons(visibleButtons);
       return true;
     }
 
@@ -10035,10 +11155,14 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
   }
 
   Map<String, dynamic> _buildLlmRequestBody(String prompt) {
+    final userLanguage = mounted
+        ? (Provider.of<UserSettingsProvider>(context, listen: false).settings?.userLanguage ?? 'en-US')
+        : (_settingsProvider?.settings?.userLanguage ?? 'en-US');
     return {
       'prompt': prompt,
       'compose_mode': _composeSession.active,
       'compose_body': _composeSession.active ? _composeSession.text : '',
+      'user_language': userLanguage,
     };
   }
 
@@ -10052,7 +11176,36 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
         .map((btn) => Map<String, dynamic>.from(btn))
         .toList();
 
-    return baseButtons;
+    return _dedupeVisibleGridButtons(baseButtons);
+  }
+
+  List<Map<String, dynamic>> _dedupeVisibleGridButtons(
+    List<Map<String, dynamic>> buttons,
+  ) {
+    final deduped = <Map<String, dynamic>>[];
+    final seen = <String>{};
+
+    for (final raw in buttons) {
+      final btn = Map<String, dynamic>.from(raw);
+      final text = (btn['text'] ?? '').toString().trim();
+      if (text.isEmpty) continue;
+
+      final normalizedText = _normalizeForComparison(text);
+      final target = (btn['targetPage'] ?? '').toString().trim().toLowerCase();
+      final speech = _normalizeForComparison(
+        (btn['speechPhrase'] ?? '').toString().trim(),
+      );
+
+      // Keep distinct actions with the same label; collapse true duplicates.
+      final dedupeKey = '$normalizedText|$target|$speech';
+      if (seen.contains(dedupeKey)) {
+        continue;
+      }
+      seen.add(dedupeKey);
+      deduped.add(btn);
+    }
+
+    return deduped;
   }
 
   Future<void> _appendToComposeText(String rawText) async {
@@ -10133,47 +11286,52 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
 
     const resolvedSourceContext = 'compose a message';
 
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (context) => FreestylePage(
-          idToken: widget.idToken,
-          aacUserId: widget.aacUserId,
-          displayName: widget.displayName,
-          sourceContext: resolvedSourceContext,
-          sourcePage: 'compose',
-          isLLMGenerated: false,
-          originatingButtonText: null,
-          composeMode: true,
-          initialComposeSession: initialSession,
-          initialDocumentType: initialSession.documentType,
+    _suppressDidPopNextRestart = true;
+    try {
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (context) => FreestylePage(
+            idToken: widget.idToken,
+            aacUserId: widget.aacUserId,
+            displayName: widget.displayName,
+            sourceContext: resolvedSourceContext,
+            sourcePage: 'compose',
+            isLLMGenerated: false,
+            originatingButtonText: null,
+            composeMode: true,
+            initialComposeSession: initialSession,
+            initialDocumentType: initialSession.documentType,
+          ),
         ),
-      ),
-    );
+      );
 
-    if (!mounted) return;
-
-    final refreshed = await ComposeSessionService.load(widget.aacUserId);
-    if (!mounted) return;
-
-    setState(() {
-      _composeSession = refreshed;
-    });
-
-    if (_composeSession.active) {
-      _composeGridStack.clear();
-      _composePageStack.clear();
-      _openComposeFinalizeGrid();
-      return;
-    }
-
-    await fetchGridDataForPage('home', addToHistory: false);
-    WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
+
+      final refreshed = await ComposeSessionService.load(widget.aacUserId);
+      if (!mounted) return;
+
       setState(() {
-        scanningIndex = null;
+        _composeSession = refreshed;
       });
-      _maybeStartScanning();
-    });
+
+      if (_composeSession.active) {
+        _composeGridStack.clear();
+        _composePageStack.clear();
+        _openComposeFinalizeGrid();
+        return;
+      }
+
+      await fetchGridDataForPage('home', addToHistory: false);
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        setState(() {
+          scanningIndex = null;
+        });
+        _maybeStartScanning();
+      });
+    } finally {
+      _suppressDidPopNextRestart = false;
+    }
   }
 
   // ---------- compose grid navigation helpers ----------
@@ -10917,6 +12075,12 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       );
 
       if (response.statusCode == 404) {
+        final settingsProvider = Provider.of<UserSettingsProvider>(
+          context,
+          listen: false,
+        );
+        final userLanguage = settingsProvider.settings?.userLanguage ?? 'en-US';
+
         final fallbackResponse =
             await AuthenticatedHttpClient.makeAuthenticatedRequest(
               'POST',
@@ -10925,7 +12089,10 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
                 'X-User-ID': widget.aacUserId,
                 'Content-Type': 'application/json',
               },
-              body: json.encode({'text_to_cleanup': body}),
+              body: json.encode({
+                'text_to_cleanup': body,
+                'target_locale': userLanguage,
+              }),
               timeoutSeconds: 90,
             );
 
@@ -11367,44 +12534,48 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       final summaryInstruction = (userSettings?.summaryOff ?? false)
           ? 'The "summary" key should contain the exact same FULL text as the "option" key.'
           : 'If the generated option is more than 5 words, the "summary" key should be a 3-5 word abbreviation of each option, including the exact key words from the option. If the option is 5 words or less, the "summary" key should contain the exact same FULL text as the "option" key.';
-      final promptForLLM = _composeSession.active
-          ? 'Provide up to "$llmOptions" short written-composition options related to: "$question".\n'
+        final langInstruction = _getUserLanguageInstruction();
+        final promptForLLM = _composeSession.active
+          ? 'Provide exactly "$llmOptions" short written-composition options related to: "$question".\n'
                 'This is COMPOSE MODE. The user is writing a document for someone who may not be physically present.\n'
                 'Ignore location, people present, room context, and current activity.\n'
                 'Generate natural next phrases or sentences the user could add to the written composition.\n'
                 'Format your response as a JSON list where each item has "option", "summary", and "keywords" keys.\n'
                 'The "option" key should contain the FULL option text.\n'
-                'The "keywords" key should contain a list of 3-5 important words from the option.\n'
+                'The "keywords" key should contain a list of 3-5 simple, concrete English words that match available symbols. ALWAYS in English, even if the option/summary is in another language.\n'
                 '${summaryInstruction}\n'
-                'Example: [{"option": "I wanted to write and tell you how much this meant to me.", "summary": "Tell you this meant", "keywords": ["write", "tell", "meant", "much", "you"]}, {"option": "It made the whole day feel more special.", "summary": "Day more special", "keywords": ["day", "special", "feel", "whole", "made"]}]'
+                '$langInstruction'
+                'Example: [{"option": "I wanted to write and tell you how much this meant to me.", "summary": "Tell you this meant", "keywords": ["write", "tell", "heart", "letter", "appreciate"]}, {"option": "It made the whole day feel more special.", "summary": "Day more special", "keywords": ["day", "special", "celebrate", "happy", "good"]}]'
                 '${_getComposePromptContext()}'
-          : 'Provide up to "$llmOptions" short, single-phrase options related to: "$question".\n'
+          : 'Provide exactly "$llmOptions" short, single-phrase options related to: "$question".\n'
                 'Format your response as a JSON list where each item has "option", "summary", and "keywords" keys.\n'
                 'The "option" key should contain the FULL option text.\n'
-                'The "keywords" key should contain a list of 3-5 important words from the option.\n'
+                'The "keywords" key should contain a list of 3-5 simple, concrete English words that match available symbols. ALWAYS in English, even if the option/summary is in another language.\n'
                 '${summaryInstruction}\n'
-                'Example: [{"option": "What a fantastic day!", "summary": "Fantastic day", "keywords": ["good", "happy", "great", "day", "fun"]}, {"option": "Can I have some water please?", "summary": "Water please", "keywords": ["water", "drink", "thirsty", "beverage"]}]';
+                '$langInstruction'
+                'Example: [{"option": "What a fantastic day!", "summary": "Fantastic day", "keywords": ["good", "happy", "great", "day", "fun"]}, {"option": "¿Puedo tomar agua por favor?", "summary": "Agua por favor", "keywords": ["water", "drink", "thirsty", "beverage"]}]';
       debugPrint('🤖🤖🤖 LLM REQUEST STARTED 🤖🤖🤖');
       debugPrint('🤖 Question: $question');
       debugPrint('🤖 LLM Options Count: $llmOptions');
       _initializeFollowUpConversation(question);
 
+      final llmStart = DateTime.now();
       final response = await retryNetworkOperation(
-        () async => await AuthenticatedHttpClient.makeAuthenticatedRequest(
-          'POST',
-          '${EnvironmentConfig.apiBaseUrl}/llm',
-          baseHeaders: {
-            'X-User-ID': widget.aacUserId,
-            'Content-Type': 'application/json',
-          },
-          body: jsonEncode(_buildLlmRequestBody(promptForLLM)),
+        () async => _queryLlmWithDedup(
+          body: _buildLlmRequestBody(promptForLLM),
+          userId: widget.aacUserId,
           timeoutSeconds: 30,
+          source: 'wake-word',
         ),
         operationName: 'LLM Query',
         maxRetries: 3,
       );
+      final llmElapsedMs = DateTime.now().difference(llmStart).inMilliseconds;
 
       debugPrint('🤖 LLM Response Status: ${response.statusCode}');
+      debugPrint(
+        '🤖 LLM Timing: ${llmElapsedMs}ms, responseBytes=${response.body.length}',
+      );
       if (response.statusCode == 200) {
         debugLogLLM(stage: 'LLM Response', response: response.body);
 
@@ -11428,7 +12599,15 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
         // Parse potentially malformed LLM response
         rawData = _parseLLMResponse(rawData);
 
-        final List<dynamic> data = rawData is List ? rawData : [];
+        var data = _coerceLlmOptions(rawData);
+        data = await _ensureRequestedLlmOptionCount(
+          parsedOptions: data,
+          requestedCount: llmOptions,
+          originalPrompt: promptForLLM,
+          userId: widget.aacUserId,
+          contextTag: 'wake-word',
+        );
+
         List<Map<String, dynamic>> llmButtons = data
             .map(
               (item) => {
@@ -11451,7 +12630,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
 
         // Add "Free Style" button - allows user to construct their own response
         llmButtons.add({
-          'text': 'Free Style',
+          'text': _localizeUiLabel('Free Style'),
           'speechPhrase': 'Free Style',
           'isLLMGenerated': true,
           'llmSpecial': 'freeStyle',
@@ -11462,7 +12641,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
 
         // Add "Please ask me again" button
         llmButtons.add({
-          'text': 'Please ask me again',
+          'text': _localizeUiLabel('Please ask me again'),
           'speechPhrase': 'Please ask me again',
           'isLLMGenerated': true,
           'llmSpecial': 'askAgain',
@@ -11476,7 +12655,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
         // Add default buttons: Something Else, Go Back
         int nextIndex = llmButtons.length;
         llmButtons.add({
-          'text': 'Something Else',
+          'text': _localizeUiLabel('Something Else'),
           'speechPhrase': 'Something Else',
           'isLLMGenerated': true,
           'llmSpecial': 'somethingElse',
@@ -11485,7 +12664,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
         });
         nextIndex++;
         llmButtons.add({
-          'text': 'Go Back',
+          'text': _localizeUiLabel('Go Back'),
           'speechPhrase': 'Go Back',
           'isLLMGenerated': true,
           'llmSpecial': 'goBack',
@@ -11498,6 +12677,9 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           _isProcessingLLM = false;
           statusMessage = null;
         });
+
+        // Warm translation cache for all option buttons so tapping one announces instantly.
+        unawaited(_prefetchTranslationsForButtons(llmButtons));
 
         // AUDIO ROUTING FIX: Wait for any announcements to completely finish
         // before starting scanning to prevent audio routing conflicts
@@ -11542,7 +12724,9 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           );
           final waitForSwitch =
               settingsProvider.settings?.waitForSwitchToScan ?? false;
-          if (waitForSwitch && _waitingForInitialSwitch) {
+          if (waitForSwitch &&
+              _waitingForInitialSwitch &&
+              _shouldPlayWaitForSwitchChimeForCurrentGrid()) {
             unawaited(_playWaitForSwitchNotification());
           } else {
             // Add a small delay to let scanning start, then announce that we have new options
@@ -11567,7 +12751,9 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           );
           final waitForSwitch =
               settingsProvider.settings?.waitForSwitchToScan ?? false;
-          if (waitForSwitch && _waitingForInitialSwitch) {
+          if (waitForSwitch &&
+              _waitingForInitialSwitch &&
+              _shouldPlayWaitForSwitchChimeForCurrentGrid()) {
             unawaited(_playWaitForSwitchNotification());
           }
         }
@@ -12067,6 +13253,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           spellLetterOrder: currentSettings.spellLetterOrder,
           vocabularyLevel: currentSettings.vocabularyLevel,
           waitForSwitchToScan: currentSettings.waitForSwitchToScan,
+            playWaitForSwitchChime: currentSettings.playWaitForSwitchChime,
           scanMode: currentSettings.scanMode,
           useTapInterface:
               !currentSettings.useTapInterface, // Toggle the interface mode
@@ -12076,6 +13263,10 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           emailSubjectTemplate: currentSettings.emailSubjectTemplate,
           personalVolume: currentSettings.personalVolume,
           systemVolume: currentSettings.systemVolume,
+          userLanguage: currentSettings.userLanguage,
+          defaultPartnerLanguage: currentSettings.defaultPartnerLanguage,
+          defaultPartnerVoice: currentSettings.defaultPartnerVoice,
+          locationOverrideLanguages: currentSettings.locationOverrideLanguages,
         );
 
         // Save the settings
@@ -12260,10 +13451,255 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
     }
   }
 
+  List<String> _getSpeechHistoryItems() {
+    final rawText = _composeSession.active ? _composeSession.text : speechHistory;
+    return rawText
+        .split('\n')
+        .map((line) => line.trim())
+        .where((line) => line.isNotEmpty)
+        .toList();
+  }
+
+  Future<void> _clearSpeechHistoryForCurrentMode() async {
+    if (_composeSession.active) {
+      setState(() {
+        _composeSession = _composeSession.copyWith(text: '');
+      });
+      await _persistComposeSession();
+    } else {
+      setState(() {
+        speechHistory = '';
+      });
+    }
+  }
+
+  void _showSpeechHistoryDialog() {
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        final historyItems = _getSpeechHistoryItems();
+        return AlertDialog(
+          title: const Text('Speech History'),
+          content: SizedBox(
+            width: double.maxFinite,
+            height: 300,
+            child: historyItems.isEmpty
+                ? const Center(
+                    child: Text(
+                      'No speech history yet.',
+                      style: TextStyle(fontSize: 14),
+                    ),
+                  )
+                : ListView.separated(
+                    itemCount: historyItems.length,
+                    separatorBuilder: (context, index) =>
+                        const SizedBox(height: 8),
+                    itemBuilder: (context, index) {
+                      final historyItem =
+                          historyItems[historyItems.length - 1 - index];
+                      return Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 10,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: Colors.grey[100],
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: Colors.grey[300] ?? Colors.grey.shade300,
+                          ),
+                        ),
+                        child: Row(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Expanded(
+                              child: Text(
+                                historyItem,
+                                style: const TextStyle(fontSize: 14),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Tooltip(
+                              message: 'Copy this item',
+                              child: Container(
+                                height: 54,
+                                width: 64,
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [
+                                      Colors.blue[400] ?? Colors.blue.shade400,
+                                      Colors.blue[600] ?? Colors.blue.shade600,
+                                    ],
+                                    begin: Alignment.topCenter,
+                                    end: Alignment.bottomCenter,
+                                  ),
+                                  borderRadius: BorderRadius.circular(6),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.blue.withOpacity(0.3),
+                                      offset: const Offset(0, 2),
+                                      blurRadius: 4,
+                                    ),
+                                  ],
+                                ),
+                                child: IconButton(
+                                  onPressed: () async {
+                                    await Clipboard.setData(
+                                      ClipboardData(text: historyItem),
+                                    );
+                                    if (!mounted) return;
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                      const SnackBar(
+                                        content: Text('Copied to clipboard'),
+                                        duration: Duration(milliseconds: 1200),
+                                      ),
+                                    );
+                                  },
+                                  icon: const Icon(
+                                    Icons.copy,
+                                    size: 29,
+                                    color: Colors.white,
+                                  ),
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Tooltip(
+                              message: 'Speak this item',
+                              child: Container(
+                                height: 54,
+                                width: 64,
+                                decoration: BoxDecoration(
+                                  gradient: LinearGradient(
+                                    colors: [
+                                      Colors.green[400] ??
+                                          Colors.green.shade400,
+                                      Colors.green[600] ??
+                                          Colors.green.shade600,
+                                    ],
+                                    begin: Alignment.topCenter,
+                                    end: Alignment.bottomCenter,
+                                  ),
+                                  borderRadius: BorderRadius.circular(6),
+                                  boxShadow: [
+                                    BoxShadow(
+                                      color: Colors.green.withOpacity(0.3),
+                                      offset: const Offset(0, 2),
+                                      blurRadius: 4,
+                                    ),
+                                  ],
+                                ),
+                                child: IconButton(
+                                  onPressed: () async {
+                                    await _announceWithTimeout(
+                                      historyItem,
+                                      routing: 'system',
+                                    );
+                                  },
+                                  icon: const Icon(
+                                    Icons.volume_up,
+                                    size: 32,
+                                    color: Colors.white,
+                                  ),
+                                  padding: EdgeInsets.zero,
+                                  constraints: const BoxConstraints(),
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
+          ),
+          actions: [
+            Tooltip(
+              message: 'Close',
+              child: Container(
+                height: 64,
+                width: 80,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      Colors.blue[400] ?? Colors.blue.shade400,
+                      Colors.blue[600] ?? Colors.blue.shade600,
+                    ],
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                  ),
+                  borderRadius: BorderRadius.circular(6),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.blue.withOpacity(0.3),
+                      offset: const Offset(0, 2),
+                      blurRadius: 4,
+                    ),
+                  ],
+                ),
+                child: IconButton(
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close, size: 45, color: Colors.white),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                ),
+              ),
+            ),
+            Tooltip(
+              message: 'Clear History',
+              child: Container(
+                height: 64,
+                width: 80,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      Colors.red[400] ?? Colors.red.shade400,
+                      Colors.red[600] ?? Colors.red.shade600,
+                    ],
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                  ),
+                  borderRadius: BorderRadius.circular(6),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.red.withOpacity(0.3),
+                      offset: const Offset(0, 2),
+                      blurRadius: 4,
+                    ),
+                  ],
+                ),
+                child: IconButton(
+                  onPressed: () async {
+                    await _clearSpeechHistoryForCurrentMode();
+                    if (!mounted) return;
+                    Navigator.pop(context);
+                  },
+                  icon: const Icon(
+                    Icons.delete_outline,
+                    size: 45,
+                    color: Colors.white,
+                  ),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                ),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // Update PIN from settings automatically
     final settingsProvider = Provider.of<UserSettingsProvider>(
+      context,
+      listen: true,
+    );
+    final musicService = Provider.of<MusicPlaybackService>(
       context,
       listen: true,
     );
@@ -12468,6 +13904,17 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
                                 child: Row(
                                   mainAxisSize: MainAxisSize.min,
                                   children: [
+                                    if (musicService.isPlaying)
+                                      IconButton(
+                                        icon: const Icon(
+                                          Icons.stop_circle,
+                                          color: Colors.black87,
+                                        ),
+                                        tooltip: 'Stop Playing Music',
+                                        onPressed: () {
+                                          musicService.stopPlayback();
+                                        },
+                                      ),
                                     // Lock/Unlock Icon - Always visible
                                     IconButton(
                                       icon: Icon(
@@ -12633,7 +14080,6 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
                       children: [
                         Builder(
                           builder: (context) {
-                            final composeActive = _composeSession.active;
                             return Row(
                               children: [
                                 Text(
@@ -12646,20 +14092,10 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
                                 ),
                                 const SizedBox(width: 12),
                                 ElevatedButton(
-                                  onPressed: () async {
-                                    if (composeActive) {
-                                      setState(() {
-                                        _composeSession = _composeSession
-                                            .copyWith(text: '');
-                                      });
-                                      await _persistComposeSession();
-                                    } else {
-                                      setState(() {
-                                        speechHistory = '';
-                                      });
-                                    }
+                                  onPressed: () {
+                                    _showSpeechHistoryDialog();
                                   },
-                                  child: const Text('Clear'),
+                                  child: const Text('History'),
                                   style: ElevatedButton.styleFrom(
                                     padding: const EdgeInsets.symmetric(
                                       horizontal: 16,
@@ -12670,13 +14106,13 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
                                       fontWeight: FontWeight.bold,
                                     ),
                                     backgroundColor: Colors.white,
-                                    foregroundColor: Colors.red.shade700,
+                                    foregroundColor: Colors.blue.shade700,
                                     elevation: 2,
-                                    shadowColor: Colors.red.withOpacity(0.3),
+                                    shadowColor: Colors.blue.withOpacity(0.3),
                                     shape: RoundedRectangleBorder(
                                       borderRadius: BorderRadius.circular(20),
                                       side: BorderSide(
-                                        color: Colors.red.shade100,
+                                        color: Colors.blue.shade100,
                                       ),
                                     ),
                                   ),
@@ -13004,6 +14440,26 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           '[DEBUG] _buildDynamicUserGrid: availableWidth=$availableWidth, gridCols=$gridCols, buttonSize=$effectiveButtonSize, fontSize=$fontSize',
         );
 
+        // PERFORMANCE: Only render grid when page is visible to stop image loading
+        if (!_isPageVisible) {
+          debugPrint(
+            '🔴 Grid hidden: not rendering GridView to prevent image loading',
+          );
+          return Container(
+            decoration: BoxDecoration(
+              color: Colors.blueGrey[50],
+              image: DecorationImage(
+                image: AssetImage(
+                  'assets/subtle_pattern.png',
+                ),
+                fit: BoxFit.cover,
+                opacity: 0.05,
+                onError: (exception, stackTrace) {},
+              ),
+            ),
+          );
+        }
+
         final definedButtons = _effectiveGridButtons();
         final List<Map<String, dynamic>> visibleButtons =
             List<Map<String, dynamic>>.from(definedButtons);
@@ -13077,6 +14533,209 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
         );
       },
     );
+  }
+
+  // --- Scheduled Favorite Check ---
+
+  void _startScheduleCheck() {
+    _checkSchedules(isRuntime: false);
+    _scheduleCheckTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      _checkSchedules(isRuntime: true);
+    });
+  }
+
+  Future<void> _checkSchedules({required bool isRuntime}) async {
+    try {
+      debugPrint('[ScheduleCheck] ========== Starting check (isRuntime=$isRuntime) ==========');
+
+      String? currentFavoriteName;
+      try {
+        final stateResponse = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+          'GET',
+          '${EnvironmentConfig.apiBaseUrl}/get-user-current',
+          baseHeaders: {'X-User-ID': widget.aacUserId},
+        );
+        debugPrint('[ScheduleCheck] get-user-current status: ${stateResponse.statusCode}');
+        if (stateResponse.statusCode == 200) {
+          final stateData = json.decode(stateResponse.body);
+          currentFavoriteName = stateData['favorite_name'] as String?;
+          debugPrint('[ScheduleCheck] Currently loaded favorite: "$currentFavoriteName"');
+        } else {
+          debugPrint('[ScheduleCheck] get-user-current failed: ${stateResponse.body}');
+        }
+      } catch (e) {
+        debugPrint('[ScheduleCheck] Failed to fetch current user state: $e');
+      }
+
+      final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+        'GET',
+        '${EnvironmentConfig.apiBaseUrl}/api/user-current-favorites',
+        baseHeaders: {'X-User-ID': widget.aacUserId},
+      );
+
+      debugPrint('[ScheduleCheck] Favorites response status: ${response.statusCode}');
+
+      if (response.statusCode != 200) {
+        debugPrint('[ScheduleCheck] Failed: status=${response.statusCode}, body=${response.body}');
+        return;
+      }
+
+      final data = json.decode(response.body);
+      final favorites = List<Map<String, dynamic>>.from(data['favorites'] ?? []);
+      debugPrint('[ScheduleCheck] Total favorites: ${favorites.length}');
+
+      final now = DateTime.now();
+      final currentDay = DateFormat('EEEE', 'en_US').format(now);
+      final currentTimeMinutes = now.hour * 60 + now.minute;
+
+      debugPrint('[ScheduleCheck] Current: $currentDay ${now.hour}:${now.minute.toString().padLeft(2, '0')} ($currentTimeMinutes min)');
+
+      for (final fav in favorites) {
+        final favName = fav['name'] ?? '(unnamed)';
+        final schedule = fav['schedule'];
+
+        if (schedule == null) {
+          debugPrint('[ScheduleCheck]   "$favName": no schedule');
+          continue;
+        }
+
+        final enabled = schedule['enabled'];
+        if (enabled != true) {
+          debugPrint('[ScheduleCheck]   "$favName": disabled (enabled=$enabled)');
+          continue;
+        }
+
+        bool isDayMatch = false;
+        final daysOfWeek = schedule['days_of_week'];
+        if (daysOfWeek is List) {
+          isDayMatch = daysOfWeek.contains(currentDay);
+          debugPrint('[ScheduleCheck]   "$favName": days=$daysOfWeek currentDay="$currentDay" match=$isDayMatch');
+        } else if (schedule['day_of_week'] != null) {
+          isDayMatch = schedule['day_of_week'] == currentDay;
+          debugPrint('[ScheduleCheck]   "$favName": day_of_week=${schedule['day_of_week']} currentDay="$currentDay" match=$isDayMatch');
+        } else {
+          debugPrint('[ScheduleCheck]   "$favName": no days field — schedule=$schedule');
+        }
+
+        if (!isDayMatch) continue;
+
+        final startTimeStr = schedule['start_time'] as String?;
+        final endTimeStr = schedule['end_time'] as String?;
+        debugPrint('[ScheduleCheck]   "$favName": startTime=$startTimeStr endTime=$endTimeStr');
+
+        if (startTimeStr == null || endTimeStr == null) continue;
+
+        final startParts = startTimeStr.split(':').map(int.parse).toList();
+        final endParts = endTimeStr.split(':').map(int.parse).toList();
+        if (startParts.length < 2 || endParts.length < 2) continue;
+
+        final startTimeMinutes = startParts[0] * 60 + startParts[1];
+        final endTimeMinutes = endParts[0] * 60 + endParts[1];
+        final minutesUntilStart = startTimeMinutes - currentTimeMinutes;
+        final isUpcoming = minutesUntilStart >= 0 && minutesUntilStart <= 15;
+        final isAlreadyActive = currentTimeMinutes > startTimeMinutes && currentTimeMinutes <= endTimeMinutes;
+
+        debugPrint('[ScheduleCheck]   "$favName": start=$startTimeMinutes end=$endTimeMinutes now=$currentTimeMinutes minutesUntilStart=$minutesUntilStart isUpcoming=$isUpcoming isAlreadyActive=$isAlreadyActive');
+
+        if (isUpcoming || isAlreadyActive) {
+          final key = '$favName-$currentDay-$startTimeStr';
+
+          if (_handledSchedules.contains(key)) {
+            debugPrint('[ScheduleCheck]   "$favName": already handled, skipping');
+            continue;
+          }
+
+          if (currentFavoriteName == favName) {
+            debugPrint('[ScheduleCheck]   "$favName": already the current favorite, marking handled');
+            _handledSchedules.add(key);
+            continue;
+          }
+
+          debugPrint('[ScheduleCheck]   "$favName": SHOWING DIALOG (mounted=$mounted)');
+          if (mounted) {
+            _showScheduledFavoriteDialog(fav, key, minutesUntilStart: isUpcoming ? minutesUntilStart : 0);
+          }
+          break;
+        } else {
+          debugPrint('[ScheduleCheck]   "$favName": outside 15-min window, skipping');
+        }
+      }
+
+      debugPrint('[ScheduleCheck] ========== Check complete ==========');
+    } catch (e, stack) {
+      debugPrint('[ScheduleCheck] Error: $e\n$stack');
+    }
+  }
+
+  Future<void> _showScheduledFavoriteDialog(
+    Map<String, dynamic> favorite,
+    String scheduleKey, {
+    int minutesUntilStart = 0,
+  }) async {
+    final name = favorite['name'] as String? ?? '';
+    final message = minutesUntilStart > 0
+        ? 'The location "$name" is scheduled to start in $minutesUntilStart minute${minutesUntilStart == 1 ? '' : 's'}. Do you want to load it now?'
+        : 'The scheduled location "$name" is now active. Do you want to load it?';
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Scheduled Location'),
+        content: Text(message),
+        actions: [
+          TextButton(
+            onPressed: () {
+              _handledSchedules.add(scheduleKey);
+              Navigator.pop(ctx);
+            },
+            child: const Text('No'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              _handledSchedules.add(scheduleKey);
+              Navigator.pop(ctx);
+              _loadScheduledFavorite(favorite);
+            },
+            child: const Text('Yes'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _loadScheduledFavorite(Map<String, dynamic> favorite) async {
+    try {
+      final now = DateTime.now().toUtc().toIso8601String();
+      final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+        'POST',
+        '${EnvironmentConfig.apiBaseUrl}/user_current',
+        baseHeaders: {'X-User-ID': widget.aacUserId},
+        body: json.encode({
+          'location': favorite['location'] ?? '',
+          'locationLanguageOverride': favorite['locationLanguageOverride'] ?? '',
+          'people': favorite['people'] ?? '',
+          'activity': favorite['activity'] ?? '',
+          'loaded_at': now,
+          'favorite_name': favorite['name'],
+          'saved_at': now,
+        }),
+      );
+
+      if (mounted) {
+        if (response.statusCode == 200) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Loaded location: ${favorite['name']}')),
+          );
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Failed to load scheduled location')),
+          );
+        }
+      }
+    } catch (e) {
+      debugPrint('[ScheduleCheck] Error loading favorite: $e');
+    }
   }
 }
 

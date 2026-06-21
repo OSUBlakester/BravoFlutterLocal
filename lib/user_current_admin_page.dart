@@ -1,11 +1,14 @@
 
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:provider/provider.dart';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/services.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'config/environment_config.dart';
+import 'config/language_config.dart';
+import 'services/user_settings_provider.dart';
 
 class UserCurrentAdminPage extends StatefulWidget {
   final String idToken;
@@ -50,6 +53,47 @@ class _UserCurrentAdminPageState extends State<UserCurrentAdminPage> {
   bool isListening = false;
   String dictationField = '';
 
+  static const Map<String, String> _localeLabelToTag = {
+    'english (us)': 'en-US',
+    'spanish (us)': 'es-US',
+    'french (france)': 'fr-FR',
+    'german (germany)': 'de-DE',
+    'italian (italy)': 'it-IT',
+    'portuguese (brazil)': 'pt-BR',
+    'arabic': 'ar-XA',
+  };
+
+  String? _normalizeLocaleTag(dynamic value) {
+    if (value == null) return null;
+    final raw = value.toString().trim();
+    if (raw.isEmpty) return null;
+
+    final labelMatch = _localeLabelToTag[raw.toLowerCase()];
+    if (labelMatch != null) return labelMatch;
+
+    final cleaned = raw.replaceAll('_', '-');
+    final match = RegExp(r'^([a-zA-Z]{2})(?:-([a-zA-Z]{2,3}))?$').firstMatch(cleaned);
+    if (match == null) return null;
+    final language = match.group(1)!.toLowerCase();
+    final region = match.group(2)?.toUpperCase();
+    return region == null ? language : '$language-$region';
+  }
+
+  void _applyLocationLanguageOverride(dynamic localeValue) {
+    final settingsProvider = context.read<UserSettingsProvider>();
+    final normalizedLocale = _normalizeLocaleTag(localeValue);
+    if (normalizedLocale == null) {
+      settingsProvider.clearLocationOverride();
+      return;
+    }
+
+    final entry = settingsProvider.settings?.locationOverrideLanguages.firstWhere(
+      (e) => e.locale == normalizedLocale,
+      orElse: () => LocationLanguageEntry(locale: normalizedLocale, voice: ''),
+    );
+    settingsProvider.setLocationOverride(normalizedLocale, entry?.voice ?? '');
+  }
+
 
   @override
   void initState() {
@@ -68,6 +112,13 @@ class _UserCurrentAdminPageState extends State<UserCurrentAdminPage> {
     fetchCurrentUserState();
     fetchFavorites();
     speech = stt.SpeechToText();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final settingsProvider = context.read<UserSettingsProvider>();
+      if (!settingsProvider.isLoading && settingsProvider.settings == null) {
+        settingsProvider.fetchSettings();
+      }
+    });
   }
   Future<void> fetchFavorites() async {
     setState(() { isFavoritesLoading = true; });
@@ -100,6 +151,7 @@ class _UserCurrentAdminPageState extends State<UserCurrentAdminPage> {
       activityController.text = favorite['activity'] ?? '';
       selectedFavoriteName = favorite['name'];
     });
+    _applyLocationLanguageOverride(favorite['locationLanguageOverride']);
     
     // Automatically save the loaded data with timestamps (matching Web implementation)
     await _saveUserCurrentWithTimestamp(favorite['name']);
@@ -116,6 +168,7 @@ class _UserCurrentAdminPageState extends State<UserCurrentAdminPage> {
     Map<String, dynamic> favoriteData = {
       'name': name,
       'location': locationController.text,
+      'locationLanguageOverride': context.read<UserSettingsProvider>().currentLocationOverrideLocale ?? '',
       'people': peopleController.text,
       'activity': activityController.text,
     };
@@ -202,6 +255,7 @@ class _UserCurrentAdminPageState extends State<UserCurrentAdminPage> {
       final Map<String, dynamic> favoriteData = {
         'name': newName,
         'location': newLocation,
+        'locationLanguageOverride': context.read<UserSettingsProvider>().currentLocationOverrideLocale ?? '',
         'people': newPeople,
         'activity': newActivity,
       };
@@ -311,6 +365,7 @@ class _UserCurrentAdminPageState extends State<UserCurrentAdminPage> {
         locationController.text = data['location'] ?? '';
         peopleController.text = data['people'] ?? '';
         activityController.text = data['activity'] ?? '';
+        _applyLocationLanguageOverride(data['locationLanguageOverride']);
         setState(() { statusMessage = 'Current state loaded.'; });
       } else {
         setState(() { statusMessage = 'Error loading state: ${response.statusCode}'; });
@@ -334,6 +389,7 @@ class _UserCurrentAdminPageState extends State<UserCurrentAdminPage> {
         },
         body: json.encode({
           'location': locationController.text,
+          'locationLanguageOverride': context.read<UserSettingsProvider>().currentLocationOverrideLocale ?? '',
           'people': peopleController.text,
           'activity': activityController.text,
         }),
@@ -367,6 +423,7 @@ class _UserCurrentAdminPageState extends State<UserCurrentAdminPage> {
         },
         body: json.encode({
           'location': locationController.text,
+          'locationLanguageOverride': context.read<UserSettingsProvider>().currentLocationOverrideLocale ?? '',
           'people': peopleController.text,
           'activity': activityController.text,
           'loaded_at': loadTimestamp,  // Timestamp when favorite is loaded
@@ -536,6 +593,69 @@ class _UserCurrentAdminPageState extends State<UserCurrentAdminPage> {
                 ],
               ),
               const SizedBox(height: 24),
+
+              // Location Language Override
+              Consumer<UserSettingsProvider>(
+                builder: (context, settingsProvider, _) {
+                  final overrides = settingsProvider.settings?.locationOverrideLanguages ?? [];
+                  if (overrides.isEmpty) return const SizedBox.shrink();
+
+                  final activeLocale = settingsProvider.currentLocationOverrideLocale;
+
+                  return Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Text(
+                        'Location Language Override',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: Colors.black87),
+                      ),
+                      const SizedBox(height: 4),
+                      const Text(
+                        'Select a location language to override the default partner language.',
+                        style: TextStyle(fontSize: 12, color: Colors.grey),
+                      ),
+                      const SizedBox(height: 8),
+                      DropdownButtonFormField<String?>(
+                        decoration: const InputDecoration(
+                          border: OutlineInputBorder(),
+                          contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                        ),
+                        value: activeLocale,
+                        items: [
+                          const DropdownMenuItem<String?>(
+                            value: null,
+                            child: Text('No Override / Default'),
+                          ),
+                          ...overrides.map((entry) => DropdownMenuItem<String?>(
+                            value: entry.locale,
+                            child: Text(languageLabelForLocale(entry.locale)),
+                          )),
+                        ],
+                        onChanged: (locale) {
+                          if (locale == null) {
+                            settingsProvider.clearLocationOverride();
+                          } else {
+                            final entry = overrides.firstWhere(
+                              (e) => e.locale == locale,
+                              orElse: () => LocationLanguageEntry(locale: locale, voice: ''),
+                            );
+                            settingsProvider.setLocationOverride(entry.locale, entry.voice);
+                          }
+                        },
+                      ),
+                      if (activeLocale != null) ...[
+                        const SizedBox(height: 4),
+                        Text(
+                          'Override active: ${languageLabelForLocale(activeLocale)}',
+                          style: const TextStyle(fontSize: 12, color: Colors.teal, fontWeight: FontWeight.w500),
+                        ),
+                      ],
+                      const SizedBox(height: 16),
+                    ],
+                  );
+                },
+              ),
+
               Row(
                 children: [
                   ElevatedButton(

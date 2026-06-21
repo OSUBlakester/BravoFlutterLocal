@@ -5,6 +5,7 @@ import 'constants/mood_options.dart';
 import 'package:http/http.dart' as http;
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 import 'package:flutter/services.dart';
 import 'package:image_picker/image_picker.dart';
 import 'config/environment_config.dart';
@@ -13,8 +14,13 @@ import 'pages/family_friends_interview_page.dart';
 import 'services/family_friends_interview_service.dart';
 import 'services/custom_image_service.dart';
 import 'services/pictogram_service.dart';
+import 'services/storage_image_url_service.dart';
 import 'widgets/custom_images_widget.dart';
 import 'services/authenticated_http_client.dart';
+import 'package:flutter_image_compress/flutter_image_compress.dart';
+import 'package:http_parser/http_parser.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 class UserInfoAdminPage extends StatefulWidget {
   final String idToken;
@@ -54,6 +60,8 @@ class FriendFamily {
 }
 
 class _UserInfoAdminPageState extends State<UserInfoAdminPage> {
+  static const String _localProfileImagePathPrefix = 'local_profile_image_path_';
+
   // User Info Section
   final TextEditingController userInfoController = TextEditingController();
   final TextEditingController userBirthdateController = TextEditingController();
@@ -76,9 +84,6 @@ class _UserInfoAdminPageState extends State<UserInfoAdminPage> {
   
   // Prevent duplicate save operations
   bool _isCurrentlySaving = false;
-  
-  // Prevent infinite reload loops
-  bool _hasInitiallyLoaded = false;
 
   @override
   void initState() {
@@ -111,7 +116,6 @@ class _UserInfoAdminPageState extends State<UserInfoAdminPage> {
     });
     
     debugPrint('UserInfoAdminPage: initState - scheduled data loading');
-    _hasInitiallyLoaded = true;
   }
 
   // Configure text fields to be properly focusable for keyboard input
@@ -130,6 +134,204 @@ class _UserInfoAdminPageState extends State<UserInfoAdminPage> {
   }
 
   // User Info Methods
+  String _localProfileImageStorageKey() {
+    return '$_localProfileImagePathPrefix${widget.aacUserId}';
+  }
+
+  bool _isLocalFileUrl(String? url) {
+    if (url == null || url.isEmpty) return false;
+    return url.startsWith('file://') || url.startsWith('/');
+  }
+
+  String _toLocalFilePath(String url) {
+    if (url.startsWith('file://')) {
+      return Uri.parse(url).toFilePath();
+    }
+    return url;
+  }
+
+  Future<String?> _loadLocalProfileImageUrl() async {
+    final prefs = await SharedPreferences.getInstance();
+    final storedPath = prefs.getString(_localProfileImageStorageKey());
+    if (storedPath == null || storedPath.isEmpty) return null;
+
+    final file = File(storedPath);
+    if (await file.exists()) {
+      return 'file://$storedPath';
+    }
+
+    await prefs.remove(_localProfileImageStorageKey());
+    return null;
+  }
+
+  Future<String?> _saveLocalProfileImage(Uint8List bytes) async {
+    final directory = await getApplicationDocumentsDirectory();
+    final path = '${directory.path}/profile_image_${widget.aacUserId}.jpg';
+    final file = File(path);
+    await file.writeAsBytes(bytes, flush: true);
+
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_localProfileImageStorageKey(), path);
+    return 'file://$path';
+  }
+
+  Future<void> _clearLocalProfileImage() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final storedPath = prefs.getString(_localProfileImageStorageKey());
+      if (storedPath != null && storedPath.isNotEmpty) {
+        final file = File(storedPath);
+        if (await file.exists()) {
+          await file.delete();
+        }
+      }
+      await prefs.remove(_localProfileImageStorageKey());
+      // Also clear the PictogramService in-memory profile image cache so that
+      // pronoun buttons (I/me/my) immediately re-fetch the canonical URL from
+      // the server instead of serving the now-deleted file:// path.
+      PictogramService().clearProfileImageCache();
+    } catch (e) {
+      debugPrint('⚠️ Failed to clear local profile image: $e');
+    }
+  }
+
+  Future<void> _loadProfileImageFromProfileEndpoint({
+    bool updateStatusOnError = false,
+  }) async {
+    try {
+      // Use any cached local file only as a temporary preview while loading
+      // canonical server metadata from /api/get_profile_image.
+      final localProfileImageUrl = await _loadLocalProfileImageUrl();
+      if (localProfileImageUrl != null && localProfileImageUrl.isNotEmpty) {
+        if (mounted) {
+          setState(() {
+            profileImageUrl = localProfileImageUrl;
+          });
+        }
+      }
+
+      final idToken = await AuthenticatedHttpClient.getRefreshedIdToken();
+      if (idToken == null || idToken.isEmpty) {
+        if (updateStatusOnError) {
+          setState(() {
+            profileImageStatus =
+                'Could not load profile image preview (no auth token).';
+          });
+        }
+        return;
+      }
+
+      final response = await http.get(
+        Uri.parse('${EnvironmentConfig.apiBaseUrl}/api/get_profile_image'),
+        headers: {
+          'Authorization': 'Bearer $idToken',
+          'X-User-ID': widget.aacUserId,
+          'Content-Type': 'application/json',
+        },
+      );
+
+      if (response.statusCode == 200) {
+        final data = json.decode(response.body) as Map<String, dynamic>;
+        final profileImage = data['profile_image'];
+        if (profileImage is Map<String, dynamic>) {
+          final resolved = _normalizeProfileImageUrl(
+            profileImage['signed_image_url'] ??
+                data['profileImageSignedUrl'] ??
+                profileImage['signed_url'] ??
+                profileImage['image_url'],
+          );
+          final resolvedFromStoragePath = await StorageImageUrlService.resolveImageUrl(
+            storagePath: profileImage['storage_path']?.toString(),
+            fallbackUrl: resolved,
+            bucketName: '${EnvironmentConfig.projectId}-aac-images',
+          );
+          final canonicalUrl = resolvedFromStoragePath ?? resolved;
+
+          // Canonical server URL is authoritative; clear stale local cache.
+          if (canonicalUrl != null && canonicalUrl.isNotEmpty) {
+            await _clearLocalProfileImage();
+          }
+
+          setState(() {
+            profileImageUrl = canonicalUrl;
+          });
+        } else {
+          setState(() {
+            profileImageUrl = null;
+          });
+        }
+      } else if (response.statusCode == 404) {
+        // No profile image set yet.
+        await _clearLocalProfileImage();
+        setState(() {
+          profileImageUrl = null;
+        });
+      } else if (response.statusCode == 403) {
+        // Non-fatal: keep any known URL and avoid showing a hard error.
+        if (updateStatusOnError) {
+          setState(() {
+            profileImageStatus =
+                'Profile image is saved, but preview metadata is currently restricted (403).';
+          });
+        }
+      } else if (updateStatusOnError) {
+        setState(() {
+          profileImageStatus =
+              'Could not load profile image preview (status ${response.statusCode}).';
+        });
+      }
+    } catch (e) {
+      if (updateStatusOnError) {
+        setState(() {
+          profileImageStatus = 'Could not load profile image preview: $e';
+        });
+      }
+    }
+  }
+
+  String? _normalizeProfileImageUrl(dynamic rawUrl) {
+    if (rawUrl == null) return null;
+
+    var url = rawUrl.toString().trim();
+    if (url.isEmpty || url.toLowerCase() == 'null') return null;
+
+    if (_isLocalFileUrl(url)) {
+      return url;
+    }
+
+    // Convert gs://bucket/path to a public HTTPS URL.
+    if (url.startsWith('gs://')) {
+      final storagePath = url.substring(5);
+      final slashIndex = storagePath.indexOf('/');
+      if (slashIndex > 0) {
+        final bucket = storagePath.substring(0, slashIndex);
+        final objectPath = storagePath.substring(slashIndex + 1);
+        url = 'https://storage.googleapis.com/$bucket/$objectPath';
+      }
+    }
+
+    if (url.startsWith('//')) {
+      url = 'https:$url';
+    } else if (url.startsWith('/')) {
+      url = '${EnvironmentConfig.apiBaseUrl}$url';
+    } else if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      final looksLikeStorageHost =
+          url.contains('storage.googleapis.com/') ||
+          url.contains('.googleapis.com/');
+      url = looksLikeStorageHost
+          ? 'https://$url'
+          : '${EnvironmentConfig.apiBaseUrl}/$url';
+    }
+
+    if (url.contains(' ')) {
+      url = Uri.encodeFull(url);
+    }
+
+    final parsed = Uri.tryParse(url);
+    if (parsed == null || !parsed.hasScheme) return null;
+    return parsed.toString();
+  }
+
   Future<void> loadUserInfo() async {
     setState(() { 
       isUserInfoLoading = true; 
@@ -148,12 +350,19 @@ class _UserInfoAdminPageState extends State<UserInfoAdminPage> {
       
       if (userInfoResponse.statusCode == 200) {
         final userInfoData = json.decode(userInfoResponse.body);
+        final localProfileImageUrl = await _loadLocalProfileImageUrl();
         setState(() {
           userInfoController.text = userInfoData['userInfo'] ?? '';
           userNameController.text = userInfoData['name'] ?? '';
-          profileImageUrl = userInfoData['profileImageUrl'];
+          profileImageUrl = localProfileImageUrl ??
+              _normalizeProfileImageUrl(
+                userInfoData['profileImageUrl'],
+              );
           print("🔍 LOAD DEBUG - Loaded name: " + (userInfoData["name"] ?? ""));
         });
+
+        // Mirror web app behavior: load profile image via dedicated endpoint.
+        await _loadProfileImageFromProfileEndpoint();
         
         // Sync mood from user info if available
         if (userInfoData['currentMood'] != null) {
@@ -224,6 +433,7 @@ class _UserInfoAdminPageState extends State<UserInfoAdminPage> {
         '${EnvironmentConfig.apiBaseUrl}/api/user-info',
         baseHeaders: {
           'X-User-ID': widget.aacUserId,
+          'Content-Type': 'application/json',
         },
         body: json.encode(requestBody),
       );
@@ -249,6 +459,7 @@ class _UserInfoAdminPageState extends State<UserInfoAdminPage> {
         '${EnvironmentConfig.apiBaseUrl}/api/birthdays',
         baseHeaders: {
           'X-User-ID': widget.aacUserId,
+          'Content-Type': 'application/json',
         },
         body: json.encode({ 
           'userBirthdate': userBday.isEmpty ? null : userBday,
@@ -302,6 +513,34 @@ class _UserInfoAdminPageState extends State<UserInfoAdminPage> {
       }
 
       setState(() {
+        profileImageStatus = 'Processing and compressing image...';
+      });
+
+      final File imageFile = File(image.path);
+      
+      // Convert to JPEG for broad iPad/Safari/WebKit compatibility.
+      final compressedBytes = await FlutterImageCompress.compressWithFile(
+        imageFile.absolute.path,
+        minWidth: 1024,
+        minHeight: 1024,
+        quality: 85,
+        format: CompressFormat.jpeg,
+      );
+
+      if (compressedBytes == null) {
+        throw Exception('Failed to process and convert profile image.');
+      }
+
+      print('📸 UserInfoAdminPage: Image compressed successfully. Original size: ${await imageFile.length()} bytes, compressed size: ${compressedBytes.length} bytes');
+
+      // Generate filename with jpg extension to match converted image format.
+      String baseName = 'profile_picture';
+      if (image.name.contains('.')) {
+        baseName = image.name.substring(0, image.name.lastIndexOf('.'));
+      }
+      final compressedFilename = '$baseName.jpg';
+
+      setState(() {
         profileImageStatus = 'Uploading profile image...';
       });
 
@@ -322,9 +561,13 @@ class _UserInfoAdminPageState extends State<UserInfoAdminPage> {
         'X-User-ID': widget.aacUserId,
       });
 
-      // Add image file
-      final imageFile = await http.MultipartFile.fromPath('image', image.path);
-      request.files.add(imageFile);
+      // Add image file as bytes
+      request.files.add(http.MultipartFile.fromBytes(
+        'image',
+        compressedBytes,
+        filename: compressedFilename,
+        contentType: MediaType('image', 'jpeg'),
+      ));
 
       // Send request
       final streamedResponse = await request.send();
@@ -332,11 +575,36 @@ class _UserInfoAdminPageState extends State<UserInfoAdminPage> {
 
       if (response.statusCode == 200) {
         final responseData = json.decode(response.body);
+        final localProfileImageUrl = await _saveLocalProfileImage(compressedBytes);
         setState(() {
           profileImageStatus = responseData['message'] ?? 'Profile image uploaded successfully!';
-          profileImageUrl = responseData['profileImageUrl'];
+          profileImageUrl = localProfileImageUrl ??
+              _normalizeProfileImageUrl(
+            responseData['profileImageSignedUrl'] ??
+                responseData['profileImageUrl'],
+          );
           isProfileImageLoading = false;
         });
+
+        final uploadedImageData = responseData['image_data'];
+        final resolvedUploadedUrl = await StorageImageUrlService.resolveImageUrl(
+          storagePath: uploadedImageData is Map<String, dynamic>
+              ? uploadedImageData['storage_path']?.toString()
+              : null,
+          fallbackUrl: _normalizeProfileImageUrl(
+            responseData['profileImageSignedUrl'] ?? responseData['profileImageUrl'],
+          ),
+          bucketName: '${EnvironmentConfig.projectId}-aac-images',
+        );
+
+        if (mounted && resolvedUploadedUrl != null && resolvedUploadedUrl.isNotEmpty) {
+          setState(() {
+            profileImageUrl = localProfileImageUrl ?? resolvedUploadedUrl;
+          });
+        }
+
+        // Re-fetch profile image metadata from the canonical endpoint used by web app.
+        await _loadProfileImageFromProfileEndpoint(updateStatusOnError: true);
         
         // Clear both pictogram and custom image caches to ensure new image appears immediately
         try {
@@ -358,14 +626,70 @@ class _UserInfoAdminPageState extends State<UserInfoAdminPage> {
           );
         }
       } else {
+        await _clearLocalProfileImage();
         final errorData = json.decode(response.body);
         throw Exception(errorData['detail'] ?? 'Upload failed');
       }
     } catch (e) {
+      await _clearLocalProfileImage();
       setState(() {
         profileImageStatus = 'Error uploading image: $e';
       });
     } finally {
+      setState(() {
+        isProfileImageLoading = false;
+      });
+    }
+  }
+
+  Future<void> removeProfileImage() async {
+    if ((_normalizeProfileImageUrl(profileImageUrl) ?? '').isEmpty) {
+      setState(() {
+        profileImageStatus = 'No profile image to remove.';
+      });
+      return;
+    }
+
+    setState(() {
+      isProfileImageLoading = true;
+      profileImageStatus = 'Removing profile image...';
+    });
+
+    try {
+      final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+        'DELETE',
+        '${EnvironmentConfig.apiBaseUrl}/api/remove_profile_image',
+        baseHeaders: {
+          'X-User-ID': widget.aacUserId,
+          'Content-Type': 'application/json',
+        },
+      );
+
+      if (response.statusCode != 200) {
+        throw Exception('Remove failed: ${response.statusCode} ${response.body}');
+      }
+
+      await _clearLocalProfileImage();
+
+      if (!mounted) return;
+      setState(() {
+        profileImageUrl = null;
+        profileImageStatus = 'Profile image removed successfully!';
+      });
+
+      try {
+        CustomImageService.clearCache();
+        await PictogramService().clearCache();
+      } catch (e) {
+        debugPrint('⚠️ Failed to clear image caches after profile removal: $e');
+      }
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        profileImageStatus = 'Error removing profile image: $e';
+      });
+    } finally {
+      if (!mounted) return;
       setState(() {
         isProfileImageLoading = false;
       });
@@ -427,7 +751,7 @@ class _UserInfoAdminPageState extends State<UserInfoAdminPage> {
 
     // Filter out incomplete entries and show details for debugging
     final validEntries = friendsFamily.where((person) {
-      final isValid = person.name.trim().isNotEmpty && person.relationship.trim().isNotEmpty;
+      final isValid = person.name.trim().isNotEmpty;
       if (!isValid) {
         debugPrint('Excluding invalid entry - Name: "${person.name}", Relationship: "${person.relationship}"');
       }
@@ -450,6 +774,7 @@ class _UserInfoAdminPageState extends State<UserInfoAdminPage> {
         '${EnvironmentConfig.apiBaseUrl}/api/friends-family',
         baseHeaders: {
           'X-User-ID': widget.aacUserId,
+          'Content-Type': 'application/json',
         },
         body: json.encode(dataToSave),
       );
@@ -752,6 +1077,7 @@ class _UserInfoAdminPageState extends State<UserInfoAdminPage> {
         '${EnvironmentConfig.apiBaseUrl}/api/manage-relationships',
         baseHeaders: {
           'X-User-ID': widget.aacUserId,
+          'Content-Type': 'application/json',
         },
         body: json.encode({
           'action': 'remove',
@@ -969,7 +1295,7 @@ class _UserInfoAdminPageState extends State<UserInfoAdminPage> {
             ),
             const SizedBox(height: 8),
             // Display current profile image if available
-            if (profileImageUrl != null && profileImageUrl!.isNotEmpty) ...[
+            if ((_normalizeProfileImageUrl(profileImageUrl) ?? '').isNotEmpty) ...[
               Container(
                 width: 120,
                 height: 120,
@@ -979,16 +1305,45 @@ class _UserInfoAdminPageState extends State<UserInfoAdminPage> {
                 ),
                 child: ClipRRect(
                   borderRadius: BorderRadius.circular(6),
-                  child: Image.network(
-                    profileImageUrl!,
-                    fit: BoxFit.cover,
-                    loadingBuilder: (context, child, loadingProgress) {
-                      if (loadingProgress == null) return child;
-                      return const Center(child: CircularProgressIndicator(strokeWidth: 2));
-                    },
-                    errorBuilder: (context, error, stackTrace) {
-                      return const Center(
-                        child: Icon(Icons.error, color: Colors.red, size: 24),
+                  child: Builder(
+                    builder: (context) {
+                      final resolvedUrl = _normalizeProfileImageUrl(profileImageUrl)!;
+                      if (_isLocalFileUrl(resolvedUrl)) {
+                        final localPath = _toLocalFilePath(resolvedUrl);
+                        return Image.file(
+                          File(localPath),
+                          key: ValueKey(localPath),
+                          fit: BoxFit.cover,
+                          errorBuilder: (context, error, stackTrace) {
+                            return const Center(
+                              child: Icon(Icons.error, color: Colors.red, size: 24),
+                            );
+                          },
+                        );
+                      }
+
+                      return Image.network(
+                        resolvedUrl,
+                        key: ValueKey(resolvedUrl),
+                        fit: BoxFit.cover,
+                        loadingBuilder: (context, child, loadingProgress) {
+                          if (loadingProgress == null) return child;
+                          return const Center(
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          );
+                        },
+                        errorBuilder: (context, error, stackTrace) {
+                          WidgetsBinding.instance.addPostFrameCallback((_) {
+                            if (!mounted) return;
+                            setState(() {
+                              profileImageStatus =
+                                  'Profile image preview failed to load: $error';
+                            });
+                          });
+                          return const Center(
+                            child: Icon(Icons.error, color: Colors.red, size: 24),
+                          );
+                        },
                       );
                     },
                   ),
@@ -1010,7 +1365,7 @@ class _UserInfoAdminPageState extends State<UserInfoAdminPage> {
                 ElevatedButton.icon(
                   onPressed: isProfileImageLoading ? null : uploadProfileImage,
                   icon: const Icon(Icons.add_a_photo),
-                  label: Text(profileImageUrl != null && profileImageUrl!.isNotEmpty 
+                  label: Text((_normalizeProfileImageUrl(profileImageUrl) ?? '').isNotEmpty
                       ? 'Replace Profile Picture' 
                       : 'Upload Profile Picture'),
                   style: ElevatedButton.styleFrom(
@@ -1019,7 +1374,17 @@ class _UserInfoAdminPageState extends State<UserInfoAdminPage> {
                   ),
                 ),
                 const SizedBox(width: 16),
-                if (profileImageUrl != null && profileImageUrl!.isNotEmpty) ...[
+                if ((_normalizeProfileImageUrl(profileImageUrl) ?? '').isNotEmpty) ...[
+                  ElevatedButton.icon(
+                    onPressed: isProfileImageLoading ? null : removeProfileImage,
+                    icon: const Icon(Icons.delete_outline),
+                    label: const Text('Remove Profile Picture'),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red[600],
+                      foregroundColor: Colors.white,
+                    ),
+                  ),
+                  const SizedBox(width: 16),
                   ElevatedButton.icon(
                     onPressed: () async {
                       try {

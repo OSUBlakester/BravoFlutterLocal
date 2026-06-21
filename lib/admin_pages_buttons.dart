@@ -31,6 +31,90 @@ class _AdminPagesButtonsPageState extends State<AdminPagesButtonsPage> {
 
   AdminPagesApiService? apiService;
 
+  PageButtonModel _cloneButton(PageButtonModel b) {
+    return PageButtonModel(
+      row: b.row,
+      col: b.col,
+      text: b.text,
+      speechPhrase: b.speechPhrase,
+      llmQuery: b.llmQuery,
+      targetPage: b.targetPage,
+      queryType: b.queryType,
+      hidden: b.hidden,
+      pictogramUrl: b.pictogramUrl,
+      useCustomPictogram: b.useCustomPictogram,
+    );
+  }
+
+  PageModel _clonePage(PageModel page) {
+    return PageModel(
+      name: page.name,
+      displayName: page.displayName,
+      buttons: page.buttons.map(_cloneButton).toList(),
+    );
+  }
+
+  String _pageDropdownLabel(PageModel page) {
+    final name = page.name.trim();
+    final display = page.displayName.trim();
+    if (display.isEmpty) return name;
+    if (name.isEmpty || display.toLowerCase() == name.toLowerCase()) return display;
+    return '$display [$name]';
+  }
+
+  ({List<PageModel> pages, String? warning}) _normalizePages(List<PageModel> pages) {
+    final byName = <String, PageModel>{};
+    var duplicateNameCount = 0;
+    var invalidNameCount = 0;
+
+    for (final page in pages) {
+      final name = page.name.trim();
+      if (name.isEmpty) {
+        invalidNameCount += 1;
+        continue;
+      }
+
+      final key = name.toLowerCase();
+      final existing = byName[key];
+      if (existing == null) {
+        byName[key] = _clonePage(page);
+        continue;
+      }
+
+      duplicateNameCount += 1;
+      final existingScore = existing.buttons.length + (existing.displayName.trim().isNotEmpty ? 1 : 0);
+      final candidateScore = page.buttons.length + (page.displayName.trim().isNotEmpty ? 1 : 0);
+      if (candidateScore > existingScore) {
+        byName[key] = _clonePage(page);
+      }
+    }
+
+    final normalized = byName.values.toList()
+      ..sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+
+    final displayCounts = <String, int>{};
+    for (final page in normalized) {
+      final display = page.displayName.trim().toLowerCase();
+      if (display.isEmpty) continue;
+      displayCounts[display] = (displayCounts[display] ?? 0) + 1;
+    }
+    final duplicateDisplayGroups = displayCounts.values.where((count) => count > 1).length;
+
+    final warningParts = <String>[];
+    if (duplicateNameCount > 0) {
+      warningParts.add('collapsed $duplicateNameCount duplicate page name entr${duplicateNameCount == 1 ? 'y' : 'ies'}');
+    }
+    if (invalidNameCount > 0) {
+      warningParts.add('ignored $invalidNameCount page entr${invalidNameCount == 1 ? 'y' : 'ies'} without a name');
+    }
+    if (duplicateDisplayGroups > 0) {
+      warningParts.add('$duplicateDisplayGroups duplicate display name group${duplicateDisplayGroups == 1 ? '' : 's'} detected');
+    }
+
+    final warning = warningParts.isEmpty ? null : 'Page data warning: ${warningParts.join('; ')}.';
+    return (pages: normalized, warning: warning);
+  }
+
   @override
   void initState() {
     super.initState();
@@ -73,18 +157,26 @@ class _AdminPagesButtonsPageState extends State<AdminPagesButtonsPage> {
     setState(() { isLoading = true; error = null; });
     try {
       final pages = await apiService!.fetchPages();
+      final normalized = _normalizePages(pages);
       setState(() {
-        allPages = pages;
+        allPages = normalized.pages;
+        if (normalized.warning != null) {
+          statusMessage = normalized.warning;
+        }
         // Try to select initialPageName if provided
         final initialPageName = widget.initialPageName ?? (ModalRoute.of(context)?.settings.arguments is Map ? (ModalRoute.of(context)?.settings.arguments as Map)['initialPageName'] : null);
-        if (initialPageName != null) {
-          final match = pages.firstWhere(
+        if (allPages.isEmpty) {
+          currentPage = null;
+          pageNameController.clear();
+          pageDisplayNameController.clear();
+        } else if (initialPageName != null) {
+          final match = allPages.firstWhere(
             (p) => p.name.toLowerCase() == initialPageName.toLowerCase(),
-            orElse: () => pages.first,
+            orElse: () => allPages.first,
           );
           selectPage(match);
-        } else if (pages.isNotEmpty) {
-          selectPage(pages.first);
+        } else {
+          selectPage(allPages.first);
         }
       });
     } catch (e) {
@@ -96,15 +188,16 @@ class _AdminPagesButtonsPageState extends State<AdminPagesButtonsPage> {
 
   void selectPage(PageModel? page) {
     setState(() {
-      currentPage = page;
       originalName = page?.name;
       if (page != null) {
-        pageNameController.text = page.name;
-        pageDisplayNameController.text = page.displayName;
+        final editablePage = _clonePage(page);
+        currentPage = editablePage;
+        pageNameController.text = editablePage.name;
+        pageDisplayNameController.text = editablePage.displayName;
         // Dynamically set grid size based on data
-        if (page.buttons.isNotEmpty) {
-          gridRows = page.buttons.map((b) => b.row).reduce((a, b) => a > b ? a : b) + 1;
-          gridCols = page.buttons.map((b) => b.col).reduce((a, b) => a > b ? a : b) + 1;
+        if (editablePage.buttons.isNotEmpty) {
+          gridRows = editablePage.buttons.map((b) => b.row).reduce((a, b) => a > b ? a : b) + 1;
+          gridCols = editablePage.buttons.map((b) => b.col).reduce((a, b) => a > b ? a : b) + 1;
         } else {
           gridRows = widget.initialRows;
           gridCols = widget.initialCols;
@@ -113,7 +206,7 @@ class _AdminPagesButtonsPageState extends State<AdminPagesButtonsPage> {
         final neededButtons = <PageButtonModel>[];
         for (int row = 0; row < gridRows; row++) {
           for (int col = 0; col < gridCols; col++) {
-            final existing = page.buttons.firstWhere(
+            final existing = editablePage.buttons.firstWhere(
               (b) => b.row == row && b.col == col,
               orElse: () => PageButtonModel(row: row, col: col, text: ''),
             );
@@ -122,8 +215,9 @@ class _AdminPagesButtonsPageState extends State<AdminPagesButtonsPage> {
             }
           }
         }
-        page.buttons = neededButtons;
+        editablePage.buttons = neededButtons;
       } else {
+        currentPage = null;
         pageNameController.clear();
         pageDisplayNameController.clear();
       }
@@ -296,101 +390,183 @@ class _AdminPagesButtonsPageState extends State<AdminPagesButtonsPage> {
   void _showEditDialog(PageButtonModel btn) {
     final labelController = TextEditingController(text: btn.text);
     final speechController = TextEditingController(text: btn.speechPhrase ?? '');
-    final targetController = TextEditingController(text: btn.targetPage ?? '');
     final llmController = TextEditingController(text: btn.llmQuery ?? '');
     final queryTypeController = TextEditingController(text: btn.queryType ?? '');
+    final customTargetController = TextEditingController();
+
+    final specialTargets = <String>[
+      '!freestyle',
+      '!games',
+      '!threads',
+      '!favorites',
+      '!mood',
+      '!email',
+      '!jokes',
+      '!guess-who',
+      '!spelling',
+      '!numbers',
+      '!music',
+      '!compose',
+    ];
+
+    final normalTargets = allPages
+        .map((p) => p.name.trim())
+        .where((name) => name.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort();
+
+    final dropdownTargets = <String>{
+      '',
+      ...specialTargets,
+      ...normalTargets,
+    }.toList();
+
+    String displayTargetLabel(String value) {
+      if (value.isEmpty) return '(none)';
+      if (value.startsWith('!')) return 'Special: $value';
+      return 'Page: $value';
+    }
+
+    final existingTarget = (btn.targetPage ?? '').trim();
+    String selectedTarget = dropdownTargets.contains(existingTarget)
+        ? existingTarget
+        : '__custom__';
+    if (selectedTarget == '__custom__') {
+      customTargetController.text = existingTarget;
+    }
+
     bool hidden = btn.hidden;
     showDialog(
       context: context,
       builder: (context) {
-        return AlertDialog(
-          title: const Text('Edit Button'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: labelController,
-                  decoration: const InputDecoration(labelText: 'Label'),
-                  onTap: _showKeyboardWhenNeeded,
-                ),
-                TextField(
-                  controller: speechController,
-                  decoration: const InputDecoration(labelText: 'Speech Phrase'),
-                  onTap: _showKeyboardWhenNeeded,
-                ),
-                TextField(
-                  controller: targetController,
-                  decoration: const InputDecoration(
-                    labelText: 'Target Page',
-                    helperText: 'Use !email for the new Email special page.',
-                  ),
-                  onTap: _showKeyboardWhenNeeded,
-                ),
-                TextField(
-                  controller: llmController,
-                  decoration: const InputDecoration(labelText: 'LLM Query'),
-                  onTap: _showKeyboardWhenNeeded,
-                ),
-                TextField(
-                  controller: queryTypeController,
-                  decoration: const InputDecoration(labelText: 'Query Type'),
-                  onTap: _showKeyboardWhenNeeded,
-                ),
-                Row(
+        return StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            return AlertDialog(
+              title: const Text('Edit Button'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    Checkbox(
-                      value: hidden,
-                      onChanged: (v) {
-                        hidden = v ?? false;
-                        (context as Element).markNeedsBuild();
+                    TextField(
+                      controller: labelController,
+                      decoration: const InputDecoration(labelText: 'Label'),
+                      onTap: _showKeyboardWhenNeeded,
+                    ),
+                    TextField(
+                      controller: speechController,
+                      decoration: const InputDecoration(labelText: 'Speech Phrase'),
+                      onTap: _showKeyboardWhenNeeded,
+                    ),
+                    DropdownButtonFormField<String>(
+                      value: selectedTarget,
+                      decoration: const InputDecoration(
+                        labelText: 'Target Page',
+                        helperText: 'Choose a page or special destination.',
+                      ),
+                      items: [
+                        ...dropdownTargets.map(
+                          (target) => DropdownMenuItem<String>(
+                            value: target,
+                            child: Text(displayTargetLabel(target)),
+                          ),
+                        ),
+                        const DropdownMenuItem<String>(
+                          value: '__custom__',
+                          child: Text('Custom...'),
+                        ),
+                      ],
+                      onChanged: (value) {
+                        setDialogState(() {
+                          selectedTarget = value ?? '';
+                          if (selectedTarget != '__custom__') {
+                            customTargetController.clear();
+                          }
+                        });
                       },
                     ),
-                    const Text('Hidden'),
-                  ],
-                ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    ElevatedButton.icon(
-                      icon: const Icon(Icons.clear, size: 16),
-                      label: const Text('Clear'),
-                      onPressed: () {
-                        labelController.clear();
-                        speechController.clear();
-                        targetController.clear();
-                        llmController.clear();
-                        queryTypeController.clear();
-                        hidden = false;
-                        (context as Element).markNeedsBuild();
-                      },
+                    if (selectedTarget == '__custom__')
+                      TextField(
+                        controller: customTargetController,
+                        decoration: const InputDecoration(
+                          labelText: 'Custom Target',
+                          helperText: 'Example: !music or a page name',
+                        ),
+                        onTap: _showKeyboardWhenNeeded,
+                      ),
+                    TextField(
+                      controller: llmController,
+                      decoration: const InputDecoration(labelText: 'LLM Query'),
+                      onTap: _showKeyboardWhenNeeded,
+                    ),
+                    TextField(
+                      controller: queryTypeController,
+                      decoration: const InputDecoration(labelText: 'Query Type'),
+                      onTap: _showKeyboardWhenNeeded,
+                    ),
+                    Row(
+                      children: [
+                        Checkbox(
+                          value: hidden,
+                          onChanged: (v) {
+                            setDialogState(() {
+                              hidden = v ?? false;
+                            });
+                          },
+                        ),
+                        const Text('Hidden'),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Row(
+                      children: [
+                        ElevatedButton.icon(
+                          icon: const Icon(Icons.clear, size: 16),
+                          label: const Text('Clear'),
+                          onPressed: () {
+                            labelController.clear();
+                            speechController.clear();
+                            llmController.clear();
+                            queryTypeController.clear();
+                            customTargetController.clear();
+                            setDialogState(() {
+                              selectedTarget = '';
+                              hidden = false;
+                            });
+                          },
+                        ),
+                      ],
                     ),
                   ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    final resolvedTarget = selectedTarget == '__custom__'
+                        ? customTargetController.text.trim()
+                        : selectedTarget;
+
+                    setState(() {
+                      btn.text = labelController.text;
+                      btn.speechPhrase = speechController.text;
+                      btn.targetPage = resolvedTarget;
+                      btn.llmQuery = llmController.text;
+                      btn.queryType = queryTypeController.text;
+                      btn.hidden = hidden;
+                      _updateButtonInPage(btn);
+                    });
+                    Navigator.of(dialogContext).pop();
+                  },
+                  child: const Text('OK'),
                 ),
               ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () {
-                setState(() {
-                  btn.text = labelController.text;
-                  btn.speechPhrase = speechController.text;
-                  btn.targetPage = targetController.text;
-                  btn.llmQuery = llmController.text;
-                  btn.queryType = queryTypeController.text;
-                  btn.hidden = hidden;
-                  _updateButtonInPage(btn);
-                });
-                Navigator.of(context).pop();
-              },
-              child: const Text('OK'),
-            ),
-          ],
+            );
+          },
         );
       },
     );
@@ -501,7 +677,12 @@ class _AdminPagesButtonsPageState extends State<AdminPagesButtonsPage> {
                         child: DropdownButton<PageModel>(
                           value: currentPage,
                           hint: const Text('Select Page'),
-                          items: allPages.map((p) => DropdownMenuItem(value: p, child: Text(p.displayName))).toList(),
+                          items: allPages
+                              .map((p) => DropdownMenuItem<PageModel>(
+                                    value: p,
+                                    child: Text(_pageDropdownLabel(p)),
+                                  ))
+                              .toList(),
                           onChanged: selectPage,
                         ),
                       ),

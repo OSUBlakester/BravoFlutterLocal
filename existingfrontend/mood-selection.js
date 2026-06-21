@@ -36,6 +36,7 @@ class MoodSelection {
         this.onComplete = null;
         this.moodOverlay = null;
         this.settings = settings; // Store provided settings
+        this.useTapInterface = false;
         
         // Scanning variables (similar to gridpage.js)
         this.scanningInterval = null;
@@ -46,6 +47,8 @@ class MoodSelection {
         this.isScanning = false;
         this.ScanningOff = false; // Will be loaded from settings
         this.scanMode = 'auto'; // auto | step
+        this.playWaitForSwitchChime = false;
+        this.hasPlayedWaitForSwitchChime = false;
         this.activeAnnouncementAudioContext = null;
         this.activeAnnouncementAudioSource = null;
         
@@ -59,6 +62,44 @@ class MoodSelection {
         this.baseAvatarConfig = null;
         this.emotionalCombinations = null;
         this.useAvatars = true; // Flag to enable/disable avatar integration
+        this.userLanguage = 'en-US';
+        this.localizedMoodNames = new Map();
+        this.localizedUiText = {
+            title: 'How are you feeling today?',
+            subtitle: 'Select your current mood to help personalize your experience',
+            skip: 'Skip',
+            skipAnnouncement: 'Skip mood selection',
+            startScanningPrompt: 'How are you feeling today?',
+            pressSwitchPrompt: 'Press switch to begin scanning'
+        };
+    }
+
+    getAuthHeaders(extraHeaders = {}) {
+        const token = sessionStorage.getItem('firebaseIdToken');
+        const aacUserId = sessionStorage.getItem('currentAacUserId') || sessionStorage.getItem('aacUserId');
+        const headers = { ...extraHeaders };
+
+        if (token && !headers.Authorization) {
+            headers.Authorization = `Bearer ${token}`;
+        }
+        if (aacUserId && !headers['X-User-ID']) {
+            headers['X-User-ID'] = aacUserId;
+        }
+
+        return headers;
+    }
+
+    async fetchWithAuth(url, options = {}) {
+        if (typeof window.authenticatedFetch === 'function') {
+            return window.authenticatedFetch(url, options);
+        }
+
+        const headers = this.getAuthHeaders(options.headers || {});
+        return fetch(url, {
+            ...options,
+            headers,
+            credentials: options.credentials || 'include'
+        });
     }
 
     /**
@@ -213,6 +254,8 @@ class MoodSelection {
             // Only show loading overlay if we're actually going to show mood selection
             const loadingOverlay = this.showLoadingOverlay();
 
+            await this.localizeMoodSelectionText();
+
             await this.createMoodInterface();
         } catch (error) {
             console.error('Error showing mood selection:', error);
@@ -229,30 +272,20 @@ class MoodSelection {
             // Use provided settings if available (from constructor)
             if (this.settings) {
                 console.log('Using provided settings for mood selection');
-                this.ScanningOff = this.settings.ScanningOff === true;
-                this.scanMode = this.settings.scanMode === 'step' ? 'step' : 'auto';
-                this.waitForSwitchToScan = this.settings.waitForSwitchToScan === true;
-                this.defaultDelay = this.settings.scanDelay || 3500;
+                this.applyInteractionSettings(this.settings);
                 return this.settings.enableMoodSelection === true;
             }
             
             // Otherwise fetch settings
             // Check if authenticatedFetch is available
-            const fetchFunction = window.authenticatedFetch || fetch;
-            
-            const response = await fetchFunction('/api/settings', {
+            const response = await this.fetchWithAuth('/api/settings', {
                 method: 'GET',
                 credentials: 'include'
             });
             
             if (response.ok) {
                 const settings = await response.json();
-                
-                // Load scanning settings
-                this.ScanningOff = settings.ScanningOff === true;
-                this.scanMode = settings.scanMode === 'step' ? 'step' : 'auto';
-                this.waitForSwitchToScan = settings.waitForSwitchToScan === true;
-                this.defaultDelay = settings.scanDelay || 3500;
+                this.applyInteractionSettings(settings);
                 
                 return settings.enableMoodSelection === true;
             }
@@ -260,6 +293,100 @@ class MoodSelection {
             console.error('Failed to check mood selection setting:', error);
         }
         return false; // Default to disabled if we can't check
+    }
+
+    applyInteractionSettings(settings = {}) {
+        this.userLanguage = String(settings.userLanguage || this.userLanguage || 'en-US').trim() || 'en-US';
+        this.useTapInterface = settings.useTapInterface === true;
+
+        if (this.useTapInterface) {
+            this.ScanningOff = true;
+            this.scanMode = 'auto';
+            this.waitForSwitchToScan = false;
+            this.playWaitForSwitchChime = false;
+            this.defaultDelay = settings.scanDelay || 3500;
+            return;
+        }
+
+        this.ScanningOff = settings.ScanningOff === true;
+        this.scanMode = settings.scanMode === 'step' ? 'step' : 'auto';
+        this.waitForSwitchToScan = settings.waitForSwitchToScan === true;
+        this.playWaitForSwitchChime = settings.playWaitForSwitchChime === true;
+        this.defaultDelay = settings.scanDelay || 3500;
+    }
+
+    async localizeMoodSelectionText() {
+        this.localizedMoodNames = new Map();
+
+        if (this.userLanguage.toLowerCase() === 'en-us') {
+            MOOD_OPTIONS.forEach((mood) => this.localizedMoodNames.set(mood.name, mood.name));
+            return;
+        }
+
+        const textKeys = Object.keys(this.localizedUiText);
+        const moodNames = MOOD_OPTIONS.map((mood) => mood.name);
+        const lines = [...textKeys.map((key) => this.localizedUiText[key]), ...moodNames];
+
+        try {
+            const response = await this.fetchWithAuth('/api/translate-lines', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    lines,
+                    source_locale: 'en-US',
+                    target_locale: this.userLanguage
+                }),
+                credentials: 'include'
+            });
+
+            if (!response.ok) {
+                MOOD_OPTIONS.forEach((mood) => this.localizedMoodNames.set(mood.name, mood.name));
+                return;
+            }
+
+            const payload = await response.json();
+            const translated = Array.isArray(payload.translated_lines) ? payload.translated_lines : [];
+
+            textKeys.forEach((key, index) => {
+                const translatedText = String(translated[index] || '').trim();
+                if (translatedText) {
+                    this.localizedUiText[key] = translatedText;
+                }
+            });
+
+            moodNames.forEach((moodName, index) => {
+                const translatedIndex = textKeys.length + index;
+                const translatedMoodName = String(translated[translatedIndex] || '').trim() || moodName;
+                this.localizedMoodNames.set(moodName, translatedMoodName);
+            });
+        } catch (error) {
+            console.warn('Failed to localize mood selection text:', error);
+            MOOD_OPTIONS.forEach((mood) => this.localizedMoodNames.set(mood.name, mood.name));
+        }
+    }
+
+    getMoodDisplayName(moodName) {
+        return this.localizedMoodNames.get(moodName) || moodName;
+    }
+
+    playPageReadyChimeIfEnabled() {
+        if (!this.playWaitForSwitchChime || this.hasPlayedWaitForSwitchChime) {
+            return;
+        }
+
+        this.hasPlayedWaitForSwitchChime = true;
+        try {
+            const audio = new Audio('/static/notification.mp3');
+            audio.preload = 'auto';
+            const playPromise = audio.play();
+            if (playPromise && typeof playPromise.catch === 'function') {
+                playPromise.catch((error) => {
+                    console.warn('Mood page-ready chime playback was blocked or failed:', error);
+                });
+            }
+        } catch (error) {
+            console.warn('Unable to initialize mood page-ready chime audio:', error);
+        }
     }
 
     /**
@@ -275,13 +402,8 @@ class MoodSelection {
         } else {
             // Load from settings if not available yet
             try {
-                const fetchFunction = window.authenticatedFetch || fetch;
-                const aacUserId = sessionStorage.getItem('aacUserId');
-                const response = await fetchFunction('/api/settings', {
+                const response = await this.fetchWithAuth('/api/settings', {
                     method: 'GET',
-                    headers: {
-                        'X-User-ID': aacUserId
-                    },
                     credentials: 'include'
                 });
                 if (response.ok) {
@@ -419,12 +541,12 @@ class MoodSelection {
             // Create title
             const title = document.createElement('h2');
             title.className = 'mood-selection-title';
-            title.textContent = 'How are you feeling today?';
+            title.textContent = this.localizedUiText.title;
 
             // Create subtitle
             const subtitle = document.createElement('p');
             subtitle.className = 'mood-selection-subtitle';
-            subtitle.textContent = 'Select your current mood to help personalize your experience';
+            subtitle.textContent = this.localizedUiText.subtitle;
 
             // Create mood grid
             const moodGrid = document.createElement('div');
@@ -448,7 +570,7 @@ class MoodSelection {
                 const imageElement = document.createElement('img');
                 imageElement.className = 'mood-image';
                 imageElement.src = imageUrl;
-                imageElement.alt = mood.name;
+                imageElement.alt = this.getMoodDisplayName(mood.name);
                 
                 // Fallback to emoji on image load error
                 imageElement.onerror = () => {
@@ -471,7 +593,7 @@ class MoodSelection {
             
             const name = document.createElement('div');
             name.className = 'mood-name';
-            name.textContent = mood.name;
+            name.textContent = this.getMoodDisplayName(mood.name);
             
             button.appendChild(imageContainer);
             button.appendChild(name);
@@ -486,7 +608,7 @@ class MoodSelection {
 
         const skipButton = document.createElement('button');
         skipButton.className = 'mood-action-button mood-skip-button';
-        skipButton.textContent = 'Skip';
+        skipButton.textContent = this.localizedUiText.skip;
         skipButton.addEventListener('click', () => this.skipMoodSelection());
 
         actions.appendChild(skipButton);
@@ -523,8 +645,9 @@ class MoodSelection {
             if (this.waitForSwitchToScan && !scanningHasStarted) {
                 console.log('Waiting for switch press to begin scanning...');
                 this.waitingForInitialSwitch = true;
+                this.playPageReadyChimeIfEnabled();
                 // Play prompt in personal speaker
-                this.speakText("Press switch to begin scanning", false, false); // personal speaker, not announcement
+                this.speakText(this.localizedUiText.pressSwitchPrompt, false, false); // personal speaker, not announcement
             } else {
                 console.log('Starting mood selection scanning...');
                 this.startScanning();
@@ -702,25 +825,40 @@ class MoodSelection {
      * Start scanning through mood options and Skip button
      */
     startScanning() {
-        if (this.ScanningOff || this.scanningInterval) {
+        if (this.ScanningOff || this.scanningInterval || this.isScanning) {
             return;
         }
 
-        // Speak initial prompt
-        this.speakText("How are you feeling today?");
+        // Prevent overlap with any prompt that might still be playing.
+        this.interruptScanningAnnouncementPlayback();
 
         this.currentButtonIndex = 0;
         this.isScanning = true;
 
-        if (this.scanMode === 'step') {
-            this.scanStep();
-            return;
-        }
-        
-        // Delay first scan step to allow initial prompt to finish
-        setTimeout(() => {
-            this.scanStep();
-        }, 2000);
+        const beginScan = () => {
+            if (!this.isScanning || this.ScanningOff) {
+                return;
+            }
+
+            if (this.scanMode === 'step') {
+                this.scanStep();
+                return;
+            }
+
+            // Keep a brief gap between prompt and first option announcement.
+            setTimeout(() => {
+                if (this.isScanning && !this.ScanningOff) {
+                    this.scanStep();
+                }
+            }, 350);
+        };
+
+        this.speakText(this.localizedUiText.startScanningPrompt)
+            .then(beginScan)
+            .catch((error) => {
+                console.warn('Mood start-scanning prompt failed, continuing scan:', error);
+                beginScan();
+            });
     }
 
     /**
@@ -803,8 +941,7 @@ class MoodSelection {
      */
     async announce(textToAnnounce, announcementType = "system", recordHistory = false) {
         try {
-            const fetchFunction = window.authenticatedFetch || fetch;
-            const response = await fetchFunction('/play-audio', {
+            const response = await this.fetchWithAuth('/play-audio', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ text: textToAnnounce, routing_target: announcementType }),
@@ -926,9 +1063,9 @@ class MoodSelection {
         let textToSpeak;
         if (button.classList.contains('mood-button')) {
             const moodName = button.getAttribute('data-mood');
-            textToSpeak = moodName; // Just say the mood name without "Mood:" prefix
+            textToSpeak = this.getMoodDisplayName(moodName);
         } else if (button.classList.contains('mood-skip-button')) {
-            textToSpeak = 'Skip mood selection';
+            textToSpeak = this.localizedUiText.skipAnnouncement;
         } else {
             textToSpeak = button.textContent || button.innerText;
         }

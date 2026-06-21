@@ -5,15 +5,41 @@
 # 1. Increment build number (REQUIRED for each upload)
 ./scripts/increment_version.sh
 
-# 2. Build the IPA (Updated December 2025 - Use app-store method for TestFlight/Production)
-flutter clean && flutter pub get && flutter build ipa --export-method app-store
+# 2. Build archive with Flutter (must produce Runner.xcarchive)
+# Note: `flutter build ios --release` only builds Runner.app and does NOT create archive.
+# We intentionally allow this command to fail at the export step because the archive is already created.
+flutter clean && flutter pub get && flutter build ipa --export-method app-store || true
 
-# 3. Upload via Apple Transporter
+# 3. Export IPA from archive (auto-fetches distribution profile when needed)
+cat > /tmp/exportOptions-appstore.plist <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>method</key>
+  <string>app-store-connect</string>
+  <key>signingStyle</key>
+  <string>automatic</string>
+  <key>teamID</key>
+  <string>44KGCY2496</string>
+  <key>destination</key>
+  <string>export</string>
+</dict>
+</plist>
+PLIST
+
+xcodebuild -exportArchive \
+  -archivePath build/ios/archive/Runner.xcarchive \
+  -exportPath build/ios/ipa \
+  -exportOptionsPlist /tmp/exportOptions-appstore.plist \
+  -allowProvisioningUpdates
+
+# 4. Upload via Apple Transporter
 # - Download Transporter from Mac App Store
 # - Drag build/ios/ipa/Bravo AAC.ipa into Transporter
 # - Sign in and upload
 
-# 4. Add testers in App Store Connect → TestFlight
+# 5. Add testers in App Store Connect → TestFlight
 ```
 
 ## 🎉 DEPLOYMENT STATUS: READY FOR STORE SUBMISSION
@@ -62,12 +88,19 @@ flutter clean && flutter pub get && flutter build ipa --export-method app-store
 
 ### 3. Prepare for TestFlight Distribution
 ```bash
-# Clean and build IPA for App Store/TestFlight (UPDATED COMMAND)
+# Clean and archive with Flutter
 flutter clean
 flutter pub get
-flutter build ipa --release
+flutter build ipa --export-method app-store || true
 
-# The IPA will be created at: build/ios/ipa/Runner.ipa
+# Export IPA from archive using Xcode export (recommended for provisioning reliability)
+xcodebuild -exportArchive \
+  -archivePath build/ios/archive/Runner.xcarchive \
+  -exportPath build/ios/ipa \
+  -exportOptionsPlist /tmp/exportOptions-appstore.plist \
+  -allowProvisioningUpdates
+
+# IPA output: build/ios/ipa/Runner.ipa (or Bravo AAC.ipa)
 ```
 
 **Upload Options:**
@@ -83,6 +116,7 @@ After upload:
 - **PIF Transfer Error in Xcode**: Use `flutter build ipa --release` instead of Xcode Archive
 - **"unable to initiate PIF transfer session"**: Clear DerivedData and use Flutter IPA command
 - **Xcode Archive Issues**: Flutter's IPA build is more reliable than manual Xcode archiving
+- **"requires a provisioning profile" during flutter build ipa**: Archive with Flutter, then run `xcodebuild -exportArchive ... -allowProvisioningUpdates` to let Xcode fetch/apply App Store profile during export.
 - **Orientation validation errors**: Fixed by adding `UIRequiresFullScreen` to Info.plist (required for landscape-only apps)
 - **Build cache issues**: Run `flutter clean` and clear `~/Library/Developer/Xcode/DerivedData`
 
@@ -92,7 +126,8 @@ After upload:
 pkill -f Xcode  # Quit Xcode completely
 rm -rf ~/Library/Developer/Xcode/DerivedData  # Clear Xcode cache
 flutter clean && flutter pub get  # Clean Flutter
-flutter build ipa --release  # Build directly with Flutter
+flutter build ipa --export-method app-store || true  # Build archive with Flutter
+xcodebuild -exportArchive -archivePath build/ios/archive/Runner.xcarchive -exportPath build/ios/ipa -exportOptionsPlist /tmp/exportOptions-appstore.plist -allowProvisioningUpdates
 
 # If app icon doesn't update on TestFlight:
 flutter packages pub run flutter_launcher_icons:main  # Regenerate icons
@@ -232,7 +267,10 @@ flutter build apk --release
 # Clean and build IPA for TestFlight/App Store (CURRENT METHOD)
 flutter clean
 flutter pub get
-flutter build ipa --release
+flutter build ipa --export-method app-store || true
+
+# Export IPA
+xcodebuild -exportArchive -archivePath build/ios/archive/Runner.xcarchive -exportPath build/ios/ipa -exportOptionsPlist /tmp/exportOptions-appstore.plist -allowProvisioningUpdates
 
 # Output: build/ios/ipa/Bravo AAC.ipa (ready for TestFlight)
 

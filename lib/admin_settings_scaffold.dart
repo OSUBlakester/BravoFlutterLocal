@@ -8,10 +8,9 @@ import 'dart:typed_data';
 import 'package:flutter/foundation.dart'; // For kIsWeb
 import 'package:flutter/services.dart';
 import 'package:just_audio/just_audio.dart';
-import 'package:flutter_tts/flutter_tts.dart'; // For FlutterTts
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/user_settings_provider.dart';
-import 'constants/mood_options.dart';
+import 'config/language_config.dart';
 
 class AdminSettingsPage extends StatefulWidget {
   const AdminSettingsPage({Key? key}) : super(key: key);
@@ -22,9 +21,12 @@ class AdminSettingsPage extends StatefulWidget {
 
 class _AdminSettingsPageState extends State<AdminSettingsPage> {
   bool _isInitialized = false;
-  
+
   // Controllers for editable fields
   final TextEditingController _toolbarPinController = TextEditingController();
+
+  // Location override languages table rows: each entry is {locale, voice}
+  List<Map<String, String>> _locationOverrideRows = [];
   final TextEditingController _wakeWordInterjectionController = TextEditingController();
   final TextEditingController _wakeWordNameController = TextEditingController();
   final TextEditingController _locationController = TextEditingController();
@@ -34,6 +36,38 @@ class _AdminSettingsPageState extends State<AdminSettingsPage> {
   final TextEditingController _displaySplashtimeController = TextEditingController();
   final TextEditingController _emailRecipientController = TextEditingController();
   final TextEditingController _emailSubjectTemplateController = TextEditingController();
+
+  String? _normalizeSupportedLocale(String? rawLocale) {
+    final raw = (rawLocale ?? '').trim();
+    if (raw.isEmpty) return null;
+
+    final exactValue = kSupportedLanguages.firstWhere(
+      (l) => (l['value'] ?? '') == raw,
+      orElse: () => const {},
+    );
+    if (exactValue.isNotEmpty) return exactValue['value'];
+
+    final lowerRaw = raw.toLowerCase();
+    for (final lang in kSupportedLanguages) {
+      final value = (lang['value'] ?? '').toLowerCase();
+      final label = (lang['label'] ?? '').toLowerCase();
+      if (value == lowerRaw || label == lowerRaw) {
+        return lang['value'];
+      }
+    }
+
+    // Handle shorthand language codes like "en" -> "en-US" when possible.
+    if (!raw.contains('-') && raw.length == 2) {
+      for (final lang in kSupportedLanguages) {
+        final value = (lang['value'] ?? '').toLowerCase();
+        if (value.startsWith('${lowerRaw}-')) {
+          return lang['value'];
+        }
+      }
+    }
+
+    return null;
+  }
   
   @override
   void initState() {
@@ -127,6 +161,15 @@ class _AdminSettingsPageState extends State<AdminSettingsPage> {
       
       // Fetch available options
       await userSettings.fetchTtsVoices();
+
+      if (userSettings.settings != null) {
+        _locationOverrideRows = userSettings.settings!.locationOverrideLanguages
+            .map((e) {
+              final normalizedLocale = _normalizeSupportedLocale(e.locale) ?? kDefaultPartnerLanguage;
+              return {'locale': normalizedLocale, 'voice': e.voice};
+            })
+            .toList();
+      }
       
       if (mounted) {
         setState(() {
@@ -411,11 +454,18 @@ class _AdminSettingsPageState extends State<AdminSettingsPage> {
       // Update settings from text controllers
       final settings = settingsProvider.settings!;
       settings.toolbarPIN = _toolbarPinController.text;
-      settings.wakeWordInterjection = _wakeWordInterjectionController.text;
-      settings.wakeWordName = _wakeWordNameController.text;
+      settings.wakeWordInterjection = _wakeWordInterjectionController.text.trim();
+      settings.wakeWordName = _wakeWordNameController.text.trim();
       settings.countryCode = _locationController.text;
       settings.emailDefaultRecipient = _emailRecipientController.text.trim();
       settings.emailSubjectTemplate = _emailSubjectTemplateController.text.trim();
+
+      if (settings.wakeWordName.isEmpty) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Wake Word Name cannot be empty.')),
+        );
+        return;
+      }
       
       // Handle LLM Options
       final llmOptionsValue = int.tryParse(_llmOptionsController.text);
@@ -441,11 +491,47 @@ class _AdminSettingsPageState extends State<AdminSettingsPage> {
         settings.displaySplashtime = displaySplashtimeValue;
       }
       
-      await settingsProvider.saveSettings(settings);
-      
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Settings saved successfully!')),
-      );
+      final normalizedOverrides = <LocationLanguageEntry>[];
+      var droppedInvalidLocaleRows = 0;
+
+      for (final row in _locationOverrideRows) {
+        final normalizedLocale = _normalizeSupportedLocale(row['locale']);
+        if (normalizedLocale == null) {
+          droppedInvalidLocaleRows += 1;
+          continue;
+        }
+        normalizedOverrides.add(
+          LocationLanguageEntry(
+            locale: normalizedLocale,
+            voice: (row['voice'] ?? '').trim(),
+          ),
+        );
+      }
+
+      settings.locationOverrideLanguages = normalizedOverrides;
+
+      final success = await settingsProvider.saveSettings(settings);
+
+      if (success) {
+        if (droppedInvalidLocaleRows > 0) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                'Settings saved. Removed $droppedInvalidLocaleRows invalid location language row(s).',
+              ),
+            ),
+          );
+          return;
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Settings saved successfully!')),
+        );
+      } else {
+        final saveError = settingsProvider.error ?? 'Unable to save settings.';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text(saveError)),
+        );
+      }
     } catch (e) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text('Error saving settings: $e')),
@@ -950,6 +1036,181 @@ class _AdminSettingsPageState extends State<AdminSettingsPage> {
 
                     // Mood Selection Subsection moved to User Info page
 
+                  ],
+                ),
+                const SizedBox(height: 16),
+
+                // Language Settings Section
+                _buildSectionCard(
+                  title: 'Language Settings',
+                  icon: Icons.language,
+                  iconColor: Colors.teal,
+                  children: [
+                    // User language
+                    const Text(
+                      'User Language',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: Colors.black87),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Language for AI-generated options.',
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 8),
+                    DropdownButtonFormField<String>(
+                      decoration: const InputDecoration(border: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8)),
+                      value: kSupportedLanguages.any((l) => l['value'] == settings.userLanguage)
+                          ? settings.userLanguage
+                          : kDefaultUserLanguage,
+                      items: kSupportedLanguages
+                          .map((l) => DropdownMenuItem<String>(value: l['value'], child: Text(l['label']!)))
+                          .toList(),
+                      onChanged: (v) { if (v != null) setState(() { settings.userLanguage = v; }); },
+                    ),
+                    const SizedBox(height: 20),
+
+                    // Default partner language + voice
+                    const Text(
+                      'Default Partner Language',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: Colors.black87),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Language used when announcing to the communication partner.',
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 8),
+                    DropdownButtonFormField<String>(
+                      decoration: const InputDecoration(border: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8)),
+                      value: kSupportedLanguages.any((l) => l['value'] == settings.defaultPartnerLanguage)
+                          ? settings.defaultPartnerLanguage
+                          : kDefaultPartnerLanguage,
+                      items: kSupportedLanguages
+                          .map((l) => DropdownMenuItem<String>(value: l['value'], child: Text(l['label']!)))
+                          .toList(),
+                      onChanged: (v) {
+                        if (v != null) {
+                          setState(() {
+                            settings.defaultPartnerLanguage = v;
+                            // Reset voice when language changes
+                            final voices = provider.voicesForLocale(v);
+                            settings.defaultPartnerVoice = voices.isNotEmpty ? voices.first['name'] as String : '';
+                          });
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    const Text('Partner Voice:', style: TextStyle(fontSize: 14, color: Colors.black87)),
+                    const SizedBox(height: 4),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Builder(builder: (context) {
+                            final partnerVoices = provider.voicesForLocale(settings.defaultPartnerLanguage);
+                            final currentVoice = partnerVoices.any((v) => v['name'] == settings.defaultPartnerVoice)
+                                ? settings.defaultPartnerVoice
+                                : (partnerVoices.isNotEmpty ? partnerVoices.first['name'] as String : null);
+                            return DropdownButtonFormField<String>(
+                              decoration: const InputDecoration(border: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8)),
+                              value: currentVoice,
+                              items: partnerVoices.isEmpty
+                                  ? [const DropdownMenuItem<String>(value: null, child: Text('No voices available'))]
+                                  : partnerVoices.map((v) {
+                                      final name = v['name'] as String? ?? '';
+                                      final gender = (v['ssml_gender'] as String? ?? '').toLowerCase();
+                                      return DropdownMenuItem<String>(value: name, child: Text('$name ($gender)'));
+                                    }).toList(),
+                              onChanged: (v) { if (v != null) setState(() { settings.defaultPartnerVoice = v; }); },
+                            );
+                          }),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton(
+                          onPressed: () => _testTtsVoice(settings.defaultPartnerVoice, provider),
+                          style: ElevatedButton.styleFrom(backgroundColor: Colors.teal, foregroundColor: Colors.white),
+                          child: const Text('Test'),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 24),
+
+                    // Location override languages table
+                    const Text(
+                      'Location Override Languages',
+                      style: TextStyle(fontSize: 16, fontWeight: FontWeight.w500, color: Colors.black87),
+                    ),
+                    const SizedBox(height: 4),
+                    const Text(
+                      'Languages available for location-specific overrides. Select the active one from the User Current Location page.',
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                    const SizedBox(height: 12),
+                    ..._locationOverrideRows.asMap().entries.map((entry) {
+                      final i = entry.key;
+                      final row = entry.value;
+                      final rowLocale = row['locale'] ?? kDefaultPartnerLanguage;
+                      final rowVoice = row['voice'] ?? '';
+                      final rowVoices = provider.voicesForLocale(rowLocale);
+                      final voiceValue = rowVoices.any((v) => v['name'] == rowVoice)
+                          ? rowVoice
+                          : (rowVoices.isNotEmpty ? rowVoices.first['name'] as String : null);
+                      return Padding(
+                        padding: const EdgeInsets.only(bottom: 8),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: DropdownButtonFormField<String>(
+                                decoration: const InputDecoration(border: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8)),
+                                value: kSupportedLanguages.any((l) => l['value'] == rowLocale) ? rowLocale : kSupportedLanguages.first['value'],
+                                items: kSupportedLanguages
+                                    .map((l) => DropdownMenuItem<String>(value: l['value'], child: Text(l['label']!)))
+                                    .toList(),
+                                onChanged: (v) {
+                                  if (v != null) {
+                                    setState(() {
+                                      final voices = provider.voicesForLocale(v);
+                                      _locationOverrideRows[i] = {'locale': v, 'voice': voices.isNotEmpty ? voices.first['name'] as String : ''};
+                                    });
+                                  }
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: DropdownButtonFormField<String>(
+                                decoration: const InputDecoration(border: OutlineInputBorder(), contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 8)),
+                                value: voiceValue,
+                                items: rowVoices.isEmpty
+                                    ? [const DropdownMenuItem<String>(value: null, child: Text('No voices'))]
+                                    : rowVoices.map((v) {
+                                        final name = v['name'] as String? ?? '';
+                                        final gender = (v['ssml_gender'] as String? ?? '').toLowerCase();
+                                        return DropdownMenuItem<String>(value: name, child: Text('$name ($gender)', overflow: TextOverflow.ellipsis));
+                                      }).toList(),
+                                onChanged: (v) { if (v != null) setState(() { _locationOverrideRows[i]['voice'] = v; }); },
+                              ),
+                            ),
+                            const SizedBox(width: 4),
+                            IconButton(
+                              icon: const Icon(Icons.delete, color: Colors.red),
+                              tooltip: 'Remove',
+                              onPressed: () => setState(() => _locationOverrideRows.removeAt(i)),
+                            ),
+                          ],
+                        ),
+                      );
+                    }),
+                    TextButton.icon(
+                      icon: const Icon(Icons.add),
+                      label: const Text('Add Location Language'),
+                      onPressed: () {
+                        setState(() {
+                          final firstLocale = kSupportedLanguages.first['value']!;
+                          final voices = provider.voicesForLocale(firstLocale);
+                          _locationOverrideRows.add({'locale': firstLocale, 'voice': voices.isNotEmpty ? voices.first['name'] as String : ''});
+                        });
+                      },
+                    ),
                   ],
                 ),
                 const SizedBox(height: 16),
@@ -1905,6 +2166,63 @@ class _AdminSettingsPageState extends State<AdminSettingsPage> {
                                         ? 'Wait for Switch setting saved: $value' 
                                         : 'Failed to save Wait for Switch setting'),
                                       backgroundColor: success ? Colors.green : Colors.red,
+                                      duration: const Duration(seconds: 2),
+                                    ),
+                                  );
+                                }
+                              },
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 20),
+
+                        Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                          children: [
+                            Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  const Text(
+                                    'Page Ready Chime',
+                                    style: TextStyle(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w500,
+                                      color: Colors.black87,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  const Text(
+                                    'When enabled, a chime will play after a page has been loaded and is waiting for the switch to begin scanning.',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.grey,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            Switch(
+                              value: settings.playWaitForSwitchChime,
+                              onChanged: (value) async {
+                                setState(() {
+                                  settings.playWaitForSwitchChime = value;
+                                });
+
+                                final provider = Provider.of<UserSettingsProvider>(
+                                  context,
+                                  listen: false,
+                                );
+                                final success = await provider.saveSettings(settings);
+
+                                if (mounted) {
+                                  ScaffoldMessenger.of(context).showSnackBar(
+                                    SnackBar(
+                                      content: Text(success
+                                          ? 'Wait chime setting saved: $value'
+                                          : 'Failed to save wait chime setting'),
+                                      backgroundColor:
+                                          success ? Colors.green : Colors.red,
                                       duration: const Duration(seconds: 2),
                                     ),
                                   );

@@ -29,12 +29,12 @@ class PageButtonModel {
         row: json['row'] ?? 0,
         col: json['col'] ?? 0,
         text: json['text'] ?? '',
-        speechPhrase: json['speechPhrase'],
-        llmQuery: json['LLMQuery'],
-        targetPage: json['targetPage'],
-        queryType: json['queryType'],
+      speechPhrase: (json['speechPhrase'] ?? json['speech_phrase'])?.toString(),
+      llmQuery: (json['LLMQuery'] ?? json['llmQuery'] ?? json['llm_prompt'])?.toString(),
+      targetPage: (json['targetPage'] ?? json['target_page'])?.toString(),
+      queryType: (json['queryType'] ?? json['query_type'])?.toString(),
         hidden: json['hidden'] ?? false,
-        pictogramUrl: json['pictogramUrl'],
+      pictogramUrl: (json['pictogramUrl'] ?? json['pictogram_url'])?.toString(),
         useCustomPictogram: json['useCustomPictogram'] ?? false,
       );
 
@@ -65,8 +65,8 @@ class PageModel {
   });
 
   factory PageModel.fromJson(Map<String, dynamic> json) => PageModel(
-        name: json['name'] ?? '',
-        displayName: json['displayName'] ?? '',
+      name: (json['name'] ?? json['pageName'] ?? '').toString(),
+      displayName: (json['displayName'] ?? json['display_name'] ?? json['label'] ?? '').toString(),
         buttons: (json['buttons'] as List<dynamic>? ?? [])
             .map((b) => PageButtonModel.fromJson(b))
             .toList(),

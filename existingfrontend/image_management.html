@@ -237,7 +237,7 @@
 
     <!-- Tag Editor Modal -->
     <div id="tag-editor-modal" class="fixed inset-0 bg-black bg-opacity-75 hidden items-center justify-center z-50">
-        <div class="bg-white rounded-lg max-w-lg w-full mx-4 max-h-[80vh] flex flex-col">
+        <div class="bg-white rounded-lg max-w-2xl w-full mx-4 max-h-[90vh] flex flex-col">
             <!-- Modal Header (Fixed) -->
             <div class="flex justify-between items-center p-4 border-b">
                 <h3 class="text-lg font-semibold text-gray-900">Edit Image Tags</h3>
@@ -245,34 +245,87 @@
                     <i class="fas fa-times text-xl"></i>
                 </button>
             </div>
-            
+
+            <!-- Image Info -->
+            <div class="flex items-center gap-4 px-4 pt-4 pb-2 border-b">
+                <img id="tag-editor-image" class="w-16 h-16 object-cover rounded-lg flex-shrink-0" />
+                <p class="text-sm text-gray-600" id="tag-editor-concept"></p>
+            </div>
+
+            <!-- Tabs -->
+            <div class="flex border-b px-4">
+                <button id="tab-english" onclick="switchTagTab('english')"
+                    class="px-4 py-2 text-sm font-medium border-b-2 border-blue-600 text-blue-600 tab-btn">
+                    English Tags
+                </button>
+                <button id="tab-multilingual" onclick="switchTagTab('multilingual')"
+                    class="px-4 py-2 text-sm font-medium border-b-2 border-transparent text-gray-500 hover:text-gray-700 tab-btn">
+                    Multilingual
+                </button>
+            </div>
+
             <!-- Modal Content (Scrollable) -->
             <div class="flex-1 overflow-y-auto p-4">
-                <div class="mb-4">
-                    <img id="tag-editor-image" class="w-24 h-24 object-cover rounded-lg mx-auto mb-2" />
-                    <div class="text-center">
-                        <p class="text-sm text-gray-600" id="tag-editor-concept"></p>
+
+                <!-- English Tags Panel -->
+                <div id="panel-english">
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Current Tags (click to edit):</label>
+                        <div id="current-tags" class="space-y-2 mb-4 min-h-[40px] max-h-[200px] overflow-y-auto p-2 border rounded-lg bg-gray-50">
+                            <!-- Current tags will be displayed here -->
+                        </div>
+                    </div>
+                    <div class="mb-4">
+                        <label class="block text-sm font-medium text-gray-700 mb-2">Add New Tag:</label>
+                        <div class="flex gap-2">
+                            <input type="text" id="new-tag-input"
+                                   class="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                   placeholder="Enter a new tag..."
+                                   onkeypress="if(event.key==='Enter') addTag()">
+                            <button onclick="addTag()" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">
+                                <i class="fas fa-plus"></i> Add
+                            </button>
+                        </div>
                     </div>
                 </div>
 
-                <div class="mb-4">
-                    <label class="block text-sm font-medium text-gray-700 mb-2">Current Tags (click to edit):</label>
-                    <div id="current-tags" class="space-y-2 mb-4 min-h-[40px] max-h-[240px] overflow-y-auto p-2 border rounded-lg bg-gray-50">
-                        <!-- Current tags will be displayed here -->
-                    </div>
-                </div>
+                <!-- Multilingual Panel -->
+                <div id="panel-multilingual" class="hidden">
 
-                <div class="mb-4">
-                    <label class="block text-sm font-medium text-gray-700 mb-2">Add New Tag:</label>
-                    <div class="flex gap-2">
-                        <input type="text" id="new-tag-input" 
-                               class="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" 
-                               placeholder="Enter a new tag..."
-                               onkeypress="if(event.key==='Enter') addTag()">
-                        <button onclick="addTag()" class="px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700">
-                            <i class="fas fa-plus"></i> Add
+                    <!-- Aliases -->
+                    <div class="mb-5">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">
+                            Aliases <span class="text-gray-400 font-normal">(alternate search names, any language, comma-separated)</span>
+                        </label>
+                        <input type="text" id="aliases-input"
+                               class="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-purple-500 text-sm"
+                               placeholder="e.g. perro, hond, Hund, 犬">
+                    </div>
+
+                    <!-- Language Selector + Auto-Translate -->
+                    <div class="mb-4 flex items-end gap-3">
+                        <div class="flex-1">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Language</label>
+                            <select id="ml-language-select" class="w-full px-3 py-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-purple-500 text-sm">
+                                <option value="es-US">Spanish (US)</option>
+                                <option value="fr-FR">French (France)</option>
+                                <option value="de-DE">German (Germany)</option>
+                                <option value="it-IT">Italian (Italy)</option>
+                                <option value="pt-BR">Portuguese (Brazil)</option>
+                                <option value="ar-XA">Arabic</option>
+                            </select>
+                        </div>
+                        <button onclick="autoTranslateForLocale()" class="px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 text-sm whitespace-nowrap">
+                            <i class="fas fa-language mr-1"></i> Auto-Translate Tags
                         </button>
                     </div>
+
+                    <!-- Per-locale tag sections -->
+                    <div id="ml-locales-container" class="space-y-4">
+                        <!-- Locale sections rendered dynamically -->
+                    </div>
+
+                    <p class="text-xs text-gray-400 mt-3">Auto-Translate fills tags for the selected language using the English tags. You can edit any translated tag manually.</p>
                 </div>
             </div>
 
@@ -281,8 +334,8 @@
                 <button onclick="closeTagEditor()" class="px-4 py-2 bg-gray-300 text-gray-700 rounded-lg hover:bg-gray-400">
                     Cancel
                 </button>
-                <button onclick="saveImageTags()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
-                    <i class="fas fa-save"></i> Save Tags
+                <button id="save-tags-btn" onclick="saveCurrentTab()" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700">
+                    <i class="fas fa-save mr-1"></i> Save Tags
                 </button>
             </div>
         </div>
@@ -366,7 +419,7 @@
                 showLoading(true);
                 updateStatus("Loading images...");
                 
-                const response = await authenticatedFetch('/api/admin/images/browse?limit=5000&source=all');
+                const response = await authenticatedFetch('/api/admin/images/browse?limit=20000&source=all');
                 if (!response.ok) {
                     throw new Error(`Failed to load images: ${response.status}`);
                 }
@@ -856,6 +909,45 @@
 
         // Tag editing functions
         let currentEditingImage = null;
+        let currentTagTab = 'english'; // 'english' | 'multilingual'
+        // Multilingual state: { [locale]: [tags] }
+        let mlLocaleTags = {};
+        // Multilingual labels: { [locale]: string }
+        let mlLocaleLabels = {};
+
+        const LOCALE_LABELS = {
+            'es-US': 'Spanish (US)',
+            'fr-FR': 'French (France)',
+            'de-DE': 'German (Germany)',
+            'it-IT': 'Italian (Italy)',
+            'pt-BR': 'Portuguese (Brazil)',
+            'ar-XA': 'Arabic',
+        };
+
+        function switchTagTab(tab) {
+            currentTagTab = tab;
+            document.getElementById('panel-english').classList.toggle('hidden', tab !== 'english');
+            document.getElementById('panel-multilingual').classList.toggle('hidden', tab !== 'multilingual');
+
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.remove('border-blue-600', 'text-blue-600');
+                btn.classList.add('border-transparent', 'text-gray-500');
+            });
+            const active = document.getElementById(`tab-${tab}`);
+            active.classList.add('border-blue-600', 'text-blue-600');
+            active.classList.remove('border-transparent', 'text-gray-500');
+
+            const saveBtn = document.getElementById('save-tags-btn');
+            saveBtn.textContent = tab === 'multilingual' ? '💾 Save Multilingual' : '💾 Save Tags';
+        }
+
+        function saveCurrentTab() {
+            if (currentTagTab === 'english') {
+                saveImageTags();
+            } else {
+                saveMultilingualTags();
+            }
+        }
 
         function openTagEditor(imageId) {
             currentEditingImage = allImages.find(img => img.id === imageId);
@@ -864,17 +956,231 @@
             // Populate the modal
             document.getElementById('tag-editor-image').src = currentEditingImage.image_url;
             document.getElementById('tag-editor-concept').textContent = `${currentEditingImage.concept} - ${currentEditingImage.subconcept}`;
-            
-            // Display current tags
+
+            // Load existing multilingual data from the image object
+            mlLocaleTags = JSON.parse(JSON.stringify(currentEditingImage.localized_tags || {}));
+            mlLocaleLabels = JSON.parse(JSON.stringify(currentEditingImage.localized_labels || {}));
+            const existingAliases = (currentEditingImage.aliases || []).join(', ');
+            document.getElementById('aliases-input').value = existingAliases;
+
+            // Display current English tags
             displayCurrentTags();
-            
-            // Clear new tag input
             document.getElementById('new-tag-input').value = '';
-            
+
+            // Render multilingual sections
+            renderMlLocales();
+
+            // Start on English tab
+            switchTagTab('english');
+
             // Show modal
             const modal = document.getElementById('tag-editor-modal');
             modal.classList.remove('hidden');
             modal.classList.add('flex');
+        }
+
+        // ── Multilingual rendering ──────────────────────────────────────────
+
+        function renderMlLocales() {
+            const container = document.getElementById('ml-locales-container');
+            container.innerHTML = '';
+
+            Object.keys(LOCALE_LABELS).forEach(locale => {
+                const tags = mlLocaleTags[locale] || [];
+                const label = mlLocaleLabels[locale] || '';
+                container.appendChild(buildLocaleSection(locale, LOCALE_LABELS[locale], tags, label));
+            });
+        }
+
+        function buildLocaleSection(locale, localeName, tags, label) {
+            const section = document.createElement('div');
+            section.className = 'border rounded-lg p-3 bg-gray-50';
+            section.id = `locale-section-${locale}`;
+
+            section.innerHTML = `
+                <div class="flex items-center justify-between mb-2">
+                    <span class="text-sm font-semibold text-gray-700">${localeName} <span class="text-gray-400 font-mono text-xs">${locale}</span></span>
+                    <button onclick="clearLocale('${locale}')" class="text-xs text-red-400 hover:text-red-600">Clear</button>
+                </div>
+                <div class="mb-2">
+                    <label class="text-xs text-gray-500 mb-1 block">Label (localized name for this image):</label>
+                    <input type="text" id="ml-label-${locale}"
+                           class="w-full px-2 py-1 text-sm border rounded focus:ring-1 focus:ring-purple-400"
+                           placeholder="e.g. perro"
+                           value="${escapeHtml(label)}"
+                           onchange="mlLocaleLabels['${locale}'] = this.value.trim()">
+                </div>
+                <div>
+                    <label class="text-xs text-gray-500 mb-1 block">Tags:</label>
+                    <div id="ml-tags-${locale}" class="space-y-1 mb-2">
+                        ${tags.map((t, i) => buildMlTagRow(locale, i, t)).join('')}
+                    </div>
+                    <div class="flex gap-2">
+                        <input type="text" id="ml-newtag-${locale}"
+                               class="flex-1 px-2 py-1 text-sm border rounded focus:ring-1 focus:ring-purple-400"
+                               placeholder="Add tag..."
+                               onkeypress="if(event.key==='Enter') addMlTag('${locale}')">
+                        <button onclick="addMlTag('${locale}')" class="px-3 py-1 bg-purple-500 text-white rounded text-xs hover:bg-purple-600">
+                            <i class="fas fa-plus"></i>
+                        </button>
+                    </div>
+                </div>
+            `;
+            return section;
+        }
+
+        function buildMlTagRow(locale, index, value) {
+            return `
+                <div class="flex items-center gap-1">
+                    <input type="text" value="${escapeHtml(value)}"
+                           class="flex-1 px-2 py-1 text-xs border rounded focus:ring-1 focus:ring-purple-400"
+                           onchange="updateMlTag('${locale}', ${index}, this.value)">
+                    <button onclick="removeMlTag('${locale}', ${index})" class="text-red-400 hover:text-red-600 px-1">
+                        <i class="fas fa-times text-xs"></i>
+                    </button>
+                </div>`;
+        }
+
+        function addMlTag(locale) {
+            const input = document.getElementById(`ml-newtag-${locale}`);
+            const val = (input.value || '').trim();
+            if (!val) return;
+            if (!mlLocaleTags[locale]) mlLocaleTags[locale] = [];
+            mlLocaleTags[locale].push(val);
+            input.value = '';
+            rerenderLocaleSection(locale);
+        }
+
+        function updateMlTag(locale, index, value) {
+            if (!mlLocaleTags[locale]) return;
+            mlLocaleTags[locale][index] = value.trim();
+        }
+
+        function removeMlTag(locale, index) {
+            if (!mlLocaleTags[locale]) return;
+            mlLocaleTags[locale].splice(index, 1);
+            rerenderLocaleSection(locale);
+        }
+
+        function clearLocale(locale) {
+            mlLocaleTags[locale] = [];
+            mlLocaleLabels[locale] = '';
+            rerenderLocaleSection(locale);
+            document.getElementById(`ml-label-${locale}`).value = '';
+        }
+
+        function rerenderLocaleSection(locale) {
+            const section = document.getElementById(`locale-section-${locale}`);
+            if (!section) return;
+            const tags = mlLocaleTags[locale] || [];
+            const tagsContainer = section.querySelector(`#ml-tags-${locale}`);
+            tagsContainer.innerHTML = tags.map((t, i) => buildMlTagRow(locale, i, t)).join('');
+        }
+
+        // ── Auto-translate ───────────────────────────────────────────────────
+
+        async function autoTranslateForLocale() {
+            const locale = document.getElementById('ml-language-select').value;
+            const englishTags = (currentEditingImage.tags || []).filter(Boolean);
+
+            if (!englishTags.length) {
+                showError('This image has no English tags to translate. Add English tags first.');
+                return;
+            }
+
+            // Include subconcept as a label line
+            const lines = [...englishTags, currentEditingImage.subconcept].filter(Boolean);
+
+            updateStatus(`Translating ${englishTags.length} tags to ${LOCALE_LABELS[locale] || locale}...`);
+
+            try {
+                const resp = await authenticatedFetch('/api/translate-lines', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-User-ID': currentAacUserId },
+                    body: JSON.stringify({ lines, source_locale: 'en-US', target_locale: locale })
+                });
+
+                if (!resp.ok) {
+                    const err = await resp.text();
+                    throw new Error(`Translate API error ${resp.status}: ${err}`);
+                }
+
+                const data = await resp.json();
+                const translated = data.translated_lines || [];
+
+                // Tags are the first N lines; last line is the label
+                const translatedTags = translated.slice(0, englishTags.length);
+                const translatedLabel = translated[englishTags.length] || '';
+
+                mlLocaleTags[locale] = translatedTags.map(t => t.trim()).filter(Boolean);
+                if (translatedLabel.trim()) {
+                    mlLocaleLabels[locale] = translatedLabel.trim();
+                    document.getElementById(`ml-label-${locale}`).value = mlLocaleLabels[locale];
+                }
+
+                rerenderLocaleSection(locale);
+                updateStatus(`Translated ${translatedTags.length} tags to ${LOCALE_LABELS[locale] || locale}`);
+
+            } catch (err) {
+                console.error('Auto-translate error:', err);
+                showError(`Translation failed: ${err.message}`);
+                updateStatus('Translation error');
+            }
+        }
+
+        // ── Save multilingual ────────────────────────────────────────────────
+
+        async function saveMultilingualTags() {
+            if (!currentEditingImage) return;
+
+            // Collect aliases
+            const aliasesRaw = document.getElementById('aliases-input').value;
+            const aliases = aliasesRaw.split(',').map(a => a.trim()).filter(Boolean);
+
+            // Collect label edits from inputs
+            Object.keys(LOCALE_LABELS).forEach(locale => {
+                const labelInput = document.getElementById(`ml-label-${locale}`);
+                if (labelInput) mlLocaleLabels[locale] = labelInput.value.trim();
+            });
+
+            // Strip empty locales
+            const localizedTags = Object.fromEntries(
+                Object.entries(mlLocaleTags).filter(([, v]) => v && v.length > 0)
+            );
+            const localizedLabels = Object.fromEntries(
+                Object.entries(mlLocaleLabels).filter(([, v]) => v && v.trim())
+            );
+
+            try {
+                updateStatus('Saving multilingual metadata...');
+
+                const resp = await authenticatedFetch(`/api/imagecreator/images/${currentEditingImage.id}/multilingual`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ localized_tags: localizedTags, localized_labels: localizedLabels, aliases })
+                });
+
+                if (!resp.ok) {
+                    const err = await resp.text();
+                    throw new Error(`Save error ${resp.status}: ${err}`);
+                }
+
+                // Update local cache
+                const idx = allImages.findIndex(img => img.id === currentEditingImage.id);
+                if (idx !== -1) {
+                    allImages[idx].localized_tags = localizedTags;
+                    allImages[idx].localized_labels = localizedLabels;
+                    allImages[idx].aliases = aliases;
+                }
+
+                updateStatus('Multilingual metadata saved');
+                closeTagEditor();
+
+            } catch (err) {
+                console.error('Save multilingual error:', err);
+                showError(`Failed to save: ${err.message}`);
+                updateStatus('Error saving multilingual metadata');
+            }
         }
 
         function displayCurrentTags() {
@@ -917,26 +1223,20 @@
                 return;
             }
             
-            // Initialize tags array if it doesn't exist
             if (!currentEditingImage.tags) {
                 currentEditingImage.tags = [];
             }
             
-            // Check if tag already exists
             if (currentEditingImage.tags.includes(newTag)) {
                 showError('This tag already exists');
                 input.focus();
                 return;
             }
             
-            // Add tag to current image
             currentEditingImage.tags.push(newTag);
-            
-            // Update display
             displayCurrentTags();
             input.value = '';
             input.focus();
-            
             updateStatus(`Added tag: "${newTag}"`);
         }
         
@@ -945,7 +1245,7 @@
             
             if (!trimmedValue) {
                 showError('Tag cannot be empty');
-                displayCurrentTags(); // Reset the display
+                displayCurrentTags();
                 return;
             }
             
@@ -953,18 +1253,15 @@
                 currentEditingImage.tags = [];
             }
             
-            // Check if the new value already exists at a different position
             const existingIndex = currentEditingImage.tags.indexOf(trimmedValue);
             if (existingIndex !== -1 && existingIndex !== position) {
                 showError('This tag already exists at another position');
-                displayCurrentTags(); // Reset the display
+                displayCurrentTags();
                 return;
             }
             
-            // Update the tag at the specified position
             const oldValue = currentEditingImage.tags[position];
             currentEditingImage.tags[position] = trimmedValue;
-            
             updateStatus(`Updated Tag ${position}: "${oldValue}" → "${trimmedValue}"`);
         }
         
@@ -975,14 +1272,12 @@
             
             const removedTag = currentEditingImage.tags[position];
             currentEditingImage.tags.splice(position, 1);
-            
             displayCurrentTags();
             updateStatus(`Removed Tag ${position}: "${removedTag}"`);
         }
 
         function removeTag(tagToRemove) {
             if (!currentEditingImage.tags) return;
-            
             const position = currentEditingImage.tags.indexOf(tagToRemove);
             if (position !== -1) {
                 removeTagAtPosition(position);
@@ -1007,7 +1302,6 @@
                     throw new Error(`Failed to update tags: ${response.status}`);
                 }
                 
-                // Update the image in allImages array
                 const imageIndex = allImages.findIndex(img => img.id === currentEditingImage.id);
                 if (imageIndex !== -1) {
                     allImages[imageIndex].tags = [...(currentEditingImage.tags || [])];
@@ -1015,8 +1309,6 @@
                 
                 updateStatus("Tags updated successfully");
                 closeTagEditor();
-                
-                // Refresh the display to show updated tags
                 applyFiltersAndSort();
                 
             } catch (error) {
@@ -1031,6 +1323,8 @@
             modal.classList.add('hidden');
             modal.classList.remove('flex');
             currentEditingImage = null;
+            mlLocaleTags = {};
+            mlLocaleLabels = {};
         }
 
         // Event listeners for tag editor modal

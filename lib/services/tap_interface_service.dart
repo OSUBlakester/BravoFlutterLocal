@@ -165,6 +165,9 @@ class TapBoardButton {
   final bool hidden;
   final int? modifierTriggerId;
   final Map<String, dynamic> modifierVariants;
+  final String buttonType;   // "static" or "dynamic"
+  final String? pastTense;   // past tense variant text
+  final String? plural;      // plural variant text
 
   const TapBoardButton({
     required this.id,
@@ -184,6 +187,9 @@ class TapBoardButton {
     this.hidden = false,
     this.modifierTriggerId,
     this.modifierVariants = const {},
+    this.buttonType = 'static',
+    this.pastTense,
+    this.plural,
   });
 
   factory TapBoardButton.fromJson(Map<String, dynamic> json) {
@@ -220,6 +226,9 @@ class TapBoardButton {
       modifierVariants: (json['modifier_variants'] is Map<String, dynamic>)
           ? json['modifier_variants'] as Map<String, dynamic>
           : const {},
+      buttonType: (json['button_type'] ?? 'static').toString(),
+      pastTense: TapInterfaceCategory._nullableString(json['past_tense']),
+      plural: TapInterfaceCategory._nullableString(json['plural']),
     );
   }
 
@@ -241,6 +250,9 @@ class TapBoardButton {
     bool? hidden,
     int? modifierTriggerId,
     Map<String, dynamic>? modifierVariants,
+    String? buttonType,
+    String? pastTense,
+    String? plural,
   }) {
     return TapBoardButton(
       id: id ?? this.id,
@@ -260,6 +272,9 @@ class TapBoardButton {
       hidden: hidden ?? this.hidden,
       modifierTriggerId: modifierTriggerId ?? this.modifierTriggerId,
       modifierVariants: modifierVariants ?? this.modifierVariants,
+      buttonType: buttonType ?? this.buttonType,
+      pastTense: pastTense ?? this.pastTense,
+      plural: plural ?? this.plural,
     );
   }
 

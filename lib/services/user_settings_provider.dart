@@ -81,6 +81,11 @@ class UserSettings {
   // Interface mode field - true for tap interface, false for scanning interface
   bool useTapInterface;
 
+  // Tap interface row layout settings
+  int tapWordsRows;   // Total rows in the Words section
+  int tapPhrasesRows; // Rows in the Phrases section (0 = hidden)
+  int tapDynamicRows; // AI-generated rows at the bottom of Words section
+
   // Application volume setting (0-10, where 10 is maximum volume)
   int applicationVolume;
 
@@ -103,6 +108,10 @@ class UserSettings {
   String defaultPartnerLanguage; // BCP 47 — language for partner-facing TTS announcements
   String defaultPartnerVoice;   // TTS voice name for partner announcements
   List<LocationLanguageEntry> locationOverrideLanguages; // admin-configured location override pairs
+
+  // Mascot setting — used to prefer mascot-themed images in the tap interface.
+  // Examples: 'buddy', 'bonnie'. Empty string means no mascot preference.
+  String mascot;
 
   // Positive logic fields
   bool get enableAuditoryScanning => !scanningOff;
@@ -148,6 +157,9 @@ class UserSettings {
     required this.playWaitForSwitchChime,
     required this.scanMode, // Added scan mode field
     required this.useTapInterface, // Added interface mode field
+    required this.tapWordsRows,
+    required this.tapPhrasesRows,
+    required this.tapDynamicRows,
     required this.applicationVolume, // Added application volume field
     required this.groupWakeWord,
     required this.emailDefaultRecipient,
@@ -158,6 +170,7 @@ class UserSettings {
     required this.defaultPartnerLanguage,
     required this.defaultPartnerVoice,
     required this.locationOverrideLanguages,
+    required this.mascot,
   });
 
 
@@ -246,6 +259,9 @@ class UserSettings {
       playWaitForSwitchChime: json['playWaitForSwitchChime'] ?? false,
       scanMode: json['scanMode'] == 'step' ? 'step' : 'auto', // Default to auto
       useTapInterface: json['useTapInterface'] ?? false, // Default to scanning interface
+      tapWordsRows: (json['tapWordsRows'] as num?)?.toInt() ?? 3,
+      tapPhrasesRows: (json['tapPhrasesRows'] as num?)?.toInt() ?? 0,
+      tapDynamicRows: (json['tapDynamicRows'] as num?)?.toInt() ?? 1,
       applicationVolume: json['applicationVolume'] ?? 10, // Default to maximum volume (10/10)
       groupWakeWord: (json['groupWakeWord'] as String? ?? 'hey friends').trim().toLowerCase().isEmpty ? 'hey friends' : (json['groupWakeWord'] as String? ?? 'hey friends').trim().toLowerCase(),
       emailDefaultRecipient: json['emailDefaultRecipient'] ?? '',
@@ -256,6 +272,7 @@ class UserSettings {
       defaultPartnerLanguage: json['defaultPartnerLanguage'] as String? ?? kDefaultPartnerLanguage,
       defaultPartnerVoice: json['defaultPartnerVoice'] as String? ?? '',
       locationOverrideLanguages: parsedOverrideEntries,
+      mascot: (json['mascot'] as String? ?? '').trim().toLowerCase(),
     );
   }
 
@@ -291,6 +308,9 @@ class UserSettings {
         'playWaitForSwitchChime': playWaitForSwitchChime,
         'scanMode': scanMode, // Added scan mode field
         'useTapInterface': useTapInterface, // Added interface mode field
+        'tapWordsRows': tapWordsRows,
+        'tapPhrasesRows': tapPhrasesRows,
+        'tapDynamicRows': tapDynamicRows,
         'applicationVolume': applicationVolume, // Added application volume field
         'groupWakeWord': groupWakeWord,
         'emailDefaultRecipient': emailDefaultRecipient,

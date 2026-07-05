@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:flutter_tts/flutter_tts.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -33,6 +34,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'services/authenticated_http_client.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+/// Plays a brief click sound through the media audio channel when a sensitivity-gated tap is registered.
 /// Global session tracking set for missing images (shared across all button instances)
 final Set<String> _globalSessionLoggedMissingImages = {};
 
@@ -104,6 +106,16 @@ class TapInterfaceButton extends StatefulWidget {
   final String?
   imageSearchText; // Full speech text for image search (label may be abbreviated)
   final bool cacheOnlyImageLookup;
+  // When set, renders a 2px border + coloured glow to match web-app variant style.
+  final Color? glowColor;
+  final double borderWidth;
+  // Active mascot name (e.g. 'buddy'). When non-empty, mascot-specific images
+  // are preferred and pre-assigned generic URLs are bypassed.
+  final String mascot;
+
+  // Page-level tap sensitivity shared across all instances. 0 = instant (default).
+  // Set by the page when loaded from SharedPreferences.
+  static int tapMinDurationMs = 0;
 
   const TapInterfaceButton({
     super.key,
@@ -125,6 +137,9 @@ class TapInterfaceButton extends StatefulWidget {
     this.assignedImageUrl,
     this.imageSearchText,
     this.cacheOnlyImageLookup = false,
+    this.glowColor,
+    this.borderWidth = 1.0,
+    this.mascot = '',
   });
 
   State<TapInterfaceButton> createState() => _TapInterfaceButtonState();
@@ -142,6 +157,55 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
   String? _lastLoadedKey;
   bool _isLoadingPictogram =
       false; // guard against concurrent _loadPictogram calls
+
+  bool _thresholdMet = false;
+  bool _isPressing = false;
+  Timer? _thresholdTimer;
+
+  @override
+  void dispose() {
+    _thresholdTimer?.cancel();
+    super.dispose();
+  }
+
+  void _handlePress() {
+    final minMs = TapInterfaceButton.tapMinDurationMs;
+    debugPrint('[TapSensitivity] _handlePress: minMs=$minMs thresholdMet=$_thresholdMet label="${widget.label}"');
+    if (minMs <= 0) {
+      widget.onPressed();
+      return;
+    }
+    if (_thresholdMet) {
+      widget.onPressed();
+    }
+  }
+
+  void _onPointerDown(PointerDownEvent _) {
+    _thresholdMet = false;
+    _thresholdTimer?.cancel();
+    if (mounted) setState(() => _isPressing = true);
+    final minMs = TapInterfaceButton.tapMinDurationMs;
+    if (minMs > 0) {
+      _thresholdTimer = Timer(Duration(milliseconds: minMs), () {
+        HapticFeedback.mediumImpact();
+        if (mounted) setState(() => _thresholdMet = true);
+      });
+    }
+  }
+
+  void _onPointerUp(PointerUpEvent _) {
+    _thresholdTimer?.cancel();
+    if (mounted) setState(() => _isPressing = false);
+    // Small delay so _handlePress can read _thresholdMet before we reset it.
+    Future.delayed(const Duration(milliseconds: 100), () {
+      if (mounted) setState(() => _thresholdMet = false);
+    });
+  }
+
+  void _onPointerCancel(PointerCancelEvent _) {
+    _thresholdTimer?.cancel();
+    if (mounted) setState(() { _isPressing = false; _thresholdMet = false; });
+  }
 
   bool _looksLikeAbsoluteLocalPath(String value) {
     return value.startsWith('/var/') ||
@@ -589,7 +653,9 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
 
     // When the button's word changes entirely, reset image state so the new word
     // gets a fresh lookup instead of keeping the old word's image.
-    if (labelChanged || searchTextChanged || keywordsChanged) {
+    final mascotChanged = widget.mascot != oldWidget.mascot;
+
+    if (labelChanged || searchTextChanged || keywordsChanged || mascotChanged) {
       _pictogramUrl = null;
       _lastLoadedKey = null;
       _isSightWord = false;
@@ -617,7 +683,8 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
         sightWordsChanged ||
         gradeChanged ||
         keywordsChanged ||
-        cacheOnlyChanged) {
+        cacheOnlyChanged ||
+        mascotChanged) {
       _loadPictogram();
     }
   }
@@ -645,6 +712,8 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
     );
     final userLocale = settingsProvider.settings?.userLanguage ?? 'en-US';
     final isNonEnglish = !userLocale.startsWith('en');
+    final activeMascot = widget.mascot;
+    final mascotIsActive = activeMascot.isNotEmpty;
     final normalizedSearchTextForKey = effectiveSearchText.toLowerCase();
     final cacheKey = isNonEnglish
       ? '${userLocale.toLowerCase()}:$normalizedSearchTextForKey'
@@ -745,7 +814,10 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
               });
             }
           } else if (widget.assignedImageUrl != null &&
-              widget.assignedImageUrl!.isNotEmpty) {
+              widget.assignedImageUrl!.isNotEmpty &&
+              !mascotIsActive) {
+            // Skip the pre-assigned URL shortcut when a mascot is active so the
+            // mascot-aware lookup can find the correct mascot-specific image.
             debugPrint('🖼️ Using assigned global image for "${widget.label}": ${widget.assignedImageUrl}');
             if (mounted) {
               setState(() {
@@ -809,6 +881,9 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
             pictogramService.setUserContext(
               userId: currentUserId,
               idToken: currentIdToken,
+              mascot: widget.mascot.isNotEmpty
+                  ? widget.mascot
+                  : settingsProvider.settings?.mascot,
             );
           }
           pictogramService.enablePictograms = true;
@@ -987,23 +1062,70 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
 
   @override
   Widget build(BuildContext context) {
-    return ElevatedButton(
-      onPressed: widget.onPressed,
+    final radius = widget.borderRadius ?? BorderRadius.circular(8);
+
+    // Stable glow used for border/elevation — never changes mid-gesture.
+    final widgetGlow = widget.glowColor;
+
+    // Box-shadow only — ElevatedButton style never changes mid-touch so the
+    // gesture recognizer state is preserved.
+    // amber while pressing → green when threshold met → widget glow otherwise
+    final glowColor = _thresholdMet
+        ? const Color(0xFF22c55e)  // green-500
+        : _isPressing
+            ? const Color(0xFFF59E0B)  // amber-400
+            : widgetGlow;
+
+    final button = ElevatedButton(
+      onPressed: _handlePress,
       style: ElevatedButton.styleFrom(
         backgroundColor: widget.backgroundColor,
         foregroundColor: widget.foregroundColor,
-        elevation: 2,
+        overlayColor: Colors.orange,
+        elevation: widgetGlow != null ? 0 : 2,
         padding: widget.padding,
         minimumSize: Size.zero,
         shape: RoundedRectangleBorder(
-          borderRadius: widget.borderRadius ?? BorderRadius.circular(8),
-          side: BorderSide(color: widget.borderColor),
+          borderRadius: radius,
+          side: BorderSide(
+            color: widgetGlow ?? widget.borderColor,
+            width: widgetGlow != null ? 2.0 : widget.borderWidth,
+          ),
         ),
       ),
-      // Tap interface always shows images (ignores enablePictograms setting)
       child: widget.label.isNotEmpty
           ? _buildPictogramContent()
           : _buildTextOnlyContent(),
+    );
+
+    final timed = Listener(
+      onPointerDown: _onPointerDown,
+      onPointerUp: _onPointerUp,
+      onPointerCancel: _onPointerCancel,
+      child: button,
+    );
+
+    // Always include DecoratedBox so the tree structure never changes mid-gesture
+    // (adding/removing a parent mid-touch destroys the gesture recognizer state).
+    return DecoratedBox(
+      decoration: BoxDecoration(
+        borderRadius: radius,
+        boxShadow: glowColor != null
+            ? [
+                BoxShadow(
+                  color: glowColor.withValues(alpha: 0.25),
+                  blurRadius: 0,
+                  spreadRadius: 2,
+                ),
+                BoxShadow(
+                  color: glowColor.withValues(alpha: 0.2),
+                  blurRadius: 8,
+                  offset: const Offset(0, 4),
+                ),
+              ]
+            : const [],
+      ),
+      child: timed,
     );
   }
 
@@ -1510,6 +1632,7 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
         PictogramService().setUserContext(
           userId: effectiveUserId,
           idToken: effectiveIdToken,
+          mascot: userSettings.settings?.mascot,
         );
       }
     } catch (e) {
@@ -1527,6 +1650,10 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
       {};
   final Map<String, DateTime> _categoryOptionsCacheTimestamp = {};
   static const Duration _categoryOptionsCacheTtl = Duration(minutes: 10);
+  // Stores the filtered AI dynamic words generated by _loadWordOptionsBasedOnBuildSpace
+  // for each board, keyed by categoryCacheKey. Used to skip the AI word API call
+  // on re-visits (e.g. Go Back) when board buttons are already cached.
+  final Map<String, List<String>> _categoryAIWordCache = {};
 
   // --- New Tap Interface State ---
   TapInterfaceConfig? _tapConfig;
@@ -1534,15 +1661,57 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
   TapInterfaceCategory? _selectedCategory;
   List<String> _temporaryNavigationReturnStack = [];
   bool _temporaryNavigationPending = false;
+  // Breadcrumb stack for the Go Back button — each entry is
+  // (boardId, textAddedToSpeech) so Go Back can undo the exact phrase.
+  List<({String boardId, String addedText})> _navigationBreadcrumbs = [];
   String? _activeBoardModifierBoardId;
   String? _activeBoardModifierId;
 
   // --- Option Display State ---
   List<Map<String, String>> _phraseOptions =
-      []; // Top 2 rows - {summary, fullText}
-  List<String> _wordOptions = []; // Bottom 3 rows - single words/building
+      []; // Top rows - {summary, fullText}
+  List<String> _wordOptions = []; // Dynamic word rows - AI-generated words
+  // Accumulates all words ever shown so Something Else never repeats them.
+  // Reset when the category/board changes.
+  final Set<String> _usedWordOptions = {};
   List<TapBoardButton> _boardWordOptions =
-      []; // Bottom 3 rows - board-backed actions
+      []; // Static word rows - board-backed buttons
+
+  // --- Past / Plural variant mode ---
+  // null = normal, 'past' = show pastTense variants, 'plural' = show plural variants
+  String? _variantMode;
+
+  // 'left' | 'right' | 'top' | 'bottom'  — stored in SharedPreferences.
+  String _menuPosition = 'left';
+
+  // Minimum tap hold duration in ms — stored in SharedPreferences.
+  // 0 = instant (no filter), 100/200/300 = increasing sensitivity filter.
+  int _tapMinDurationMs = 0;
+
+  // Tracks when the most recent pointer-down on an action-bar button occurred,
+  // used by _withSensitivity to enforce the minimum tap duration.
+  DateTime? _actionBarPointerDownTime;
+
+  /// Wraps [fn] with the same minimum-hold-duration check used by TapInterfaceButton.
+  void Function() _withSensitivity(void Function() fn) {
+    return () {
+      final minMs = TapInterfaceButton.tapMinDurationMs;
+      if (minMs <= 0) {
+        fn();
+        return;
+      }
+      final down = _actionBarPointerDownTime;
+      if (down != null &&
+          DateTime.now().difference(down).inMilliseconds >= minMs) {
+        HapticFeedback.mediumImpact();
+        fn();
+      }
+    };
+  }
+
+  // Session-wide cache keyed as '$mode:$originalWord' → variant form.
+  final Map<String, String> _variantCache = {};
+  bool _variantApplyInProgress = false;
   Map<String, List<String>> _wordKeywords =
       {}; // Keywords for each word option to improve image matching
   int _optionsRebuildKey = 0; // Force UI rebuild when options change
@@ -1569,6 +1738,9 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
   String _currentPIN = '1234'; // Default PIN
   int _pinAttempts = 0; // Track failed PIN attempts
 
+  // --- Floating status toast ---
+  Timer? _statusToastTimer;
+
   // --- TTS ---
   late FlutterTts _flutterTts;
   static bool _audioSessionInitialized = false;
@@ -1585,7 +1757,6 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
   bool _isHandlingWakeWordTurn = false;
   String _currentQuestion = '';
   String _statusMessage = '';
-  bool _showBottomStatusText = false;
 
   // --- Retry Logic (matching main.dart) ---
   int _llmRetryCount = 0;
@@ -1647,6 +1818,21 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
 
     // Start schedule check
     _startScheduleCheck();
+
+    // Load locally-stored preferences.
+    SharedPreferences.getInstance().then((prefs) {
+      final savedPosition = prefs.getString('tap_menu_position') ?? 'left';
+      final savedSensitivity = prefs.getInt('tap_min_duration_ms') ?? 0;
+      debugPrint('[TapSensitivity] Loaded from SharedPreferences: tap_min_duration_ms=$savedSensitivity');
+      TapInterfaceButton.tapMinDurationMs = savedSensitivity;
+      debugPrint('[TapSensitivity] Static set to: ${TapInterfaceButton.tapMinDurationMs}');
+      if (mounted) {
+        setState(() {
+          _menuPosition = savedPosition;
+          _tapMinDurationMs = savedSensitivity;
+        });
+      }
+    });
 
     // Load tap interface configuration
     WidgetsBinding.instance.addPostFrameCallback((_) async {
@@ -1869,48 +2055,74 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
   /// Categories uses 1 column in 1/10 width, Main content uses N columns in 9/10 width
   /// To make buttons the same visual size: categoryAspectRatio = mainAspectRatio * (mainColumns / 1) * (1/10) / (9/10)
   /// Simplified: categoryAspectRatio = mainAspectRatio * mainColumns / 9
-  /// Calculate Phrases section rows and flex value based on LLMOptions
+  /// Calculate Phrases section layout based on tapPhrasesRows setting
   Map<String, int> _calculatePhraseSectionLayout(
-    int llmOptions,
+    int tapPhrasesRows,
     int gridColumns,
   ) {
-    if (llmOptions == 0) {
-      return {'rows': 0, 'flex': 0}; // Hide section
+    if (tapPhrasesRows == 0) {
+      return {'rows': 0, 'flex': 0}; // Hidden
     }
 
-    final effectiveColumns = _getEffectiveMainContentColumns(gridColumns);
-    final totalButtons = llmOptions + 1; // Include "Something Else" button
-    final rows = (totalButtons / effectiveColumns).ceil();
-
-    // Flex calculation:
-    // 1 row = fixed height (154px), no flex needed
-    // 2 rows = flex 2 (enough for 2 full rows of buttons without cutoff)
-    // 3+ rows = flex 3 (larger height for many rows, with scrolling)
+    final rows = tapPhrasesRows;
     final flex = rows <= 1 ? 0 : (rows == 2 ? 2 : 3);
 
     debugPrint(
-      '📊 Phrases Layout: llmOptions=$llmOptions, totalButtons=$totalButtons, columns=$effectiveColumns, rows=$rows, flex=$flex',
+      '📊 Phrases Layout: tapPhrasesRows=$tapPhrasesRows, columns=$gridColumns, rows=$rows, flex=$flex',
     );
     return {'rows': rows, 'flex': flex};
   }
 
+  /// Total phrase button slots = tapPhrasesRows × gridColumns
+  int _phraseSlotCount(UserSettings? userSettings) {
+    final rows = userSettings?.tapPhrasesRows ?? 0;
+    final cols = _getEffectiveMainContentColumns(userSettings?.gridColumns ?? 6);
+    return rows * cols;
+  }
+
+  /// Returns the text labels of board buttons currently visible in static rows.
+  /// Used to tell the LLM what to exclude from dynamic suggestions.
+  List<String> _displayedStaticButtonLabels(UserSettings? userSettings) {
+    if (_boardWordOptions.isEmpty) return [];
+    final totalRows = userSettings?.tapWordsRows ?? 3;
+    final dynamicRows = userSettings?.tapDynamicRows ?? 1;
+    final staticRows = (totalRows - dynamicRows).clamp(0, totalRows);
+    if (staticRows == 0) return [];
+    // Use row field directly — avoids column-count mismatch between settings and board layout.
+    return _boardWordOptions
+        .where(
+          (btn) =>
+              btn.row < staticRows &&
+              !btn.hidden &&
+              !btn.isNavigationButton &&
+              btn.text.isNotEmpty,
+        )
+        .map((btn) => btn.text)
+        .toList();
+  }
+
+  /// Total words button slots = tapWordsRows × gridColumns
+  int _wordsSlotCount(UserSettings? userSettings) {
+    final rows = userSettings?.tapWordsRows ?? 3;
+    final cols = _getEffectiveMainContentColumns(userSettings?.gridColumns ?? 6);
+    return rows * cols;
+  }
+
+  /// Static word slots (board buttons) = (tapWordsRows - tapDynamicRows) × gridColumns
+  int _staticWordSlotCount(UserSettings? userSettings) {
+    final total = userSettings?.tapWordsRows ?? 3;
+    final dynamic = userSettings?.tapDynamicRows ?? 1;
+    final cols = _getEffectiveMainContentColumns(userSettings?.gridColumns ?? 6);
+    return (total - dynamic).clamp(0, total) * cols;
+  }
+
   /// Calculate flex value for Words section based on Phrases section size
   int _calculateWordsSectionFlex(UserSettings? userSettings) {
-    final llmOptions = userSettings?.llmOptions ?? 10;
-    final phraseLayout = _calculatePhraseSectionLayout(
-      llmOptions,
-      userSettings?.gridColumns ?? 6,
-    );
+    final tapPhrasesRows = userSettings?.tapPhrasesRows ?? 0;
 
-    // Calculate Words section flex based on Phrases section
-    if (llmOptions == 0) {
-      return 1; // Take full space if no phrases
-    } else if (phraseLayout['rows'] == 1 || phraseLayout['rows'] == 2) {
-      return 1; // Single and double row phrases use fixed height, Words takes remaining flex space
-    } else {
-      // 3+ row phrases use flex, Words section gets flex 2
-      return 2;
-    }
+    if (tapPhrasesRows == 0) return 1;
+    if (tapPhrasesRows <= 2) return 1;
+    return 2;
   }
 
   /// Calculate the proper height for single-row phrases section
@@ -1948,107 +2160,64 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
     return totalHeight;
   }
 
-  /// Build the Phrases section widget with dynamic sizing
-  Widget _buildPhrasesSection(UserSettings? userSettings) {
-    final llmOptions = userSettings?.llmOptions ?? 10;
-    final gridColumns = userSettings?.gridColumns ?? 6;
-    final layout = _calculatePhraseSectionLayout(llmOptions, gridColumns);
 
-    // Hide section if llmOptions is 0
-    if (llmOptions == 0) {
-      return const SizedBox.shrink();
-    }
+  /// Build the Phrases section widget. Height is set by the caller (SizedBox).
+  Widget _buildPhrasesSection(
+    UserSettings? userSettings,
+    double buttonSize,
+    double gridWidth,
+  ) {
+    final tapPhrasesRows = userSettings?.tapPhrasesRows ?? 0;
 
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        // Calculate dynamic height based on available width
-        final availableWidth = constraints.maxWidth;
-        final effectiveColumns = _getEffectiveMainContentColumns(gridColumns);
+    if (tapPhrasesRows == 0) return const SizedBox.shrink();
 
-        // Calculate button size
-        // Width = (TotalWidth - (Spacing * (Cols - 1)) - GridPaddingHorizontal - BorderHorizontal) / Cols
-        // GridPadding = 3 * 2 = 6
-        // Border = 2 * 2 = 4
-        // Spacing = 2
-        final contentWidth = availableWidth - 10; // 6 padding + 4 border
-        final totalSpacing = 2.0 * (effectiveColumns - 1);
-        final buttonWidth = (contentWidth - totalSpacing) / effectiveColumns;
-        final buttonHeight = buttonWidth / 1.1; // Aspect ratio 1.1
-
-        // Calculate total height needed
-        const headerHeight = 0.0;
-        const verticalPadding = 6.0; // 3 top + 3 bottom grid padding
-        const verticalBorder = 4.0; // 2 top + 2 bottom border
-
-        final rows = layout['rows'] as int;
-
-        // Calculate height for min(rows, 2) rows
-        // If rows > 2, we show 2 rows height and scroll
-        final rowsToCalculate = rows >= 2 ? 2 : 1;
-
-        final gridHeight =
-            (buttonHeight * rowsToCalculate) + (2.0 * (rowsToCalculate - 1));
-        final totalHeight =
-            headerHeight + gridHeight + verticalPadding + verticalBorder;
-
-        // Add a little buffer for safety
-        final finalHeight = totalHeight + 4.0;
-
-        return Container(
-          height: finalHeight,
-          margin: const EdgeInsets.only(bottom: 8),
-          decoration: BoxDecoration(
-            gradient: LinearGradient(
-              colors: [
-                Colors.green[25] ?? Colors.green.shade50,
-                Colors.green[50] ?? Colors.green.shade100,
-              ],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            borderRadius: BorderRadius.circular(12),
-            border: Border.all(
-              color: Colors.green[300] ?? Colors.green.shade300,
-              width: 2,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.green.withOpacity(0.2),
-                offset: const Offset(0, 3),
-                blurRadius: 8,
-              ),
-            ],
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [
+            Colors.green[25] ?? Colors.green.shade50,
+            Colors.green[50] ?? Colors.green.shade100,
+          ],
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+        ),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(
+          color: Colors.green[300] ?? Colors.green.shade300,
+          width: 2,
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.green.withOpacity(0.2),
+            offset: const Offset(0, 3),
+            blurRadius: 8,
           ),
-          child: Column(
-            children: [
-              // Grid content
-              Expanded(
-                child: Padding(
-                  padding: const EdgeInsets.all(3),
-                  child: Stack(
-                    children: [
-                      // Single-shot reveal: do not render partial phrase grid while warmup is active.
-                      if (_phraseOptions.isNotEmpty && !_isLoadingPhraseOptions)
-                        _buildPhrasesGrid(userSettings, rows > 2)
-                      else if (!_isLoadingPhraseOptions)
-                        const Center(
-                          child: Text(
-                            'No phrases available',
-                            style: TextStyle(color: Colors.grey, fontSize: 10),
-                          ),
-                        ),
-
-                      // Show loading indicator
-                      if (_isLoadingPhraseOptions)
-                        const Center(child: CircularProgressIndicator()),
-                    ],
+        ],
+      ),
+      child: Padding(
+        padding: const EdgeInsets.all(3),
+        child: Align(
+          alignment: Alignment.topCenter,
+          child: SizedBox(
+            width: gridWidth,
+            child: Stack(
+              children: [
+                if (_phraseOptions.isNotEmpty && !_isLoadingPhraseOptions)
+                  _buildPhrasesGrid(userSettings)
+                else if (!_isLoadingPhraseOptions)
+                  const Center(
+                    child: Text(
+                      'No phrases available',
+                      style: TextStyle(color: Colors.grey, fontSize: 10),
+                    ),
                   ),
-                ),
-              ),
-            ],
+                if (_isLoadingPhraseOptions)
+                  const Center(child: CircularProgressIndicator()),
+              ],
+            ),
           ),
-        );
-      },
+        ),
+      ),
     );
   }
 
@@ -2155,25 +2324,23 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
     return fullText.trim().isEmpty ? null : fullText.trim();
   }
 
-  Widget _buildPhrasesGrid(UserSettings? userSettings, bool allowScrolling) {
+  Widget _buildPhrasesGrid(UserSettings? userSettings) {
     final tapPictogramsDisabled = userSettings?.disableTapPictograms ?? false;
     final tapPictogramsEnabled = !tapPictogramsDisabled;
     final tapSightWordLogicEnabled =
         !tapPictogramsDisabled && (userSettings?.enableSightWords ?? true);
 
     return GridView.count(
-      physics: allowScrolling
-          ? const AlwaysScrollableScrollPhysics()
-          : const NeverScrollableScrollPhysics(),
+      physics: const NeverScrollableScrollPhysics(),
       padding: EdgeInsets.zero,
       crossAxisCount: _getEffectiveMainContentColumns(
         userSettings?.gridColumns ?? 6,
       ),
-      childAspectRatio: 1.1,
+      childAspectRatio: 1.0,
       crossAxisSpacing: 2,
       mainAxisSpacing: 2,
-      children: List.generate((userSettings?.llmOptions ?? 10) + 1, (index) {
-        if (index == (userSettings?.llmOptions ?? 10)) {
+      children: List.generate(_phraseSlotCount(userSettings) + 1, (index) {
+        if (index == _phraseSlotCount(userSettings)) {
           return TapInterfaceButton(
             label: _t('Something Else'),
             onPressed: () => _loadMorePhraseOptions(),
@@ -2188,6 +2355,7 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
             shouldLogMissing:
                 false, // Don't log missing images for dynamic buttons
             cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
+            mascot: userSettings?.mascot ?? '',
           );
         } else if (index < _phraseOptions.length) {
           final phraseOption = _phraseOptions[index];
@@ -2227,6 +2395,7 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
             shouldLogMissing:
                 false, // Don't log missing images for LLM-generated phrases
             cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
+            mascot: userSettings?.mascot ?? '',
           );
         } else {
           return Container(
@@ -2248,17 +2417,6 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
     );
   }
 
-  double _getCategoryAspectRatio(int mainColumns, double mainAspectRatio) {
-    // Categories get 1/10 of total width with 1 column
-    // Main content gets 9/10 of total width with mainColumns
-    // To match button sizes: category button width = (1/10 total) / 1 = 1/10 total
-    // Main button width = (9/10 total) / mainColumns = 9/(10*mainColumns) total
-    // For equal widths: 1/10 = 9/(10*mainColumns) → mainColumns = 9 (this is the flex ratio)
-    //
-    // Since layout uses flex 1:9, and we want equal button sizes:
-    // Category aspect ratio should be: mainAspectRatio * (mainColumns/9) * (1/1)
-    return mainAspectRatio * mainColumns / 9.0;
-  }
 
   /// Calculate appropriate column count for modal dialog based on its smaller size
   ///
@@ -2364,12 +2522,11 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
       if (!mounted) return;
 
       setState(() {
-        _showBottomStatusText = true;
         _isHandlingWakeWordTurn = true;
         _isListeningForQuestion = false;
         _isListeningForWakeWord = false;
-        _statusMessage = 'Wake word heard! Preparing to listen...';
       });
+      _showStatusToast('Wake word heard! Preparing to listen...');
 
       // Mirror grid behavior: play the listening prompt first, then begin
       // question capture so we do not transcribe the app's own cue.
@@ -2384,10 +2541,9 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
         if (!mounted) return;
 
         setState(() {
-          _showBottomStatusText = true;
           _isListeningForQuestion = true;
-          _statusMessage = 'Listening for your question...';
         });
+        _showStatusToast('Listening for your question...');
 
         final partnerLocale = Provider.of<UserSettingsProvider>(
           context,
@@ -2439,7 +2595,6 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
         _currentQuestion = translatedQuestion;
         _isListeningForQuestion = false;
         _isHandlingWakeWordTurn = true;
-        _showBottomStatusText = false;
         _statusMessage = '';
       });
 
@@ -2488,7 +2643,6 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
       setState(() {
         _isListeningForQuestion = false;
         _isHandlingWakeWordTurn = true;
-        _showBottomStatusText = false;
         _statusMessage = '';
       });
 
@@ -2506,7 +2660,6 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
       setState(() {
         _isListeningForQuestion = false;
         _isHandlingWakeWordTurn = false;
-        _showBottomStatusText = false;
         _statusMessage = '';
       });
 
@@ -2523,10 +2676,7 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
       if (!mounted || !_isListeningForQuestion) return;
       if (questionText.trim().isEmpty) return;
 
-      setState(() {
-        _showBottomStatusText = true;
-        _statusMessage = 'Hearing: "$questionText"';
-      });
+      _showStatusToast('Hearing: "$questionText"');
     };
 
     _wakeWordService!.shouldAllowWakeWordRestart = () {
@@ -2543,7 +2693,6 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
     WakeWordService.wakeWordShouldBeActive = true;
 
     setState(() {
-      _showBottomStatusText = false;
       _isListeningForQuestion = false;
       _isListeningForWakeWord = true;
       _statusMessage = '';
@@ -3510,6 +3659,652 @@ VARIETY RULES:
     return true;
   }
 
+  // ---------------------------------------------------------------------------
+  // Past / Plural variant mode helpers
+  // ---------------------------------------------------------------------------
+
+  // Ported from the web app's COMMON_WORD_VARIANTS dictionary.
+  // Keys are lowercase originals; values map 'past' and 'plural' variants.
+  // null means the variant doesn't apply (verbs have null plural; demonstratives
+  // have null past).
+  static const Map<String, Map<String, String?>> _commonWordVariants = {
+    // ── Demonstratives / pronouns (plural only) ─────────────────────────────
+    'this':    {'past': null, 'plural': 'these'},
+    'that':    {'past': null, 'plural': 'those'},
+    'it':      {'past': null, 'plural': 'them'},
+    'its':     {'past': null, 'plural': 'their'},
+    'itself':  {'past': null, 'plural': 'themselves'},
+    // ── Irregular verbs (past only) ──────────────────────────────────────────
+    'am':      {'past': 'was',     'plural': null},
+    'is':      {'past': 'was',     'plural': null},
+    'are':     {'past': 'were',    'plural': null},
+    'was':     {'past': 'was',     'plural': null},
+    'be':      {'past': 'was',     'plural': null},
+    'have':    {'past': 'had',     'plural': null},
+    'has':     {'past': 'had',     'plural': null},
+    'do':      {'past': 'did',     'plural': null},
+    'does':    {'past': 'did',     'plural': null},
+    'go':      {'past': 'went',    'plural': null},
+    'goes':    {'past': 'went',    'plural': null},
+    'get':     {'past': 'got',     'plural': null},
+    'got':     {'past': 'got',     'plural': null},
+    'make':    {'past': 'made',    'plural': null},
+    'say':     {'past': 'said',    'plural': null},
+    'see':     {'past': 'saw',     'plural': null},
+    'take':    {'past': 'took',    'plural': null},
+    'come':    {'past': 'came',    'plural': null},
+    'know':    {'past': 'knew',    'plural': null},
+    'think':   {'past': 'thought', 'plural': null},
+    'feel':    {'past': 'felt',    'plural': null},
+    'tell':    {'past': 'told',    'plural': null},
+    'give':    {'past': 'gave',    'plural': null},
+    'find':    {'past': 'found',   'plural': null},
+    'put':     {'past': 'put',     'plural': null},
+    'run':     {'past': 'ran',     'plural': null},
+    'eat':     {'past': 'ate',     'plural': null},
+    'sit':     {'past': 'sat',     'plural': null},
+    'stand':   {'past': 'stood',   'plural': null},
+    'write':   {'past': 'wrote',   'plural': null},
+    'read':    {'past': 'read',    'plural': null},
+    'hear':    {'past': 'heard',   'plural': null},
+    'hold':    {'past': 'held',    'plural': null},
+    'bring':   {'past': 'brought', 'plural': null},
+    'leave':   {'past': 'left',    'plural': null},
+    'keep':    {'past': 'kept',    'plural': null},
+    'let':     {'past': 'let',     'plural': null},
+    'begin':   {'past': 'began',   'plural': null},
+    'show':    {'past': 'showed',  'plural': null},
+    'ride':    {'past': 'rode',    'plural': null},
+    'drive':   {'past': 'drove',   'plural': null},
+    'swim':    {'past': 'swam',    'plural': null},
+    'fly':     {'past': 'flew',    'plural': null},
+    'fall':    {'past': 'fell',    'plural': null},
+    'hurt':    {'past': 'hurt',    'plural': null},
+    'cut':     {'past': 'cut',     'plural': null},
+    'hit':     {'past': 'hit',     'plural': null},
+    'buy':     {'past': 'bought',  'plural': null},
+    'pay':     {'past': 'paid',    'plural': null},
+    'send':    {'past': 'sent',    'plural': null},
+    'meet':    {'past': 'met',     'plural': null},
+    'lose':    {'past': 'lost',    'plural': null},
+    'win':     {'past': 'won',     'plural': null},
+    'build':   {'past': 'built',   'plural': null},
+    'draw':    {'past': 'drew',    'plural': null},
+    'sing':    {'past': 'sang',    'plural': null},
+    'throw':   {'past': 'threw',   'plural': null},
+    'catch':   {'past': 'caught',  'plural': null},
+    'bite':    {'past': 'bit',     'plural': null},
+    'blow':    {'past': 'blew',    'plural': null},
+    'break':   {'past': 'broke',   'plural': null},
+    'wake':    {'past': 'woke',    'plural': null},
+    'sleep':   {'past': 'slept',   'plural': null},
+    'choose':  {'past': 'chose',   'plural': null},
+    'cry':     {'past': 'cried',   'plural': null},
+    // ── Regular verbs (past only) ────────────────────────────────────────────
+    'play':    {'past': 'played',   'plural': null},
+    'want':    {'past': 'wanted',   'plural': null},
+    'need':    {'past': 'needed',   'plural': null},
+    'help':    {'past': 'helped',   'plural': null},
+    'talk':    {'past': 'talked',   'plural': null},
+    'walk':    {'past': 'walked',   'plural': null},
+    'look':    {'past': 'looked',   'plural': null},
+    'like':    {'past': 'liked',    'plural': null},
+    'love':    {'past': 'loved',    'plural': null},
+    'try':     {'past': 'tried',    'plural': null},
+    'ask':     {'past': 'asked',    'plural': null},
+    'call':    {'past': 'called',   'plural': null},
+    'stop':    {'past': 'stopped',  'plural': null},
+    'wait':    {'past': 'waited',   'plural': null},
+    'watch':   {'past': 'watched',  'plural': null},
+    'listen':  {'past': 'listened', 'plural': null},
+    'open':    {'past': 'opened',   'plural': null},
+    'close':   {'past': 'closed',   'plural': null},
+    'turn':    {'past': 'turned',   'plural': null},
+    'push':    {'past': 'pushed',   'plural': null},
+    'pull':    {'past': 'pulled',   'plural': null},
+    'pick':    {'past': 'picked',   'plural': null},
+    'start':   {'past': 'started',  'plural': null},
+    'finish':  {'past': 'finished', 'plural': null},
+    'learn':   {'past': 'learned',  'plural': null},
+    'work':    {'past': 'worked',   'plural': null},
+    'dance':   {'past': 'danced',   'plural': null},
+    'cook':    {'past': 'cooked',   'plural': null},
+    'clean':   {'past': 'cleaned',  'plural': null},
+    'wash':    {'past': 'washed',   'plural': null},
+    'change':  {'past': 'changed',  'plural': null},
+    'jump':    {'past': 'jumped',   'plural': null},
+    'climb':   {'past': 'climbed',  'plural': null},
+    'laugh':   {'past': 'laughed',  'plural': null},
+    'smile':   {'past': 'smiled',   'plural': null},
+    'hug':     {'past': 'hugged',   'plural': null},
+    'kiss':    {'past': 'kissed',   'plural': null},
+    'touch':   {'past': 'touched',  'plural': null},
+    'count':   {'past': 'counted',  'plural': null},
+    // ── Nouns/words with both past-verb and plural-noun forms ────────────────
+    'drink':   {'past': 'drank',    'plural': 'drinks'},
+    'brush':   {'past': 'brushed',  'plural': 'brushes'},
+    'dress':   {'past': 'dressed',  'plural': 'dresses'},
+    // ── Nouns (plural only — no meaningful past tense) ───────────────────────
+    'book':    {'past': null, 'plural': 'books'},
+    'toy':     {'past': null, 'plural': 'toys'},
+    'ball':    {'past': null, 'plural': 'balls'},
+    'game':    {'past': null, 'plural': 'games'},
+    'food':    {'past': null, 'plural': 'foods'},
+    'snack':   {'past': null, 'plural': 'snacks'},
+    'cookie':  {'past': null, 'plural': 'cookies'},
+    'apple':   {'past': null, 'plural': 'apples'},
+    'cracker': {'past': null, 'plural': 'crackers'},
+    'chip':    {'past': null, 'plural': 'chips'},
+    'sandwich':{'past': null, 'plural': 'sandwiches'},
+    'pizza':   {'past': null, 'plural': 'pizzas'},
+    'shoe':    {'past': null, 'plural': 'shoes'},
+    'sock':    {'past': null, 'plural': 'socks'},
+    'shirt':   {'past': null, 'plural': 'shirts'},
+    'pant':    {'past': null, 'plural': 'pants'},
+    'hat':     {'past': null, 'plural': 'hats'},
+    'cup':     {'past': null, 'plural': 'cups'},
+    'box':     {'past': null, 'plural': 'boxes'},
+    'bag':     {'past': null, 'plural': 'bags'},
+    'chair':   {'past': null, 'plural': 'chairs'},
+    'friend':  {'past': null, 'plural': 'friends'},
+    'person':  {'past': null, 'plural': 'people'},
+    'child':   {'past': null, 'plural': 'children'},
+    'kid':     {'past': null, 'plural': 'kids'},
+    'animal':  {'past': null, 'plural': 'animals'},
+    'dog':     {'past': null, 'plural': 'dogs'},
+    'cat':     {'past': null, 'plural': 'cats'},
+    'bird':    {'past': null, 'plural': 'birds'},
+    'fish':    {'past': null, 'plural': 'fish'},
+    // ── Transportation ───────────────────────────────────────────────────────
+    'car':          {'past': null, 'plural': 'cars'},
+    'bus':          {'past': null, 'plural': 'buses'},
+    'bike':         {'past': null, 'plural': 'bikes'},
+    'bicycle':      {'past': null, 'plural': 'bicycles'},
+    'train':        {'past': null, 'plural': 'trains'},
+    'plane':        {'past': null, 'plural': 'planes'},
+    'airplane':     {'past': null, 'plural': 'airplanes'},
+    'truck':        {'past': null, 'plural': 'trucks'},
+    'van':          {'past': null, 'plural': 'vans'},
+    'boat':         {'past': null, 'plural': 'boats'},
+    'ship':         {'past': null, 'plural': 'ships'},
+    'helicopter':   {'past': null, 'plural': 'helicopters'},
+    'motorcycle':   {'past': null, 'plural': 'motorcycles'},
+    'scooter':      {'past': null, 'plural': 'scooters'},
+    'taxi':         {'past': null, 'plural': 'taxis'},
+    'ambulance':    {'past': null, 'plural': 'ambulances'},
+    'wheelchair':   {'past': null, 'plural': 'wheelchairs'},
+    'stroller':     {'past': null, 'plural': 'strollers'},
+    // ── Animals ─────────────────────────────────────────────────────────────
+    'horse':     {'past': null, 'plural': 'horses'},
+    'cow':       {'past': null, 'plural': 'cows'},
+    'pig':       {'past': null, 'plural': 'pigs'},
+    'sheep':     {'past': null, 'plural': 'sheep'},
+    'chicken':   {'past': null, 'plural': 'chickens'},
+    'duck':      {'past': null, 'plural': 'ducks'},
+    'rabbit':    {'past': null, 'plural': 'rabbits'},
+    'snake':     {'past': null, 'plural': 'snakes'},
+    'turtle':    {'past': null, 'plural': 'turtles'},
+    'frog':      {'past': null, 'plural': 'frogs'},
+    'elephant':  {'past': null, 'plural': 'elephants'},
+    'lion':      {'past': null, 'plural': 'lions'},
+    'tiger':     {'past': null, 'plural': 'tigers'},
+    'bear':      {'past': null, 'plural': 'bears'},
+    'monkey':    {'past': null, 'plural': 'monkeys'},
+    'giraffe':   {'past': null, 'plural': 'giraffes'},
+    'wolf':      {'past': null, 'plural': 'wolves'},
+    'bee':       {'past': null, 'plural': 'bees'},
+    'butterfly': {'past': null, 'plural': 'butterflies'},
+    'ant':       {'past': null, 'plural': 'ants'},
+    'spider':    {'past': null, 'plural': 'spiders'},
+    'mouse':     {'past': null, 'plural': 'mice'},
+    'dinosaur':  {'past': null, 'plural': 'dinosaurs'},
+    // ── People ──────────────────────────────────────────────────────────────
+    'girl':    {'past': null, 'plural': 'girls'},
+    'boy':     {'past': null, 'plural': 'boys'},
+    'man':     {'past': null, 'plural': 'men'},
+    'woman':   {'past': null, 'plural': 'women'},
+    'baby':    {'past': null, 'plural': 'babies'},
+    'parent':  {'past': null, 'plural': 'parents'},
+    'teacher': {'past': null, 'plural': 'teachers'},
+    'doctor':  {'past': null, 'plural': 'doctors'},
+    'nurse':   {'past': null, 'plural': 'nurses'},
+    'helper':  {'past': null, 'plural': 'helpers'},
+    'brother': {'past': null, 'plural': 'brothers'},
+    'sister':  {'past': null, 'plural': 'sisters'},
+    'student': {'past': null, 'plural': 'students'},
+    // ── Food & drink ────────────────────────────────────────────────────────
+    'banana':      {'past': null, 'plural': 'bananas'},
+    'orange':      {'past': null, 'plural': 'oranges'},
+    'grape':       {'past': null, 'plural': 'grapes'},
+    'strawberry':  {'past': null, 'plural': 'strawberries'},
+    'blueberry':   {'past': null, 'plural': 'blueberries'},
+    'cherry':      {'past': null, 'plural': 'cherries'},
+    'peach':       {'past': null, 'plural': 'peaches'},
+    'pear':        {'past': null, 'plural': 'pears'},
+    'mango':       {'past': null, 'plural': 'mangoes'},
+    'carrot':      {'past': null, 'plural': 'carrots'},
+    'potato':      {'past': null, 'plural': 'potatoes'},
+    'tomato':      {'past': null, 'plural': 'tomatoes'},
+    'noodle':      {'past': null, 'plural': 'noodles'},
+    'egg':         {'past': null, 'plural': 'eggs'},
+    'burger':      {'past': null, 'plural': 'burgers'},
+    'taco':        {'past': null, 'plural': 'tacos'},
+    'donut':       {'past': null, 'plural': 'donuts'},
+    'muffin':      {'past': null, 'plural': 'muffins'},
+    'cupcake':     {'past': null, 'plural': 'cupcakes'},
+    'pancake':     {'past': null, 'plural': 'pancakes'},
+    'waffle':      {'past': null, 'plural': 'waffles'},
+    'pretzel':     {'past': null, 'plural': 'pretzels'},
+    'candy':       {'past': null, 'plural': 'candies'},
+    'straw':       {'past': null, 'plural': 'straws'},
+    'plate':       {'past': null, 'plural': 'plates'},
+    // ── Body parts ──────────────────────────────────────────────────────────
+    'hand':    {'past': null, 'plural': 'hands'},
+    'foot':    {'past': null, 'plural': 'feet'},
+    'tooth':   {'past': null, 'plural': 'teeth'},
+    'eye':     {'past': null, 'plural': 'eyes'},
+    'ear':     {'past': null, 'plural': 'ears'},
+    'finger':  {'past': null, 'plural': 'fingers'},
+    'toe':     {'past': null, 'plural': 'toes'},
+    'arm':     {'past': null, 'plural': 'arms'},
+    'leg':     {'past': null, 'plural': 'legs'},
+    'knee':    {'past': null, 'plural': 'knees'},
+    'elbow':   {'past': null, 'plural': 'elbows'},
+    'shoulder':{'past': null, 'plural': 'shoulders'},
+    'cheek':   {'past': null, 'plural': 'cheeks'},
+    // ── Clothing ────────────────────────────────────────────────────────────
+    'coat':     {'past': null, 'plural': 'coats'},
+    'jacket':   {'past': null, 'plural': 'jackets'},
+    'glove':    {'past': null, 'plural': 'gloves'},
+    'boot':     {'past': null, 'plural': 'boots'},
+    'sneaker':  {'past': null, 'plural': 'sneakers'},
+    'sandal':   {'past': null, 'plural': 'sandals'},
+    'jeans':    {'past': null, 'plural': 'jeans'},
+    'skirt':    {'past': null, 'plural': 'skirts'},
+    'shorts':   {'past': null, 'plural': 'shorts'},
+    'diaper':   {'past': null, 'plural': 'diapers'},
+    'mitten':   {'past': null, 'plural': 'mittens'},
+    'scarf':    {'past': null, 'plural': 'scarves'},
+    'pajama':   {'past': null, 'plural': 'pajamas'},
+    // ── Household / objects ──────────────────────────────────────────────────
+    'table':      {'past': null, 'plural': 'tables'},
+    'door':       {'past': null, 'plural': 'doors'},
+    'window':     {'past': null, 'plural': 'windows'},
+    'phone':      {'past': null, 'plural': 'phones'},
+    'tablet':     {'past': null, 'plural': 'tablets'},
+    'pillow':     {'past': null, 'plural': 'pillows'},
+    'blanket':    {'past': null, 'plural': 'blankets'},
+    'towel':      {'past': null, 'plural': 'towels'},
+    'toothbrush': {'past': null, 'plural': 'toothbrushes'},
+    'spoon':      {'past': null, 'plural': 'spoons'},
+    'fork':       {'past': null, 'plural': 'forks'},
+    'knife':      {'past': null, 'plural': 'knives'},
+    'bowl':       {'past': null, 'plural': 'bowls'},
+    'glass':      {'past': null, 'plural': 'glasses'},
+    'bottle':     {'past': null, 'plural': 'bottles'},
+    'pot':        {'past': null, 'plural': 'pots'},
+    'pan':        {'past': null, 'plural': 'pans'},
+    'tissue':     {'past': null, 'plural': 'tissues'},
+    'bed':        {'past': null, 'plural': 'beds'},
+    'couch':      {'past': null, 'plural': 'couches'},
+    'lamp':       {'past': null, 'plural': 'lamps'},
+    'key':        {'past': null, 'plural': 'keys'},
+    'button':     {'past': null, 'plural': 'buttons'},
+    // ── School / art ────────────────────────────────────────────────────────
+    'pencil':   {'past': null, 'plural': 'pencils'},
+    'crayon':   {'past': null, 'plural': 'crayons'},
+    'marker':   {'past': null, 'plural': 'markers'},
+    'eraser':   {'past': null, 'plural': 'erasers'},
+    'ruler':    {'past': null, 'plural': 'rulers'},
+    'notebook': {'past': null, 'plural': 'notebooks'},
+    'backpack': {'past': null, 'plural': 'backpacks'},
+    'sticker':  {'past': null, 'plural': 'stickers'},
+    'balloon':  {'past': null, 'plural': 'balloons'},
+    'puzzle':   {'past': null, 'plural': 'puzzles'},
+    'block':    {'past': null, 'plural': 'blocks'},
+    'card':     {'past': null, 'plural': 'cards'},
+    'doll':     {'past': null, 'plural': 'dolls'},
+    // ── Nature ──────────────────────────────────────────────────────────────
+    'flower':  {'past': null, 'plural': 'flowers'},
+    'tree':    {'past': null, 'plural': 'trees'},
+    'leaf':    {'past': null, 'plural': 'leaves'},
+    'rock':    {'past': null, 'plural': 'rocks'},
+    'stick':   {'past': null, 'plural': 'sticks'},
+    'bug':     {'past': null, 'plural': 'bugs'},
+    'star':    {'past': null, 'plural': 'stars'},
+    // ── Places ──────────────────────────────────────────────────────────────
+    'store':      {'past': null, 'plural': 'stores'},
+    'library':    {'past': null, 'plural': 'libraries'},
+    'park':       {'past': null, 'plural': 'parks'},
+    'playground': {'past': null, 'plural': 'playgrounds'},
+    'garden':     {'past': null, 'plural': 'gardens'},
+    'farm':       {'past': null, 'plural': 'farms'},
+    'zoo':        {'past': null, 'plural': 'zoos'},
+    'beach':      {'past': null, 'plural': 'beaches'},
+    'mountain':   {'past': null, 'plural': 'mountains'},
+    'room':       {'past': null, 'plural': 'rooms'},
+    'bathroom':   {'past': null, 'plural': 'bathrooms'},
+    'bedroom':    {'past': null, 'plural': 'bedrooms'},
+    'kitchen':    {'past': null, 'plural': 'kitchens'},
+    'restaurant': {'past': null, 'plural': 'restaurants'},
+    'hospital':   {'past': null, 'plural': 'hospitals'},
+    // ── Other common nouns ───────────────────────────────────────────────────
+    'color':   {'past': null, 'plural': 'colors'},
+    'idea':    {'past': null, 'plural': 'ideas'},
+    'wish':    {'past': null, 'plural': 'wishes'},
+    'plan':    {'past': null, 'plural': 'plans'},
+    'story':   {'past': null, 'plural': 'stories'},
+    'video':   {'past': null, 'plural': 'videos'},
+    'picture': {'past': null, 'plural': 'pictures'},
+    'place':   {'past': null, 'plural': 'places'},
+    'thing':   {'past': null, 'plural': 'things'},
+    'word':    {'past': null, 'plural': 'words'},
+    'question':{'past': null, 'plural': 'questions'},
+    'answer':  {'past': null, 'plural': 'answers'},
+    'activity':{'past': null, 'plural': 'activities'},
+    'exercise':{'past': null, 'plural': 'exercises'},
+    'task':    {'past': null, 'plural': 'tasks'},
+    'event':   {'past': null, 'plural': 'events'},
+    'trip':    {'past': null, 'plural': 'trips'},
+    'gift':    {'past': null, 'plural': 'gifts'},
+    'item':    {'past': null, 'plural': 'items'},
+    'option':  {'past': null, 'plural': 'options'},
+    'choice':  {'past': null, 'plural': 'choices'},
+    // ── Common AAC multi-word starters (past only) ───────────────────────────
+    'i want':       {'past': 'i wanted', 'plural': null},
+    'i need':       {'past': 'i needed', 'plural': null},
+    'i feel':       {'past': 'i felt',   'plural': null},
+    'i like':       {'past': 'i liked',  'plural': null},
+    'i love':       {'past': 'i loved',  'plural': null},
+    'i see':        {'past': 'i saw',    'plural': null},
+    'i went':       {'past': 'i went',   'plural': null},
+    'i got':        {'past': 'i got',    'plural': null},
+    'can i':        {'past': 'could i',  'plural': null},
+    'let\'s':       {'past': 'we',       'plural': null},
+    'to play':      {'past': 'played',   'plural': null},
+    'to go':        {'past': 'went',     'plural': null},
+    'to eat':       {'past': 'ate',      'plural': null},
+    'to drink':     {'past': 'drank',    'plural': null},
+    'to see':       {'past': 'saw',      'plural': null},
+    'to do':        {'past': 'did',      'plural': null},
+    'to get':       {'past': 'got',      'plural': null},
+    'to make':      {'past': 'made',     'plural': null},
+    'to take':      {'past': 'took',     'plural': null},
+    'to come':      {'past': 'came',     'plural': null},
+    'to go to':     {'past': 'went to',  'plural': null},
+    'feeling good':    {'past': 'felt good',    'plural': null},
+    'feeling bad':     {'past': 'felt bad',     'plural': null},
+    'feeling happy':   {'past': 'felt happy',   'plural': null},
+    'feeling sad':     {'past': 'felt sad',     'plural': null},
+    'feeling sick':    {'past': 'felt sick',    'plural': null},
+    'feeling tired':   {'past': 'felt tired',   'plural': null},
+    'feeling hungry':  {'past': 'felt hungry',  'plural': null},
+    'feeling scared':  {'past': 'felt scared',  'plural': null},
+    'feeling excited': {'past': 'felt excited', 'plural': null},
+  };
+
+  /// Tier 2: check the lookup table. Returns null if not found.
+  String? _lookupVariant(String word, String mode) {
+    final key = word.toLowerCase().trim();
+    final entry = _commonWordVariants[key];
+    if (entry == null) return null;
+    final variant = entry[mode];
+    // Return null if the variant is identical to the original (no-op words)
+    if (variant == null || variant.toLowerCase() == key) return null;
+    return variant;
+  }
+
+  // Suffixes that strongly indicate the word is NOT a noun that should be
+  // pluralised (verbs, adjectives, adverbs). Words matching these are skipped
+  // by the programmatic pluraliser so we don't turn "happy" into "happys".
+  static const List<String> _nonNounSuffixes = [
+    'ing', 'ed', 'ly', 'ful', 'less', 'ish', 'ous', 'ive', 'ent', 'ant',
+    'ble', 'al', 'ic', 'fy', 'ify', 'ize', 'ise', 'er', 'est',
+  ];
+
+  /// Tier 2.5: Programmatic English pluralizer — only for plural mode.
+  ///
+  /// Applies standard English pluralization rules for regular nouns that are
+  /// NOT in the lookup table. Skips words that look like verbs or adjectives
+  /// (based on suffix heuristics). This handles the long tail of nouns like
+  /// "bike", "train", "flower" without needing the LLM.
+  String? _programmaticPlural(String word) {
+    final lower = word.toLowerCase().trim();
+
+    // Skip single characters, pure numbers, and empty strings.
+    if (lower.length <= 1 || RegExp(r'^\d+$').hasMatch(lower)) return null;
+
+    // Skip words that already end in 's' or look like plurals.
+    if (lower.endsWith('ss')) {
+      // "class" → "classes", "grass" → "grasses"
+    } else if (lower.endsWith('s') && !lower.endsWith('ss')) {
+      return null; // probably already plural or a verb ("runs", "eats")
+    }
+
+    // Skip words that look like verbs / adjectives.
+    for (final suffix in _nonNounSuffixes) {
+      if (lower.endsWith(suffix) && lower.length > suffix.length + 1) {
+        return null;
+      }
+    }
+
+    // Also skip words in our known-verbs list (any word that has a past entry).
+    final entry = _commonWordVariants[lower];
+    if (entry != null && entry['past'] != null) return null;
+
+    // Apply standard English plural rules.
+    if (lower.endsWith('fe')) {
+      return '${lower.substring(0, lower.length - 2)}ves'; // knife→knives
+    }
+    if (lower.endsWith('lf')) {
+      return '${lower.substring(0, lower.length - 1)}ves'; // half→halves
+    }
+    if (lower.endsWith('ch') || lower.endsWith('sh') ||
+        lower.endsWith('ss') || lower.endsWith('x') || lower.endsWith('z')) {
+      return '${lower}es'; // beach→beaches, dish→dishes, box→boxes
+    }
+    if (lower.endsWith('y') && lower.length > 1 &&
+        !'aeiou'.contains(lower[lower.length - 2])) {
+      return '${lower.substring(0, lower.length - 1)}ies'; // baby→babies
+    }
+    if (lower.endsWith('o') && !lower.endsWith('oo')) {
+      // potato→potatoes, but zoo→zoos (handled by lookup table)
+      return '${lower}es';
+    }
+    return '${lower}s'; // default: just add s
+  }
+
+  // Demonstratives that change for plural phrases (mirrors web app).
+  static const Map<String, String> _demonstrativePlurals = {
+    'this': 'these',
+    'that': 'those',
+    'it':   'them',
+    'its':  'their',
+  };
+
+  /// Tier 3: phrase pattern resolver for multi-word phrases not in the table.
+  ///
+  /// Plural mode (mirrors web app `resolveVariantPhrase` plural branch):
+  ///   "this/that/it + ..." → convert demonstrative; also pluralise last word
+  ///   if it has a known plural mapping.
+  ///
+  /// Past mode:
+  ///   Convert the first recognisable verb; also handles "to VERB ..." pattern.
+  String? _resolveVariantPhrase(String phrase, String mode) {
+    final words = phrase.trim().split(RegExp(r'\s+'));
+    if (words.length < 2) return null;
+
+    final firstLower = words.first.toLowerCase();
+
+    if (mode == 'plural') {
+      final demonstrative = _demonstrativePlurals[firstLower];
+      if (demonstrative != null) {
+        final result = List<String>.from(words);
+        result[0] = demonstrative;
+        // Also try to pluralise the last word.
+        final lastLower = words.last.toLowerCase();
+        final lastEntry = _commonWordVariants[lastLower];
+        final lastPlural = lastEntry?['plural'];
+        if (lastPlural != null) {
+          result[result.length - 1] = lastPlural;
+        }
+        return result.join(' ');
+      }
+      return null; // Other plural phrases go to tier 4 (LLM)
+    }
+
+    // Past mode: convert first verb in phrase.
+    final rest = words.skip(1).join(' ');
+    final verbVariant = _lookupVariant(firstLower, mode);
+    if (verbVariant != null) {
+      final cap = phrase[0] == phrase[0].toUpperCase()
+          ? verbVariant[0].toUpperCase() + verbVariant.substring(1)
+          : verbVariant;
+      return '$cap $rest';
+    }
+
+    // "to <verb> ..." → drop "to", past-tense the verb.
+    if (firstLower == 'to' && words.length >= 2) {
+      final verb = words[1].toLowerCase();
+      final verbVar = _lookupVariant(verb, mode);
+      if (verbVar != null) {
+        final tail = words.length > 2 ? ' ${words.skip(2).join(' ')}' : '';
+        final cap = phrase[0] == phrase[0].toUpperCase()
+            ? verbVar[0].toUpperCase() + verbVar.substring(1)
+            : verbVar;
+        return '$cap$tail';
+      }
+    }
+
+    return null;
+  }
+
+  /// Resolves the variant for a single word/phrase using tiers 2–3 (local).
+  /// Returns null when neither tier can resolve it (needs LLM — tier 4).
+  String? _resolveVariantLocal(String word, String mode) {
+    return _lookupVariant(word, mode)
+        ?? _resolveVariantPhrase(word, mode)
+        ?? (mode == 'plural' ? _programmaticPlural(word) : null);
+  }
+
+  /// Applies [mode] ('past' | 'plural') to all currently visible options.
+  /// Tiers 2–3 are resolved synchronously from local data; tier 4 batches
+  /// anything unresolved into a single POST to /api/tap-interface/word-variants.
+  Future<void> _applyVariantModeToCurrentBoard(String mode) async {
+    // Run tiers 1-3 synchronously every call (they only skip already-cached
+    // words so re-entry is safe). Only the LLM (tier 4) is guarded against
+    // concurrent calls so we don't fire duplicate network requests.
+    try {
+      // Collect every visible word/phrase that isn't already cached.
+      final allWords = <String>{
+        ..._boardWordOptions.map((b) => b.text),
+        ..._wordOptions,
+      };
+
+      final wordsForLlm = <String>[];
+
+      for (final word in allWords) {
+        final cacheKey = '$mode:$word';
+        if (_variantCache.containsKey(cacheKey)) continue;
+
+        // Tier 1: pre-stored field on the button object (handled at render time)
+        // — already has the variant, no cache entry needed.
+        final boardBtn = _boardWordOptions
+            .where((b) => b.text == word)
+            .firstOrNull;
+        if (boardBtn != null) {
+          final stored = mode == 'past' ? boardBtn.pastTense : boardBtn.plural;
+          if (stored != null && stored.isNotEmpty && stored != word) {
+            _variantCache[cacheKey] = stored;
+            continue;
+          }
+        }
+
+        // Tier 2 + 3: local lookup / phrase resolver
+        final local = _resolveVariantLocal(word, mode);
+        if (local != null) {
+          _variantCache[cacheKey] = local;
+          continue;
+        }
+
+        // Tier 4 needed
+        wordsForLlm.add(word);
+      }
+
+      // Show tier 1-3 results immediately — don't make the user wait for the
+      // LLM round-trip before seeing local matches.
+      if (mounted) setState(() {});
+
+      // Tier 4: batch LLM call for anything unresolved.
+      // Guard against concurrent LLM calls (tiers 1-3 above are always safe
+      // to re-run because they only write to already-absent cache keys).
+      if (wordsForLlm.isNotEmpty && mounted && !_variantApplyInProgress) {
+        _variantApplyInProgress = true;
+        try {
+          final userSettings = Provider.of<UserSettingsProvider>(
+            context,
+            listen: false,
+          );
+          final userId = userSettings.userId ?? widget.aacUserId;
+          final response =
+              await AuthenticatedHttpClient.makeAuthenticatedRequest(
+                'POST',
+                '${EnvironmentConfig.apiBaseUrl}/api/tap-interface/word-variants',
+                baseHeaders: {
+                  'Content-Type': 'application/json',
+                  'X-User-ID': userId,
+                },
+                body: jsonEncode({'words': wordsForLlm, 'mode': mode}),
+              );
+          debugPrint('[TapInterface] word-variants $mode status=${response.statusCode} words=$wordsForLlm');
+          if (response.statusCode == 200) {
+            final data = jsonDecode(response.body) as Map<String, dynamic>;
+            final variants =
+                (data['variants'] as Map<String, dynamic>?) ?? {};
+            debugPrint('[TapInterface] word-variants response: $variants');
+            for (final entry in variants.entries) {
+              final original = entry.key;
+              final variant = entry.value?.toString() ?? '';
+              if (variant.isNotEmpty &&
+                  variant.toLowerCase() != original.toLowerCase()) {
+                _variantCache['$mode:$original'] = variant;
+              }
+            }
+          } else {
+            debugPrint('[TapInterface] ⚠️ word-variants non-200: ${response.body}');
+          }
+        } catch (e) {
+          debugPrint('[TapInterface] ⚠️ word-variants API error: $e');
+        } finally {
+          _variantApplyInProgress = false;
+        }
+      }
+    } finally {
+      if (mounted) setState(() {});
+    }
+  }
+
+  Future<void> _handleGoBack() async {
+    if (_navigationBreadcrumbs.isEmpty) return;
+    final crumb = _navigationBreadcrumbs.last;
+    setState(() {
+      _navigationBreadcrumbs = _navigationBreadcrumbs.sublist(
+        0,
+        _navigationBreadcrumbs.length - 1,
+      );
+    });
+    // Undo the exact phrase spoken when the navigate button was tapped.
+    if (crumb.addedText.isNotEmpty) {
+      _removePhraseFromSpeechHistory(crumb.addedText);
+    }
+    final returnCategory = _resolveTargetCategory(crumb.boardId);
+    if (returnCategory != null) {
+      await _handleCategoryTap(returnCategory);
+    } else {
+      await _openConfiguredHomeBoard();
+    }
+  }
+
   int _getBoardColumnCount() {
     if (_boardWordOptions.isEmpty) {
       return 1;
@@ -3522,20 +4317,6 @@ VARIETY RULES:
       }
     }
     return maxCol + 1;
-  }
-
-  int _getBoardCellCount() {
-    if (_boardWordOptions.isEmpty) {
-      return 0;
-    }
-
-    var maxRow = 0;
-    for (final button in _boardWordOptions) {
-      if (button.row > maxRow) {
-        maxRow = button.row;
-      }
-    }
-    return (maxRow + 1) * _getBoardColumnCount();
   }
 
   TapBoardButton? _getBoardButtonAtIndex(int index) {
@@ -3578,6 +4359,7 @@ VARIETY RULES:
       pictogramService.setUserContext(
         userId: currentUserId,
         idToken: currentIdToken,
+        mascot: userSettings.settings?.mascot,
       );
     }
     pictogramService.enablePictograms = true;
@@ -3648,6 +4430,7 @@ VARIETY RULES:
       pictogramService.setUserContext(
         userId: currentUserId,
         idToken: currentIdToken,
+        mascot: userSettings.settings?.mascot,
       );
     }
     pictogramService.enablePictograms = true;
@@ -3699,6 +4482,7 @@ VARIETY RULES:
       pictogramService.setUserContext(
         userId: currentUserId,
         idToken: currentIdToken,
+        mascot: userSettings.settings?.mascot,
       );
     }
     pictogramService.enablePictograms = true;
@@ -3756,6 +4540,7 @@ VARIETY RULES:
         pictogramService.setUserContext(
           userId: currentUserId,
           idToken: currentIdToken,
+          mascot: userSettings.settings?.mascot,
         );
       }
       pictogramService.enablePictograms = true;
@@ -3833,6 +4618,7 @@ VARIETY RULES:
           pictogramService.setUserContext(
             userId: currentUserId,
             idToken: currentIdToken,
+            mascot: userSettings.settings?.mascot,
           );
         }
         final childLabels = category.children
@@ -4546,7 +5332,7 @@ VARIETY RULES:
             context,
             listen: false,
           );
-          final requiredPhraseCount = userSettings.settings?.llmOptions ?? 10;
+          final requiredPhraseCount = _phraseSlotCount(userSettings.settings);
 
           final phraseOpts = await _tapService.generateLLMPhraseOptions(
             context: initialContext,
@@ -4736,6 +5522,7 @@ VARIETY RULES:
                               shouldLogMissing:
                                   false, // Don't log missing images for category navigation buttons
                                 cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
+                                mascot: userSettings?.mascot ?? '',
                             );
                           })
                           .toList(),
@@ -4831,23 +5618,55 @@ VARIETY RULES:
         _textPromptUsed = false;
         _isLoadingPhraseOptions = true;
         _isLoadingWordOptions = true;
+        _variantMode = null;
       });
-      await Future.wait([
-        _warmVisiblePhraseImages(phrases: cachedPhrases),
+
+      if (cachedBoardButtons.isNotEmpty) {
+        // For boards: show content immediately, warm images in the background.
+        _warmVisiblePhraseImages(phrases: cachedPhrases); // fire-and-forget
         _warmVisibleWordImages(
           words: cachedWords,
           wordKeywords: cachedWordKeywords,
           boardButtons: cachedBoardButtons,
-        ),
-      ]);
-      if (!mounted || _selectedCategory?.id != category.id) {
-        return;
+        ); // fire-and-forget
+        if (!mounted || _selectedCategory?.id != category.id) return;
+        setState(() {
+          _isLoadingPhraseOptions = false;
+          _isLoadingWordOptions = false;
+          _optionsRebuildKey++;
+        });
+      } else {
+        await Future.wait([
+          _warmVisiblePhraseImages(phrases: cachedPhrases),
+          _warmVisibleWordImages(
+            words: cachedWords,
+            wordKeywords: cachedWordKeywords,
+            boardButtons: const [],
+          ),
+        ]);
+        if (!mounted || _selectedCategory?.id != category.id) {
+          return;
+        }
+        setState(() {
+          _isLoadingPhraseOptions = false;
+          _isLoadingWordOptions = false;
+          _optionsRebuildKey++;
+        });
       }
-      setState(() {
-        _isLoadingPhraseOptions = false;
-        _isLoadingWordOptions = false;
-        _optionsRebuildKey++;
-      });
+      // For boards, the word cache stores raw board-button texts, not filtered
+      // AI words. Use the AI word cache when available (fast path: no API call),
+      // otherwise fall back to generating them fresh.
+      if (cachedBoardButtons.isNotEmpty && mounted &&
+          _selectedCategory?.id == category.id) {
+        final cachedAIWords = _categoryAIWordCache[categoryCacheKey];
+        if (cachedAIWords != null && cachedAIWords.isNotEmpty) {
+          setState(() {
+            _wordOptions = cachedAIWords;
+          });
+        } else {
+          _loadWordOptionsBasedOnBuildSpace();
+        }
+      }
       return;
     }
 
@@ -4860,18 +5679,42 @@ VARIETY RULES:
       _clearActiveBoardModifier(previousBoardId);
     }
 
+    // Synchronously resolve board buttons so they appear in the same frame as
+    // the navigation instead of waiting for the async _loadCategoryWords chain.
+    List<TapBoardButton> synchronousButtons = [];
+    if (category.hasBoardWordOptions && category.boardWordOptions.isNotEmpty) {
+      synchronousButtons =
+          category.boardWordOptions.where((b) => !b.hidden).toList();
+    } else if ((category.boardId ?? '').trim().isNotEmpty) {
+      final board = _tapBoards?.boards
+          .where((b) => b.id.trim() == category.boardId!.trim())
+          .firstOrNull;
+      if (board != null) {
+        synchronousButtons = board.buttons.where((b) => !b.hidden).toList();
+      }
+    }
+
     setState(() {
       _selectedCategory = category;
       _activeWordLetterFilter = null;
-      _currentQuestion = ''; // Clear question when entering category mode
-      // Don't block the whole UI, just the sections
+      _currentQuestion = '';
       _isLoadingPhraseOptions = true;
       _isLoadingWordOptions = true;
       _phraseOptions = [];
       _wordOptions = [];
-      _boardWordOptions = [];
+      _usedWordOptions.clear();
+      _boardWordOptions = synchronousButtons; // pre-fill; async load will localize
       _textPromptUsed = false;
+      _variantMode = null;
     });
+
+    // If we already have board buttons, kick off dynamic-word generation now
+    // rather than waiting for _loadCategoryWords to complete its async chain.
+    // Track whether we did so to avoid a redundant second call from .then().
+    final bool startedAIWordLoadSynchronously = synchronousButtons.isNotEmpty;
+    if (startedAIWordLoadSynchronously && mounted) {
+      _loadWordOptionsBasedOnBuildSpace();
+    }
 
     // We need to know if we are still on the same category when results come back
     final String targetCategoryId = category.id;
@@ -4934,7 +5777,7 @@ VARIETY RULES:
               result['boardButtons'] as List<TapBoardButton>? ?? const [];
 
           setState(() {
-            _wordOptions = boardButtons.isEmpty ? words : [];
+            _wordOptions = words;
             _boardWordOptions = boardButtons;
             _wordKeywords = keywords;
             _categoryWordCache[categoryCacheKey] = List<String>.from(words);
@@ -4950,18 +5793,39 @@ VARIETY RULES:
               '📋 Cleared session-tracked missing images for new category: ${category.label}',
             );
           });
-          await _warmVisibleWordImages(
-            words: words,
-            wordKeywords: keywords,
-            boardButtons: boardButtons,
-          );
-          if (!mounted || _selectedCategory?.id != targetCategoryId) {
-            return;
+
+          if (boardButtons.isNotEmpty) {
+            // For boards: show buttons immediately — don't block on image warming.
+            // Pictograms will appear as they load in the background.
+            _warmVisibleWordImages(
+              words: words,
+              wordKeywords: keywords,
+              boardButtons: boardButtons,
+            ); // fire-and-forget
+            if (!mounted || _selectedCategory?.id != targetCategoryId) return;
+            setState(() {
+              _isLoadingWordOptions = false;
+              _optionsRebuildKey++;
+            });
+            // Start AI dynamic-row generation. Skip if the synchronous pre-fill
+            // already kicked it off — avoids a redundant second API call.
+            if (!startedAIWordLoadSynchronously) {
+              _loadWordOptionsBasedOnBuildSpace();
+            }
+          } else {
+            // For non-board categories: original behaviour (wait for image warm-up
+            // so pictograms are ready when words appear).
+            await _warmVisibleWordImages(
+              words: words,
+              wordKeywords: keywords,
+              boardButtons: boardButtons,
+            );
+            if (!mounted || _selectedCategory?.id != targetCategoryId) return;
+            setState(() {
+              _isLoadingWordOptions = false;
+              _optionsRebuildKey++;
+            });
           }
-          setState(() {
-            _isLoadingWordOptions = false;
-            _optionsRebuildKey++;
-          });
         })
         .catchError((e) {
           debugPrint('[TapInterface] ❌ Error loading words: $e');
@@ -6412,6 +7276,7 @@ VARIETY RULES:
                         shouldLogMissing:
                             false, // Don't log missing images for sub-category navigation buttons
                         cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
+                        mascot: userSettings?.mascot ?? '',
                       );
                     },
                   ),
@@ -7688,6 +8553,7 @@ VARIETY RULES:
       _currentQuestion = ''; // Clear question when entering freestyle mode
       _phraseOptions.clear();
       _wordOptions.clear();
+      _usedWordOptions.clear();
       _boardWordOptions.clear();
       _wordKeywords.clear(); // Clear keywords when clearing word options
       _textPromptUsed = false; // Reset text prompt usage flag
@@ -7723,6 +8589,30 @@ VARIETY RULES:
       // Refresh word options based on the new text
       _loadWordOptionsBasedOnBuildSpace();
     }
+  }
+
+  // Removes [phrase] (as a whole token) from the end of the speech history.
+  // Handles multi-word phrases like "to play" without leaving partial words.
+  void _removePhraseFromSpeechHistory(String phrase) {
+    final current = _speechHistoryController.text.trim();
+    if (current.isEmpty || phrase.isEmpty) return;
+    final suffix = phrase.trim();
+    String newText;
+    if (current.endsWith(suffix)) {
+      newText = current.substring(0, current.length - suffix.length).trimRight();
+    } else {
+      // Fallback: remove the last word if the phrase isn't at the end.
+      final words = current.split(RegExp(r'\s+'));
+      words.removeLast();
+      newText = words.join(' ');
+    }
+    setState(() {
+      _speechHistory = newText;
+      _speechHistoryController.text = newText;
+      _buildSpaceText = newText;
+      _buildSpaceController.text = newText;
+    });
+    _loadWordOptionsBasedOnBuildSpace();
   }
 
   void _clearSpeechHistory() {
@@ -8020,6 +8910,17 @@ VARIETY RULES:
         ],
       ),
     );
+  }
+
+  // --- Status Toast ---
+  void _showStatusToast(String msg) {
+    _statusToastTimer?.cancel();
+    setState(() => _statusMessage = msg);
+    if (msg.isNotEmpty && !_isListeningForWakeWord && !_isListeningForQuestion) {
+      _statusToastTimer = Timer(const Duration(seconds: 4), () {
+        if (mounted) setState(() => _statusMessage = '');
+      });
+    }
   }
 
   // --- Admin Actions ---
@@ -8365,6 +9266,20 @@ VARIETY RULES:
   /// Refresh settings after returning from admin pages
   Future<void> _refreshSettingsFromAdmin() async {
     try {
+      // Reload local SharedPreferences (menu position, tap sensitivity).
+      final prefs = await SharedPreferences.getInstance();
+      final savedPosition = prefs.getString('tap_menu_position') ?? 'left';
+      final savedSensitivity = prefs.getInt('tap_min_duration_ms') ?? 0;
+      debugPrint('[TapSensitivity] _refreshSettingsFromAdmin: tap_min_duration_ms=$savedSensitivity menuPosition=$savedPosition');
+      TapInterfaceButton.tapMinDurationMs = savedSensitivity;
+      if (mounted) {
+        setState(() {
+          _menuPosition = savedPosition;
+          _tapMinDurationMs = savedSensitivity;
+        });
+      }
+
+      if (!mounted) return;
       final settingsProvider = Provider.of<UserSettingsProvider>(
         context,
         listen: false,
@@ -8577,15 +9492,251 @@ VARIETY RULES:
   // Removed _showUserSelectionDialog and _switchToUser methods
   // Now using the proper UserSelectionPage from main.dart
 
-  Widget _buildOptionsGrid(UserSettings? userSettings, Color headerTextColor) {
-    final showBoardWordOptions =
-        _boardWordOptions.isNotEmpty && _currentQuestion.isEmpty;
-    final showSomethingElseAZ =
-        !showBoardWordOptions &&
-        _currentQuestion.isEmpty &&
-        (_selectedCategory?.hasLLMQuery ?? false);
+  // ── Category panel + main interface layout ──────────────────────────────────
 
-    // Check if we have any options to display
+  /// Builds the purple category board panel.
+  /// [horizontal] = true → renders as a fixed-height horizontal strip (top/bottom).
+  /// [horizontal] = false → renders as a flex-1 vertical column (left/right).
+  Widget _buildCategoryPanel(
+    UserSettings? userSettings,
+    Color headerTextColor, {
+    required bool horizontal,
+  }) {
+    final tapPictogramsEnabled =
+        !(userSettings?.disableTapPictograms ?? false);
+    final tapSightWordLogicEnabled =
+        tapPictogramsEnabled && (userSettings?.enableSightWords ?? true);
+    final categories =
+        (_tapConfig?.buttons ?? []).where((c) => !c.hidden).toList();
+
+    // The "BOARDS" header button — tapping opens the all-categories modal.
+    final header = Material(
+      color: Colors.transparent,
+      child: InkWell(
+        onTap: _showAllCategoriesModal,
+        borderRadius: BorderRadius.circular(6),
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 6),
+          decoration: BoxDecoration(
+            border: Border.all(color: Colors.teal[300]!, width: 1.5),
+            borderRadius: BorderRadius.circular(6),
+            color: Colors.teal[50],
+          ),
+          child: horizontal
+              ? Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.library_books, size: 30, color: Colors.teal[800]),
+                    const SizedBox(width: 4),
+                    Text(
+                      'BOARDS',
+                      style: TextStyle(
+                        fontSize: 8,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.teal[800],
+                        letterSpacing: 0.3,
+                      ),
+                    ),
+                  ],
+                )
+              : Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'BOARDS',
+                      style: TextStyle(
+                        fontSize: 8,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.teal[800],
+                        letterSpacing: 0.3,
+                      ),
+                    ),
+                    const SizedBox(height: 4),
+                    Divider(color: Colors.teal[300], height: 1, thickness: 1),
+                    const SizedBox(height: 4),
+                    Icon(Icons.library_books, size: 48, color: Colors.teal[800]),
+                  ],
+                ),
+        ),
+      ),
+    );
+
+    // Builds a single category button.
+    Widget categoryButton(TapInterfaceCategory category) {
+      final isSelected = _selectedCategory == category;
+      return TapInterfaceButton(
+        label: category.label,
+        onPressed: () {
+          setState(() => _navigationBreadcrumbs = []);
+          _handleCategoryTap(category);
+        },
+        backgroundColor:
+            isSelected ? headerTextColor.withValues(alpha: 0.8) : Colors.white,
+        foregroundColor: isSelected ? Colors.white : Colors.black87,
+        borderColor: isSelected
+            ? headerTextColor
+            : Colors.purple[300] ?? Colors.purple.shade300,
+        fontSize: 18,
+        enablePictograms: tapPictogramsEnabled,
+        sightWordGradeLevel: userSettings?.sightWordGradeLevel,
+        enableSightWords: tapSightWordLogicEnabled,
+        padding: const EdgeInsets.all(2),
+        assignedImageUrl: category.imageUrl,
+        shouldLogMissing: false,
+        cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
+        mascot: userSettings?.mascot ?? '',
+      );
+    }
+
+    final decoration = BoxDecoration(
+      gradient: LinearGradient(
+        colors: [
+          Colors.purple[25] ?? Colors.purple.shade50,
+          Colors.purple[50] ?? Colors.purple.shade100,
+        ],
+        begin: horizontal ? Alignment.topCenter : Alignment.topLeft,
+        end: horizontal ? Alignment.bottomCenter : Alignment.bottomRight,
+      ),
+      borderRadius: BorderRadius.circular(12),
+      border: Border.all(
+        color: Colors.purple[300] ?? Colors.purple.shade300,
+        width: 2,
+      ),
+      boxShadow: [
+        BoxShadow(
+          color: Colors.purple.withValues(alpha: 0.2),
+          offset: const Offset(0, 3),
+          blurRadius: 8,
+        ),
+      ],
+    );
+
+    if (horizontal) {
+      // Top / bottom: single row of buttons with horizontal scroll.
+      // Fixed height for horizontal strip: roughly one button tall.
+      const stripHeight = 120.0;
+      return Container(
+        height: stripHeight,
+        decoration: decoration,
+        padding: const EdgeInsets.all(4),
+        child: Row(
+          children: [
+            // BOARDS header on the left edge.
+            Padding(
+              padding: const EdgeInsets.only(right: 6),
+              child: SizedBox(height: stripHeight - 8, child: header),
+            ),
+            // Scrollable list of category buttons.
+            Expanded(
+              child: ListView.separated(
+                scrollDirection: Axis.horizontal,
+                itemCount: categories.length,
+                separatorBuilder: (context, i) => const SizedBox(width: 4),
+                itemBuilder: (_, i) => AspectRatio(
+                  aspectRatio: 1.0,
+                  child: categoryButton(categories[i]),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    } else {
+      // Left / right: vertical column with scrollable grid.
+      return Container(
+        decoration: decoration,
+        child: Column(
+          children: [
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+              decoration: BoxDecoration(
+                color: Colors.purple[50] ?? Colors.purple.shade50,
+                borderRadius: const BorderRadius.only(
+                  topLeft: Radius.circular(10),
+                  topRight: Radius.circular(10),
+                ),
+              ),
+              child: header,
+            ),
+            Expanded(
+              child: Padding(
+                padding: const EdgeInsets.all(6),
+                child: ListView.separated(
+                  padding: const EdgeInsets.only(bottom: 16),
+                  itemCount: categories.length,
+                  separatorBuilder: (_, i) => const SizedBox(height: 4),
+                  itemBuilder: (_, i) => AspectRatio(
+                    aspectRatio: 1.0,
+                    child: categoryButton(categories[i]),
+                  ),
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+  }
+
+  /// Builds the full main interface area (categories panel + options grid)
+  /// arranged according to [_menuPosition].
+  Widget _buildMainInterface(
+    UserSettings? userSettings,
+    Color headerTextColor,
+  ) {
+    final horizontal =
+        _menuPosition == 'top' || _menuPosition == 'bottom';
+    final panel = _buildCategoryPanel(
+      userSettings,
+      headerTextColor,
+      horizontal: horizontal,
+    );
+    final grid = _buildOptionsGrid(userSettings, headerTextColor);
+
+    switch (_menuPosition) {
+      case 'top':
+        return Column(
+          children: [
+            panel,
+            const SizedBox(height: 8),
+            Expanded(child: grid),
+          ],
+        );
+      case 'bottom':
+        return Column(
+          children: [
+            Expanded(child: grid),
+            const SizedBox(height: 8),
+            panel,
+          ],
+        );
+      case 'right':
+        return Row(
+          children: [
+            Expanded(flex: 9, child: grid),
+            const SizedBox(width: 8),
+            SizedBox(
+              width: 173,
+              child: panel,
+            ),
+          ],
+        );
+      default: // 'left'
+        return Row(
+          children: [
+            SizedBox(
+              width: 173,
+              child: panel,
+            ),
+            const SizedBox(width: 8),
+            Expanded(flex: 9, child: grid),
+          ],
+        );
+    }
+  }
+
+  Widget _buildOptionsGrid(UserSettings? userSettings, Color headerTextColor) {
     if (_phraseOptions.isEmpty &&
         _wordOptions.isEmpty &&
         _boardWordOptions.isEmpty &&
@@ -8599,284 +9750,96 @@ VARIETY RULES:
       );
     }
 
-    return Column(
-      key: ValueKey(
-        _optionsRebuildKey,
-      ), // Force complete rebuild when options change
-      children: [
-        // Top section: Phrase options - DYNAMIC SIZING
-        _buildPhrasesSection(userSettings),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final availableW = constraints.maxWidth;
+        final availableH = constraints.maxHeight;
 
-        // Bottom section: Word options (like freestyle page) - NON-SCROLLABLE
-        if (_wordOptions.isNotEmpty ||
-            _boardWordOptions.isNotEmpty ||
-            _isLoadingWordOptions) ...[
-          Expanded(
-            flex: _calculateWordsSectionFlex(userSettings),
-            child: Container(
-              decoration: BoxDecoration(
-                gradient: LinearGradient(
-                  colors: [
-                    Colors.blue[25] ?? Colors.blue.shade50,
-                    Colors.blue[50] ?? Colors.blue.shade100,
-                  ],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(
-                  color: Colors.blue[300] ?? Colors.blue.shade300,
-                  width: 2,
-                ),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.blue.withOpacity(0.2),
-                    offset: const Offset(0, 3),
-                    blurRadius: 8,
-                  ),
-                ],
+        final phrasesRows = userSettings?.tapPhrasesRows ?? 0;
+        final wordsRows = userSettings?.tapWordsRows ?? 3;
+        final cols = _getEffectiveMainContentColumns(userSettings?.gridColumns ?? 6);
+        final totalRows = phrasesRows + wordsRows;
+
+        // Per-section vertical overhead: border (2px×2) + padding for each section.
+        // Phrases section uses Padding(all(3)) → 6px vertical; Words uses Padding(all(6)) → 12px.
+        const kPhrasesVOverhead = 10.0; // 4px border + 6px padding
+        const kWordsVOverhead = 16.0;   // 4px border + 12px padding
+        const kSectionGap = 8.0;
+        const kSpacing = 2.0;
+
+        final phraseRowSpacing = phrasesRows > 1 ? kSpacing * (phrasesRows - 1) : 0.0;
+        final wordsRowSpacing = wordsRows > 1 ? kSpacing * (wordsRows - 1) : 0.0;
+        final totalOverhead = (phrasesRows > 0 ? kPhrasesVOverhead + kSectionGap : 0.0)
+            + kWordsVOverhead;
+
+        final buttonSize = ((availableH - totalOverhead - phraseRowSpacing - wordsRowSpacing)
+                / totalRows)
+            .clamp(24.0, double.infinity);
+
+        // Exact pixel width of the grid (cols square buttons + spacing between them).
+        final gridW = buttonSize * cols + kSpacing * (cols - 1);
+
+        // Horizontal centering: blank space on each side when buttons don't fill the width.
+        // Use the larger section horizontal overhead (words = 12px padding + 4px border = 16px).
+        final sectionW = gridW + 16.0;
+        final hPad = ((availableW - sectionW) / 2.0).clamp(0.0, double.infinity);
+
+        final phrasesSectionH = phrasesRows > 0
+            ? phrasesRows * buttonSize + phraseRowSpacing + kPhrasesVOverhead
+            : 0.0;
+        final wordsSectionH = wordsRows * buttonSize + wordsRowSpacing + kWordsVOverhead;
+
+        Widget column = Column(
+          key: ValueKey(_optionsRebuildKey),
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            if (phrasesRows > 0) ...[
+              SizedBox(
+                height: phrasesSectionH,
+                child: _buildPhrasesSection(userSettings, buttonSize, gridW),
               ),
-              child: Column(
-                children: [
-                  // Grid content
-                  Expanded(
-                    child: Padding(
-                      padding: const EdgeInsets.all(6),
+              const SizedBox(height: kSectionGap),
+            ],
+            SizedBox(
+              height: wordsSectionH,
+              child: Container(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [
+                      Colors.blue[25] ?? Colors.blue.shade50,
+                      Colors.blue[50] ?? Colors.blue.shade100,
+                    ],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: Colors.blue[300] ?? Colors.blue.shade300,
+                    width: 2,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.blue.withOpacity(0.2),
+                      offset: const Offset(0, 3),
+                      blurRadius: 8,
+                    ),
+                  ],
+                ),
+                child: Padding(
+                  padding: const EdgeInsets.all(6),
+                  child: Align(
+                    alignment: Alignment.topCenter,
+                    child: SizedBox(
+                      width: gridW,
                       child: Stack(
                         children: [
-                          // Show grid if we have options (even if loading)
-                          if (!_isLoadingWordOptions)
-                            GridView.count(
-                              physics:
-                                  const AlwaysScrollableScrollPhysics(), // Enable scrolling for dynamic content
-                              padding: EdgeInsets
-                                  .zero, // Remove default padding that creates space above
-                              crossAxisCount: showBoardWordOptions
-                                  ? _getBoardColumnCount()
-                                  : _getEffectiveMainContentColumns(
-                                      userSettings?.gridColumns ?? 6,
-                                    ), // Dynamic columns accounting for Categories
-                              childAspectRatio: 1.1,
-                              crossAxisSpacing: 2,
-                              mainAxisSpacing: 2,
-                              children: List.generate(
-                                showBoardWordOptions
-                                    ? _getBoardCellCount()
-                                    :
-                                      // When answering a question, use actual word count; otherwise use freestyleOptions setting
-                                      _currentQuestion.isNotEmpty
-                                    ? _wordOptions.length +
-                                          (showSomethingElseAZ ? 2 : 1)
-                                    : (userSettings?.freestyleOptions ?? 29) +
-                                          (showSomethingElseAZ ? 2 : 1),
-                                (index) {
-                                  final tapPictogramsDisabled =
-                                      userSettings?.disableTapPictograms ??
-                                      false;
-                                  final tapPictogramsEnabled =
-                                      !tapPictogramsDisabled;
-                                  final tapSightWordLogicEnabled =
-                                      !tapPictogramsDisabled &&
-                                      (userSettings?.enableSightWords ?? true);
-                                  final maxIndex = _currentQuestion.isNotEmpty
-                                      ? _wordOptions.length
-                                      : (userSettings?.freestyleOptions ?? 29);
-
-                                  if (showBoardWordOptions) {
-                                    final rawBoardButton =
-                                        _getBoardButtonAtIndex(index);
-                                    if (rawBoardButton == null) {
-                                      return Container(
-                                        decoration: BoxDecoration(
-                                          border: Border.all(
-                                            color:
-                                                Colors.blue[200] ??
-                                                Colors.blue.shade200,
-                                          ),
-                                          borderRadius: BorderRadius.circular(
-                                            8,
-                                          ),
-                                        ),
-                                      );
-                                    }
-
-                                    final pendingReturnBoardId =
-                                        _temporaryNavigationPending
-                                        ? _peekTemporaryReturnBoard()
-                                        : null;
-                                    final boardIdForModifiers =
-                                        pendingReturnBoardId ??
-                                        _getCategoryBoardId(_selectedCategory);
-                                    final boardButton =
-                                        _applyActiveBoardModifierToButton(
-                                          rawBoardButton,
-                                          boardIdForModifiers,
-                                        );
-
-                                    final boardOptionKey =
-                                        'board::${_selectedCategory?.id ?? 'none'}::${boardButton.id}';
-                                    final isPreviewArmed =
-                                        _isAudioSurfingEnabled &&
-                                        _audioSurfingPreviewOptionKey ==
-                                            boardOptionKey;
-                                    return TapInterfaceButton(
-                                      label: boardButton.text,
-                                      imageSearchText:
-                                          boardButton.imageSearchText,
-                                      onPressed: () =>
-                                          _handleBoardWordOptionTap(
-                                            boardButton,
-                                          ),
-                                      backgroundColor: isPreviewArmed
-                                          ? (Colors.amber[300] ??
-                                                Colors.amber.shade300)
-                                          : (boardButton.isNavigationButton
-                                                ? (Colors.orange[50] ??
-                                                      Colors.orange.shade50)
-                                                : (Colors.blue[50] ??
-                                                      Colors.blue.shade50)),
-                                      foregroundColor: Colors.black87,
-                                      borderColor: isPreviewArmed
-                                          ? (Colors.deepOrange[700] ??
-                                                Colors.deepOrange.shade700)
-                                          : (boardButton.isNavigationButton
-                                                ? (Colors.orange[300] ??
-                                                      Colors.orange.shade300)
-                                                : (Colors.blue[300] ??
-                                                      Colors.blue.shade300)),
-                                      fontSize: 8,
-                                      enablePictograms: tapPictogramsEnabled,
-                                      sightWordGradeLevel:
-                                          userSettings?.sightWordGradeLevel,
-                                      enableSightWords:
-                                          tapSightWordLogicEnabled,
-                                      padding: const EdgeInsets.all(2),
-                                      keywords: _wordKeywords[boardButton.text],
-                                      assignedImageUrl: boardButton.imageUrl,
-                                      shouldLogMissing:
-                                          !boardButton.isNavigationButton,
-                                      cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
-                                    );
-                                  }
-
-                                  if (index == maxIndex) {
-                                    // Standard control button: Something Else
-                                    return TapInterfaceButton(
-                                      label: _t('Something Else'),
-                                      onPressed: () => _loadMoreWordOptions(
-                                        startsWithLetter:
-                                            _activeWordLetterFilter,
-                                      ),
-                                      backgroundColor:
-                                          Colors.blue[50] ??
-                                          Colors.blue.shade50,
-                                      foregroundColor: Colors.black87,
-                                      borderColor:
-                                          Colors.blue[300] ??
-                                          Colors.blue.shade300,
-                                      fontSize: 8,
-                                      enablePictograms: tapPictogramsEnabled,
-                                      sightWordGradeLevel:
-                                          userSettings?.sightWordGradeLevel,
-                                      enableSightWords:
-                                          tapSightWordLogicEnabled,
-                                      padding: const EdgeInsets.all(2),
-                                      shouldLogMissing:
-                                          false, // Don't log missing images for UI control buttons
-                                        cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
-                                    );
-                                  } else if (showSomethingElseAZ &&
-                                      index == maxIndex + 1) {
-                                    // Standard control button: Something Else A-Z
-                                    return TapInterfaceButton(
-                                      label: _t('Something Else A-Z'),
-                                      onPressed: _showSomethingElseAZDialog,
-                                      backgroundColor:
-                                          Colors.teal[50] ??
-                                          Colors.teal.shade50,
-                                      foregroundColor: Colors.black87,
-                                      borderColor:
-                                          Colors.teal[300] ??
-                                          Colors.teal.shade300,
-                                      fontSize: 8,
-                                      enablePictograms: tapPictogramsEnabled,
-                                      sightWordGradeLevel:
-                                          userSettings?.sightWordGradeLevel,
-                                      enableSightWords:
-                                          tapSightWordLogicEnabled,
-                                      padding: const EdgeInsets.all(2),
-                                      shouldLogMissing: false,
-                                      cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
-                                    );
-                                  } else if (index < _wordOptions.length) {
-                                    final wordOption = _wordOptions[index];
-                                    final wordOptionKey =
-                                        'word::${_selectedCategory?.id ?? 'none'}::$wordOption';
-                                    final isPreviewArmed =
-                                        _isAudioSurfingEnabled &&
-                                        _audioSurfingPreviewOptionKey ==
-                                            wordOptionKey;
-                                    final keywords = _wordKeywords[wordOption];
-                                    return TapInterfaceButton(
-                                      label: wordOption,
-                                      onPressed: () =>
-                                          _handleWordOptionTap(wordOption),
-                                      backgroundColor: isPreviewArmed
-                                          ? (Colors.amber[300] ??
-                                                Colors.amber.shade300)
-                                          : (Colors.blue[50] ??
-                                                Colors.blue.shade50),
-                                      foregroundColor: Colors.black87,
-                                      borderColor: isPreviewArmed
-                                          ? (Colors.deepOrange[700] ??
-                                                Colors.deepOrange.shade700)
-                                          : (Colors.blue[300] ??
-                                                Colors.blue.shade300),
-                                      fontSize: 8,
-                                      enablePictograms: tapPictogramsEnabled,
-                                      sightWordGradeLevel:
-                                          userSettings?.sightWordGradeLevel,
-                                      enableSightWords:
-                                          tapSightWordLogicEnabled,
-                                      padding: const EdgeInsets.all(2),
-                                      keywords:
-                                          keywords, // Pass keywords for better image matching
-                                      shouldLogMissing:
-                                          true, // Keep full fallback search enabled for visible Words buttons
-                                        cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
-                                    );
-                                  } else {
-                                    // Empty slot
-                                    return Container(
-                                      decoration: BoxDecoration(
-                                        border: Border.all(
-                                          color:
-                                              Colors.blue[200] ??
-                                              Colors.blue.shade200,
-                                        ),
-                                        borderRadius: BorderRadius.circular(8),
-                                      ),
-                                      child: const Center(
-                                        child: Text(
-                                          '—',
-                                          style: TextStyle(
-                                            color: Colors.grey,
-                                            fontSize: 16,
-                                          ),
-                                        ),
-                                      ),
-                                    );
-                                  }
-                                },
-                              ),
-                            ),
-
-                          // Show loading indicator
+                          if (!_isLoadingWordOptions ||
+                              _wordOptions.isNotEmpty ||
+                              _boardWordOptions.isNotEmpty)
+                            _buildWordsGrid(userSettings),
                           if (_isLoadingWordOptions)
-                            _wordOptions.isEmpty
-                                ? const Center(
-                                    child: CircularProgressIndicator(),
-                                  )
+                            _wordOptions.isEmpty && _boardWordOptions.isEmpty
+                                ? const Center(child: CircularProgressIndicator())
                                 : const Positioned(
                                     top: 0,
                                     left: 0,
@@ -8890,12 +9853,265 @@ VARIETY RULES:
                       ),
                     ),
                   ),
-                ],
+                ),
               ),
             ),
-          ),
-        ],
-      ],
+          ],
+        );
+
+        if (hPad > 0.5) {
+          column = Padding(
+            padding: EdgeInsets.symmetric(horizontal: hPad),
+            child: column,
+          );
+        }
+
+        return column;
+      },
+    );
+  }
+
+  /// Builds the unified words grid: static board-button rows on top, AI dynamic rows on bottom.
+  Widget _buildWordsGrid(UserSettings? userSettings) {
+    final totalSlots = _wordsSlotCount(userSettings);
+    final staticSlots = _staticWordSlotCount(userSettings);
+    final gridCols = _getEffectiveMainContentColumns(
+      userSettings?.gridColumns ?? 6,
+    );
+    final tapPictogramsDisabled = userSettings?.disableTapPictograms ?? false;
+    final tapPictogramsEnabled = !tapPictogramsDisabled;
+    final tapSightWordLogicEnabled =
+        !tapPictogramsDisabled && (userSettings?.enableSightWords ?? true);
+
+    // In question mode, or when no board is loaded, all slots are dynamic
+    final questionMode = _currentQuestion.isNotEmpty;
+    final noBoardLoaded = _boardWordOptions.isEmpty;
+    final effectiveStaticSlots =
+        (noBoardLoaded || questionMode) ? 0 : staticSlots;
+    final dynamicSlots = totalSlots - effectiveStaticSlots;
+
+    // Something Else / Go Back controls sit at the end of the dynamic section.
+    // Go Back and Something Else A-Z are mutually exclusive (board loaded vs not).
+    final hasSomethingElseAZ =
+        noBoardLoaded && (_selectedCategory?.hasLLMQuery ?? false);
+    final hasGoBack = _navigationBreadcrumbs.isNotEmpty;
+    final somethingElseAZOffset =
+        hasSomethingElseAZ && dynamicSlots >= 2 ? dynamicSlots - 2 : -1;
+    final goBackOffset =
+        hasGoBack && dynamicSlots >= 2 ? dynamicSlots - 2 : -1;
+    final somethingElseOffset = dynamicSlots >= 1 ? dynamicSlots - 1 : -1;
+
+    return GridView.count(
+      physics: const NeverScrollableScrollPhysics(),
+      padding: EdgeInsets.zero,
+      crossAxisCount: gridCols,
+      childAspectRatio: 1.0,
+      crossAxisSpacing: 2,
+      mainAxisSpacing: 2,
+      children: List.generate(totalSlots, (index) {
+        final isStaticSlot = index < effectiveStaticSlots;
+
+        if (isStaticSlot) {
+          // --- Static board-button cell ---
+          final rawBoardButton = _getBoardButtonAtIndex(index);
+          if (rawBoardButton == null) {
+            return _buildEmptyWordCell(isDynamic: false);
+          }
+
+          final pendingReturnBoardId =
+              _temporaryNavigationPending
+              ? _peekTemporaryReturnBoard()
+              : null;
+          final boardIdForModifiers =
+              pendingReturnBoardId ?? _getCategoryBoardId(_selectedCategory);
+          final boardButton = _applyActiveBoardModifierToButton(
+            rawBoardButton,
+            boardIdForModifiers,
+          );
+
+          final boardOptionKey =
+              'board::${_selectedCategory?.id ?? 'none'}::${boardButton.id}';
+          final isPreviewArmed =
+              _isAudioSurfingEnabled &&
+              _audioSurfingPreviewOptionKey == boardOptionKey;
+
+          // Apply Past/Plural variant text (tier 1 → cache fallback)
+          String displayLabel = boardButton.text;
+          bool hasVariant = false;
+          if (_variantMode != null) {
+            String? variantText;
+            // Tier 1: pre-stored field on the button
+            if (_variantMode == 'past' && boardButton.pastTense != null) {
+              variantText = boardButton.pastTense;
+            } else if (_variantMode == 'plural' && boardButton.plural != null) {
+              variantText = boardButton.plural;
+            }
+            // Tier 2-4: resolved via _applyVariantModeToCurrentBoard and cached
+            variantText ??= _variantCache['$_variantMode:${boardButton.text}'];
+            if (variantText != null && variantText.isNotEmpty) {
+              displayLabel = variantText;
+              hasVariant = true;
+            }
+          }
+
+          // Use orange nav-button styling only for dedicated nav buttons
+          // (actionType == 'navigate'). Content buttons that happen to navigate
+          // to a sub-board (afterSelection == 'navigate', actionType == 'announce')
+          // keep their blue content styling so the color doesn't change when
+          // the app updates them from use_ai → navigate.
+          final isPureNavButton = boardButton.actionType == 'navigate';
+
+          final Color? variantGlowColor = hasVariant && _variantMode == 'past'
+              ? const Color(0xFFea580c) // orange-600
+              : hasVariant && _variantMode == 'plural'
+              ? const Color(0xFF2563eb) // blue-600
+              : isPreviewArmed
+              ? const Color(0xFFd97706) // amber-600
+              : null;
+          final Color borderColor = variantGlowColor ??
+              (isPureNavButton
+                  ? (Colors.orange[300] ?? Colors.orange.shade300)
+                  : (Colors.blue[300] ?? Colors.blue.shade300));
+
+          return TapInterfaceButton(
+            key: ValueKey(
+              'board_${boardButton.id}_${hasVariant ? displayLabel : ''}',
+            ),
+            label: displayLabel,
+            imageSearchText: boardButton.imageSearchText,
+            onPressed: () => _handleBoardWordOptionTap(
+              boardButton,
+              variantLabel: hasVariant ? displayLabel : null,
+            ),
+            backgroundColor: Colors.white,
+            foregroundColor: Colors.black87,
+            borderColor: borderColor,
+            glowColor: variantGlowColor,
+            fontSize: 8,
+            enablePictograms: tapPictogramsEnabled,
+            sightWordGradeLevel: userSettings?.sightWordGradeLevel,
+            enableSightWords: tapSightWordLogicEnabled,
+            padding: const EdgeInsets.all(2),
+            keywords: _wordKeywords[boardButton.text],
+            assignedImageUrl: boardButton.imageUrl,
+            shouldLogMissing: !boardButton.isNavigationButton,
+            cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
+            mascot: userSettings?.mascot ?? '',
+          );
+        } else {
+          // --- Dynamic (AI) cell ---
+          final dynamicIndex = index - effectiveStaticSlots;
+          const dynamicBorderColor = Color(0xFF8b5cf6); // purple-500
+
+          if (dynamicIndex == goBackOffset) {
+            return TapInterfaceButton(
+              label: _t('Go Back'),
+              onPressed: _handleGoBack,
+              backgroundColor: Colors.white,
+              foregroundColor: Colors.black87,
+              borderColor: Colors.orange[300] ?? Colors.orange.shade300,
+              fontSize: 8,
+              enablePictograms: tapPictogramsEnabled,
+              sightWordGradeLevel: userSettings?.sightWordGradeLevel,
+              enableSightWords: tapSightWordLogicEnabled,
+              padding: const EdgeInsets.all(2),
+              shouldLogMissing: false,
+              cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
+              mascot: userSettings?.mascot ?? '',
+            );
+          } else if (dynamicIndex == somethingElseOffset) {
+            return TapInterfaceButton(
+              label: _t('Something Else'),
+              onPressed: () =>
+                  _loadMoreWordOptions(startsWithLetter: _activeWordLetterFilter),
+              backgroundColor: Colors.white,
+              foregroundColor: Colors.black87,
+              borderColor: Colors.blue[300] ?? Colors.blue.shade300,
+              fontSize: 8,
+              enablePictograms: tapPictogramsEnabled,
+              sightWordGradeLevel: userSettings?.sightWordGradeLevel,
+              enableSightWords: tapSightWordLogicEnabled,
+              padding: const EdgeInsets.all(2),
+              shouldLogMissing: false,
+              cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
+              mascot: userSettings?.mascot ?? '',
+            );
+          } else if (dynamicIndex == somethingElseAZOffset) {
+            return TapInterfaceButton(
+              label: _t('Something Else A-Z'),
+              onPressed: _showSomethingElseAZDialog,
+              backgroundColor: Colors.white,
+              foregroundColor: Colors.black87,
+              borderColor: Colors.teal[300] ?? Colors.teal.shade300,
+              fontSize: 8,
+              enablePictograms: tapPictogramsEnabled,
+              sightWordGradeLevel: userSettings?.sightWordGradeLevel,
+              enableSightWords: tapSightWordLogicEnabled,
+              padding: const EdgeInsets.all(2),
+              shouldLogMissing: false,
+              cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
+              mascot: userSettings?.mascot ?? '',
+            );
+          } else if (dynamicIndex < _wordOptions.length) {
+            final wordOption = _wordOptions[dynamicIndex];
+            // Resolve variant label if a mode is active
+            final cachedVariant = _variantMode != null
+                ? _variantCache['$_variantMode:$wordOption']
+                : null;
+            final displayWord = cachedVariant ?? wordOption;
+            final wordHasVariant = cachedVariant != null;
+            final wordOptionKey =
+                'word::${_selectedCategory?.id ?? 'none'}::$wordOption';
+            final isPreviewArmed =
+                _isAudioSurfingEnabled &&
+                _audioSurfingPreviewOptionKey == wordOptionKey;
+            final keywords = _wordKeywords[wordOption];
+            final Color? wordGlowColor = wordHasVariant && _variantMode == 'past'
+                ? const Color(0xFFea580c) // orange-600
+                : wordHasVariant && _variantMode == 'plural'
+                ? const Color(0xFF2563eb) // blue-600
+                : isPreviewArmed
+                ? const Color(0xFFd97706) // amber-600
+                : null;
+            return TapInterfaceButton(
+              key: ValueKey(
+                'dyn_${_selectedCategory?.id}_${wordOption}_${wordHasVariant ? displayWord : ''}',
+              ),
+              label: displayWord,
+              onPressed: () => _handleWordOptionTap(displayWord),
+              backgroundColor: Colors.white,
+              foregroundColor: Colors.black87,
+              borderColor: wordGlowColor ?? dynamicBorderColor,
+              glowColor: wordGlowColor,
+              borderWidth: 2.5,
+              fontSize: 8,
+              enablePictograms: tapPictogramsEnabled,
+              sightWordGradeLevel: userSettings?.sightWordGradeLevel,
+              enableSightWords: tapSightWordLogicEnabled,
+              padding: const EdgeInsets.all(2),
+              keywords: keywords,
+              shouldLogMissing: true,
+              cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
+              mascot: userSettings?.mascot ?? '',
+            );
+          } else {
+            return _buildEmptyWordCell(isDynamic: true);
+          }
+        }
+      }),
+    );
+  }
+
+  Widget _buildEmptyWordCell({required bool isDynamic}) {
+    return Container(
+      decoration: BoxDecoration(
+        border: Border.all(
+          color: isDynamic
+              ? const Color(0xFF8b5cf6).withOpacity(0.3)
+              : (Colors.blue[200] ?? Colors.blue.shade200),
+        ),
+        borderRadius: BorderRadius.circular(8),
+      ),
     );
   }
 
@@ -9228,6 +10444,11 @@ VARIETY RULES:
       return;
     }
 
+    // Reset variant mode on selection
+    if (_variantMode != null) {
+      setState(() => _variantMode = null);
+    }
+
     String textToAdd = word;
     String textToAnnounce = word;
 
@@ -9311,7 +10532,7 @@ VARIETY RULES:
     await _loadPhraseOptionsBasedOnBuildSpace();
   }
 
-  Future<void> _handleBoardWordOptionTap(TapBoardButton button) async {
+  Future<void> _handleBoardWordOptionTap(TapBoardButton button, {String? variantLabel}) async {
     // Debounce: prevent rapid multiple taps
     if (_isTapInProgress) {
       debugPrint('[TapInterface] ⏱️ Tap debounced - tap already in progress');
@@ -9340,11 +10561,18 @@ VARIETY RULES:
       return;
     }
 
-    final isNavigationButton = effectiveButton.isNavigationButton;
-    final textToAdd = isNavigationButton ? '' : effectiveButton.text;
-    final textToAnnounce =
-        effectiveButton.speechText ??
-        (isNavigationButton ? '' : effectiveButton.text);
+    // Reset variant mode on selection
+    if (_variantMode != null) {
+      setState(() => _variantMode = null);
+    }
+
+    // Navigation buttons with content text (e.g. "food", "more") should still
+    // speak and add their label to the build space. Only suppress for buttons
+    // that carry no meaningful content text (pure nav buttons have empty text).
+    // Use the variant label (e.g. "cars", "went") when one is active so the
+    // announced word matches what the button showed.
+    final textToAdd = variantLabel ?? effectiveButton.text;
+    final textToAnnounce = variantLabel ?? effectiveButton.speechText ?? effectiveButton.text;
 
     if (textToAnnounce.isNotEmpty) {
       _showSpeechBubbleOverlay(textToAnnounce);
@@ -9419,9 +10647,19 @@ VARIETY RULES:
     final effectiveAfterSelection = effectiveButton.afterSelection.isNotEmpty
         ? effectiveButton.afterSelection
         : 'use_ai';
+
     if (effectiveAfterSelection == 'navigate' &&
         effectiveTargetBoardId != null) {
       _clearTemporaryNavigationState();
+      final currentBoardId = _getCategoryBoardId(_selectedCategory);
+      if (currentBoardId != null) {
+        setState(() {
+          _navigationBreadcrumbs = [
+            ..._navigationBreadcrumbs,
+            (boardId: currentBoardId, addedText: textToAdd),
+          ];
+        });
+      }
       final targetCategory = _resolveTargetCategory(effectiveTargetBoardId);
       if (targetCategory != null) {
         await _handleCategoryTap(targetCategory);
@@ -9429,13 +10667,519 @@ VARIETY RULES:
       }
     }
 
-    if (effectiveAfterSelection == 'use_ai') {
+    if (effectiveAfterSelection == 'navigate_home') {
+      _clearTemporaryNavigationState();
+      setState(() => _navigationBreadcrumbs = []);
+      await _openConfiguredHomeBoard();
+      return;
+    }
+
+    if (effectiveAfterSelection == 'use_ai' ||
+        effectiveAfterSelection == 'do_nothing') {
+      if (effectiveAfterSelection == 'use_ai') {
+        // Push current board so user can Go Back after AI board is generated.
+        final currentBoardId = _getCategoryBoardId(_selectedCategory);
+        if (currentBoardId != null) {
+          setState(() {
+            _navigationBreadcrumbs = [
+              ..._navigationBreadcrumbs,
+              (boardId: currentBoardId, addedText: textToAdd),
+            ];
+          });
+        }
+        await _generateAndSaveAIBoard(
+          tappedButton: effectiveButton,
+          parentBoardId: boardIdForModifiers,
+        );
+        return;
+      }
+      // do_nothing: text was added, no further action
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // AI Board Generation (use_ai afterSelection)
+  // ---------------------------------------------------------------------------
+
+  /// Converts a [TapBoardButton] to the JSON payload expected by the backend.
+  Map<String, dynamic> _buttonToJson(TapBoardButton btn) => {
+    'id': btn.id,
+    'text': btn.text,
+    'label': btn.text,
+    'speech_text': btn.speechText,
+    'row': btn.row,
+    'col': btn.col,
+    'after_selection': btn.afterSelection,
+    'target_board_id': btn.targetBoardId,
+    'action_type': btn.actionType,
+    'hidden': btn.hidden,
+    'button_type': btn.buttonType,
+    'image_url': btn.imageUrl,
+    'background_color': btn.backgroundColor,
+    'text_color': btn.textColor,
+    'past_tense': btn.pastTense,
+    'plural': btn.plural,
+  };
+
+  /// When a static button has `after_selection: use_ai`, this method:
+  /// 1. Generates static board buttons via LLM based on current speech history.
+  /// 2. Saves the new board via POST /api/tap-interface/boards.
+  /// 3. Updates [tappedButton] on [parentBoardId] to navigate to the new board.
+  /// 4. Reloads the board config and navigates to the new board.
+  Future<void> _generateAndSaveAIBoard({
+    required TapBoardButton tappedButton,
+    required String? parentBoardId,
+  }) async {
+    final userSettings = Provider.of<UserSettingsProvider>(
+      context,
+      listen: false,
+    );
+    final settings = userSettings.settings;
+    final userId = userSettings.userId ?? widget.aacUserId;
+
+    final gridCols = _getEffectiveMainContentColumns(
+      settings?.gridColumns ?? 6,
+    );
+    final tapWordsRows = settings?.tapWordsRows ?? 3;
+    final tapDynamicRows = settings?.tapDynamicRows ?? 1;
+    final staticRows = (tapWordsRows - tapDynamicRows).clamp(0, tapWordsRows);
+    final staticSlotCount = staticRows * gridCols;
+
+    if (staticSlotCount == 0) {
+      // Nothing static to generate — fall back to plain AI refresh.
       setState(() {
         _boardWordOptions = [];
         _wordOptions = [];
       });
       await _loadWordOptionsBasedOnBuildSpace();
       await _loadPhraseOptionsBasedOnBuildSpace();
+      return;
+    }
+
+    setState(() {
+      _isLoadingWordOptions = true;
+      _showStatusToast('Generating board…');
+    });
+
+    try {
+      // ── 1. Reuse existing board if one already exists for this button ─────
+      // Board label = tapped button text (no prefix — keeps alphabetical sort clean).
+      final boardLabel = tappedButton.text;
+      final existingBoard = _tapBoards?.boards.where(
+        (b) => b.label.trim().toLowerCase() == boardLabel.trim().toLowerCase(),
+      ).firstOrNull;
+
+      if (existingBoard != null && existingBoard.buttons.isNotEmpty) {
+        debugPrint(
+          '[TapInterface] ♻️ Reusing existing board "${existingBoard.label}" (${existingBoard.id})',
+        );
+        // Navigate immediately — board data is already in _tapBoards.
+        final existingCategory = _buildCategoryFromBoard(existingBoard);
+        setState(() => _statusMessage = '');
+        await _handleCategoryTap(existingCategory);
+
+        // Update the source button in the background so future taps navigate
+        // directly (no need to block navigation on this).
+        _updateSourceButton(
+          parentBoardId: parentBoardId,
+          tappedButton: tappedButton,
+          newBoardId: existingBoard.id,
+          userId: userId,
+        ).then((_) async {
+          if (!mounted) return;
+          final freshBoards = await _tapService.fetchTapBoards();
+          if (mounted && freshBoards != null) {
+            setState(() => _tapBoards = freshBoards);
+          }
+        }).catchError((e) {
+          debugPrint('[TapInterface] ❌ Background source update error: $e');
+        });
+        return;
+      }
+
+      // ── 2. Generate static button labels (same short-word style as dynamic row)
+      final speechContext = _speechHistory.trim();
+      // Use the tapped button's text (the board topic) as context, not the parent
+      // board's label — e.g. tapping "am" on the "I" board should generate words
+      // like "hungry, tired, happy" (topic = "am"), not "I"-topic words.
+      final context = tappedButton.text.trim().isNotEmpty
+          ? tappedButton.text.trim()
+          : 'general communication';
+      final currentMood = settings?.currentMood;
+
+      final rawWords = await _tapService.generateFreestyleOptions(
+        context: context,
+        buildSpaceText: speechContext,
+        singleWordsOnly: true,
+        maxOptions: staticSlotCount + 5,
+        currentMood: (currentMood != null && currentMood != 'No Mood Selected')
+            ? currentMood
+            : null,
+        excludeOptions: _displayedStaticButtonLabels(settings),
+      );
+
+      // Client-side dedup of any options that are identical to the static buttons
+      final excludeSet = _displayedStaticButtonLabels(settings)
+          .map((e) => e.toLowerCase().trim())
+          .toSet();
+      final optionLabels = rawWords
+          .where((s) => s.isNotEmpty && !excludeSet.contains(s.toLowerCase().trim()))
+          .take(staticSlotCount)
+          .toList();
+
+      // ── 3. Build button list ──────────────────────────────────────────────
+      final buttons = <Map<String, dynamic>>[];
+      for (var i = 0; i < optionLabels.length; i++) {
+        final row = i ~/ gridCols;
+        final col = i % gridCols;
+        buttons.add({
+          'id': 'btn_${row}_$col',
+          'text': optionLabels[i],
+          'label': optionLabels[i],
+          'speech_text': optionLabels[i],
+          'row': row,
+          'col': col,
+          'after_selection': 'use_ai',
+          'action_type': 'announce',
+          'hidden': false,
+          'button_type': 'static',
+        });
+      }
+
+      // ── 4. Navigate immediately with a temp board ID ──────────────────────
+      // Assign a client-side temp ID so we can navigate before the POST
+      // completes. The POST (which can be slow) runs in the background and
+      // swaps in the real server-assigned ID when done.
+      final tempBoardId =
+          '_temp_${DateTime.now().millisecondsSinceEpoch}';
+      final newBoardButtonObjects = buttons
+          .map((b) => TapBoardButton.fromJson(b))
+          .toList();
+      final tempBoard = TapBoard(
+        id: tempBoardId,
+        label: boardLabel,
+        boardType: 'static',
+        buttons: newBoardButtonObjects,
+      );
+      setState(() {
+        _tapBoards = TapBoardsResponse(
+          boards: [...(_tapBoards?.boards ?? const <TapBoard>[]), tempBoard],
+          boardSettings:
+              _tapBoards?.boardSettings ?? const TapBoardSettings(),
+        );
+        _statusMessage = '';
+      });
+
+      await _handleCategoryTap(_buildCategoryFromBoard(tempBoard));
+
+      // ── 5. Persist board + link source button in the background ───────────
+      // None of these operations block the user from interacting with the new
+      // board. When the POST returns the real ID we swap it into _tapBoards
+      // and update any breadcrumbs that still hold the temp ID.
+      () async {
+        try {
+          final createResponse =
+              await AuthenticatedHttpClient.makeAuthenticatedRequest(
+                'POST',
+                '${EnvironmentConfig.apiBaseUrl}/api/tap-interface/boards',
+                baseHeaders: {
+                  'X-User-ID': userId,
+                  'Content-Type': 'application/json',
+                },
+                body: jsonEncode({
+                  'label': boardLabel,
+                  'board_type': 'static',
+                  'buttons': buttons,
+                }),
+              );
+
+          if (createResponse.statusCode != 200 &&
+              createResponse.statusCode != 201) {
+            debugPrint(
+              '[TapInterface] ⚠️ Board POST failed (${createResponse.statusCode}) — temp board stays in memory',
+            );
+            return;
+          }
+
+          final createData =
+              jsonDecode(createResponse.body) as Map<String, dynamic>;
+          final realBoardId =
+              (createData['board'] as Map<String, dynamic>?)?['id']
+                  as String? ??
+              (createData['id'] as String?);
+
+          if (realBoardId == null || realBoardId.isEmpty) {
+            debugPrint('[TapInterface] ⚠️ Board POST returned no ID');
+            return;
+          }
+
+          // Replace temp board with real board; patch breadcrumbs.
+          if (mounted && _tapBoards != null) {
+            final realBoard = TapBoard(
+              id: realBoardId,
+              label: boardLabel,
+              boardType: 'static',
+              buttons: newBoardButtonObjects,
+            );
+            setState(() {
+              _tapBoards = TapBoardsResponse(
+                boards: _tapBoards!.boards
+                    .where((b) => b.id != tempBoardId)
+                    .toList()
+                  ..add(realBoard),
+                boardSettings: _tapBoards!.boardSettings,
+              );
+              // Update any breadcrumb that still carries the temp ID.
+              _navigationBreadcrumbs = _navigationBreadcrumbs
+                  .map(
+                    (c) => c.boardId == tempBoardId
+                        ? (boardId: realBoardId, addedText: c.addedText)
+                        : c,
+                  )
+                  .toList();
+            });
+          }
+
+          // Link the source button and refresh authoritative boards state.
+          await _updateSourceButton(
+            parentBoardId: parentBoardId,
+            tappedButton: tappedButton,
+            newBoardId: realBoardId,
+            userId: userId,
+          );
+          if (!mounted) return;
+          final freshBoards = await _tapService.fetchTapBoards();
+          if (mounted && freshBoards != null) {
+            setState(() => _tapBoards = freshBoards);
+          }
+        } catch (e) {
+          debugPrint('[TapInterface] ❌ Background board save error: $e');
+        }
+      }();
+    } catch (e) {
+      debugPrint('[TapInterface] ❌ _generateAndSaveAIBoard error: $e');
+      if (mounted) {
+        setState(() {
+          _isLoadingWordOptions = false;
+          _statusMessage = '';
+        });
+        // Fallback: plain AI refresh so the user isn't left with a blank screen.
+        await _loadWordOptionsBasedOnBuildSpace();
+        await _loadPhraseOptionsBasedOnBuildSpace();
+      }
+    }
+  }
+
+  /// Updates the [tappedButton] on [parentBoardId] to navigate directly to
+  /// [newBoardId] on future taps (changing `after_selection` from `use_ai` to
+  /// `navigate`).  Skips silently when the parent board can't be found or is
+  /// read-only, so the caller doesn't need to guard against it.
+  Future<void> _updateSourceButton({
+    required String? parentBoardId,
+    required TapBoardButton tappedButton,
+    required String newBoardId,
+    required String userId,
+  }) async {
+    if (parentBoardId == null || parentBoardId.isEmpty) return;
+
+    // The Home board category typically has no explicit board_id, so
+    // _getCategoryBoardId falls back to the category's own id.  If that id
+    // isn't found in the boards list, try the configured home_board_id instead.
+    TapBoard? parentBoard = _tapBoards?.boards.where(
+      (b) => b.id == parentBoardId,
+    ).firstOrNull;
+
+    String effectiveBoardId = parentBoardId;
+    if (parentBoard == null) {
+      final homeBoardId = _normalizeBoardId(
+        _tapBoards?.boardSettings.homeBoardId,
+      );
+      if (homeBoardId != null && homeBoardId.isNotEmpty) {
+        final homeBoard = _tapBoards?.boards.where(
+          (b) => b.id == homeBoardId,
+        ).firstOrNull;
+        if (homeBoard != null) {
+          parentBoard = homeBoard;
+          effectiveBoardId = homeBoardId;
+          debugPrint(
+            '[TapInterface] 🏠 Home board fallback: using homeBoardId $homeBoardId',
+          );
+        }
+      }
+    }
+
+    final sourceButtons =
+        parentBoard?.buttons.isNotEmpty == true
+        ? parentBoard!.buttons
+        : _boardWordOptions;
+
+    if (sourceButtons.isEmpty) {
+      debugPrint('[TapInterface] ⚠️ No source buttons found for board $parentBoardId');
+      return;
+    }
+
+    final updatedButtons = sourceButtons.map((btn) {
+      final isMatch = btn.id == tappedButton.id ||
+          btn.text.toLowerCase().trim() == tappedButton.text.toLowerCase().trim();
+      if (isMatch) {
+        return {
+          ..._buttonToJson(btn),
+          'after_selection': 'navigate',
+          'target_board_id': newBoardId,
+        };
+      }
+      return _buttonToJson(btn);
+    }).toList();
+
+    final boardLabel = parentBoard?.label ?? _selectedCategory?.label ?? 'Board';
+    final boardType = parentBoard?.boardType ?? 'static';
+
+    final putResp = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+      'PUT',
+      '${EnvironmentConfig.apiBaseUrl}/api/tap-interface/boards/$effectiveBoardId',
+      baseHeaders: {
+        'X-User-ID': userId,
+        'Content-Type': 'application/json',
+      },
+      body: jsonEncode({
+        'label': boardLabel,
+        'board_type': boardType,
+        'default_columns': parentBoard?.defaultColumns ?? 12,
+        'max_rows': parentBoard?.maxRows ?? 7,
+        'hidden': parentBoard?.hidden ?? false,
+        'llm_prompt': parentBoard?.llmPrompt,
+        'buttons': updatedButtons,
+      }),
+    );
+
+    debugPrint('[TapInterface] PUT $effectiveBoardId → ${putResp.statusCode}');
+
+    // Only fall back to the nav config patch when the PUT was rejected.
+    // legacy_category boards return 403 because they are read-only via PUT;
+    // their buttons live in board_word_options inside the nav config, so we
+    // must patch the config directly.
+    //
+    // For custom / AI-generated boards the PUT succeeds (200/201) and is the
+    // authoritative update. Calling the nav config patch for those boards is
+    // NOT safe: the generated button IDs (btn_0_0, btn_0_1 …) can collide with
+    // IDs of unrelated buttons that happen to be stored in the nav config,
+    // causing the wrong button to be patched (e.g. Home board's "I" button
+    // getting its target changed to the most recently generated board).
+    final putSucceeded =
+        putResp.statusCode == 200 || putResp.statusCode == 201;
+    if (!putSucceeded) {
+      await _updateLegacyButtonViaNavConfig(
+        tappedButton: tappedButton,
+        newBoardId: newBoardId,
+        userId: userId,
+      );
+    }
+  }
+
+  /// Patches a button's after_selection+target_board_id inside the full nav
+  /// config (required for legacy_category boards which are read-only via PUT).
+  Future<void> _updateLegacyButtonViaNavConfig({
+    required TapBoardButton tappedButton,
+    required String newBoardId,
+    required String userId,
+  }) async {
+    try {
+      // 1. Fetch raw config JSON
+      final getResp = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+        'GET',
+        '${EnvironmentConfig.apiBaseUrl}/api/tap-interface/config',
+        baseHeaders: {
+          'X-User-ID': userId,
+          'Content-Type': 'application/json',
+        },
+      );
+      if (getResp.statusCode != 200) {
+        debugPrint(
+          '[TapInterface] ❌ Config GET failed: ${getResp.statusCode}',
+        );
+        return;
+      }
+
+      final configJson = jsonDecode(getResp.body) as Map<String, dynamic>;
+
+      // 2. Walk all buttons arrays looking for the matching button by ID or text
+      bool patched = false;
+
+      void patchButtonList(List<dynamic> buttonList) {
+        for (var i = 0; i < buttonList.length; i++) {
+          final btn = buttonList[i];
+          if (btn is! Map<String, dynamic>) continue;
+
+          final btnId = (btn['id'] ?? '').toString();
+          final btnText = (btn['text'] ?? btn['label'] ?? '').toString().toLowerCase().trim();
+          final tapText = tappedButton.text.toLowerCase().trim();
+          final tapId = tappedButton.id;
+
+          if (btnId == tapId || btnText == tapText) {
+            buttonList[i] = {
+              ...btn,
+              'after_selection': 'navigate',
+              'target_board_id': newBoardId,
+            };
+            patched = true;
+            debugPrint(
+              '[TapInterface] ✅ Patched legacy button "$btnText" in nav config',
+            );
+            return;
+          }
+
+          // Recurse into board_word_options
+          final wordOpts = btn['board_word_options'];
+          if (wordOpts is List) patchButtonList(wordOpts);
+
+          // Recurse into children
+          final children = btn['children'];
+          if (children is List) patchButtonList(children);
+        }
+      }
+
+      // Search top-level buttons
+      final topButtons = configJson['buttons'];
+      if (topButtons is List) patchButtonList(topButtons);
+
+      // Also search any boards embedded in the config
+      final boards = configJson['boards'];
+      if (!patched && boards is List) {
+        for (final board in boards) {
+          if (board is! Map<String, dynamic>) continue;
+          final boardBtns = board['buttons'];
+          if (boardBtns is List) patchButtonList(boardBtns);
+          if (patched) break;
+        }
+      }
+
+      if (!patched) {
+        debugPrint(
+          '[TapInterface] ⚠️ Button "${tappedButton.text}" not found in nav config',
+        );
+        return;
+      }
+
+      // 3. POST updated config back
+      final postResp = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+        'POST',
+        '${EnvironmentConfig.apiBaseUrl}/api/tap-interface/config',
+        baseHeaders: {
+          'X-User-ID': userId,
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode(configJson),
+      );
+
+      if (postResp.statusCode == 200 || postResp.statusCode == 201) {
+        debugPrint('[TapInterface] ✅ Nav config updated for legacy button patch');
+      } else {
+        debugPrint(
+          '[TapInterface] ❌ Nav config POST failed: ${postResp.statusCode}: ${postResp.body}',
+        );
+      }
+    } catch (e) {
+      debugPrint('[TapInterface] ❌ _updateLegacyButtonViaNavConfig error: $e');
     }
   }
 
@@ -9450,14 +11194,10 @@ VARIETY RULES:
   }
 
   Future<void> _loadWordOptionsBasedOnBuildSpace() async {
+    // Snapshot the active category so stale async completions don't overwrite
+    // results from a newer navigation.
+    final snapshotCategoryId = _selectedCategory?.id;
     try {
-      if (_currentQuestion.isEmpty && _boardWordOptions.isNotEmpty) {
-        debugPrint(
-          '[TapInterface] Skipping freestyle word refresh because a board is active',
-        );
-        return;
-      }
-
       setState(() {
         _isLoadingWordOptions = true;
       });
@@ -9488,11 +11228,28 @@ VARIETY RULES:
             userSettings.settings?.currentMood ?? 'No Mood Selected';
         final maxWordOptions = userSettings.settings?.freestyleOptions ?? 29;
 
+        // Exclude words already visible in static rows so dynamic options are distinct
+        final excludeStatic =
+            _displayedStaticButtonLabels(userSettings.settings);
+
         final selectedCategory = _selectedCategory;
         String categoryLabel;
         if (selectedCategory != null &&
             _shouldUseDefaultHomeStarterWords(selectedCategory)) {
+          // Home board with no explicit word options — use the built-in AAC
+          // starter-word prompt.
           categoryLabel = _getDefaultHomeStarterPrompt(maxWordOptions);
+        } else if (selectedCategory?.llmPrompt != null &&
+            selectedCategory!.llmPrompt!.isNotEmpty) {
+          // Board has a configured LLM prompt — use it verbatim so the dynamic
+          // row respects the board's intended vocabulary (e.g. the Home board's
+          // "Generate high-frequency starters…" prompt rather than just the
+          // label "home", which produces literal house-related words).
+          categoryLabel = selectedCategory.llmPrompt!;
+          if (currentMood != 'No Mood Selected' && currentMood.isNotEmpty) {
+            categoryLabel =
+                '$categoryLabel appropriate for someone feeling $currentMood';
+          }
         } else {
           categoryLabel = selectedCategory?.label ?? '';
           if (currentMood != 'No Mood Selected' && currentMood.isNotEmpty) {
@@ -9504,7 +11261,7 @@ VARIETY RULES:
         wordOpts = await _tapService.generateCategoryWords(
           category: categoryLabel,
           buildSpaceContent: _buildSpaceText,
-          excludeWords: [],
+          excludeWords: excludeStatic,
           maxOptions: maxWordOptions,
           currentMood: currentMood != 'No Mood Selected' ? currentMood : null,
         );
@@ -9519,6 +11276,9 @@ VARIETY RULES:
         final currentMood =
             userSettings.settings?.currentMood ?? 'No Mood Selected';
         final maxWordOptions = userSettings.settings?.freestyleOptions ?? 29;
+
+        final excludeStatic =
+            _displayedStaticButtonLabels(userSettings.settings);
 
         String ctx;
         if (_selectedCategory != null) {
@@ -9540,6 +11300,7 @@ VARIETY RULES:
           singleWordsOnly: true,
           maxOptions: maxWordOptions,
           currentMood: currentMood != 'No Mood Selected' ? currentMood : null,
+          excludeOptions: excludeStatic,
         );
         debugPrint(
           '[TapInterface] Freestyle API returned ${wordOpts.length} word options',
@@ -9549,6 +11310,21 @@ VARIETY RULES:
       debugPrint(
         '[TapInterface] First 5 options: ${wordOpts.take(5).toList()}',
       );
+
+      // Client-side exclusion: always filter static labels out of dynamic options
+      // regardless of which API path was taken (server-side exclusion is unreliable).
+      if (mounted) {
+        final excludeForFilter = _displayedStaticButtonLabels(
+          Provider.of<UserSettingsProvider>(context, listen: false).settings,
+        );
+        if (excludeForFilter.isNotEmpty) {
+          final excludeSet =
+              excludeForFilter.map((e) => e.toLowerCase().trim()).toSet();
+          wordOpts = wordOpts
+              .where((w) => !excludeSet.contains(w.toLowerCase().trim()))
+              .toList();
+        }
+      }
 
       if (mounted) {
         final userSettings = Provider.of<UserSettingsProvider>(
@@ -9596,12 +11372,26 @@ VARIETY RULES:
 
         newOptions = await _localizeWordsForUserIfNeeded(newOptions);
 
+        if (!mounted || _selectedCategory?.id != snapshotCategoryId) return;
+        // Cache filtered AI words so Go Back and re-visits skip this API call.
+        final locale =
+            Provider.of<UserSettingsProvider>(
+              context,
+              listen: false,
+            ).settings?.userLanguage ??
+            'en-US';
+        _categoryAIWordCache['${snapshotCategoryId}|$locale'] = newOptions;
         setState(() {
           _wordOptions = newOptions;
-          _boardWordOptions = [];
           _isLoadingWordOptions = false;
           _globalSessionLoggedMissingImages.clear();
         });
+        // If a variant mode was active when dynamic words loaded, process the
+        // new words now (they weren't in _wordOptions when the user pressed the
+        // toggle, so they were never resolved).
+        if (_variantMode != null) {
+          _applyVariantModeToCurrentBoard(_variantMode!);
+        }
         debugPrint(
           '[TapInterface] Updated UI with ${_wordOptions.length} word options',
         );
@@ -9612,7 +11402,7 @@ VARIETY RULES:
     } catch (e) {
       debugPrint('[TapInterface] ERROR in word options refresh: $e');
 
-      if (mounted) {
+      if (mounted && _selectedCategory?.id == snapshotCategoryId) {
         final userSettings = Provider.of<UserSettingsProvider>(
           context,
           listen: false,
@@ -9623,7 +11413,6 @@ VARIETY RULES:
         );
         setState(() {
           _wordOptions = localizedFallback;
-          _boardWordOptions = [];
           _isLoadingWordOptions = false;
         });
       }
@@ -9653,7 +11442,7 @@ VARIETY RULES:
       );
       final currentMood =
           userSettings.settings?.currentMood ?? 'No Mood Selected';
-      final requiredPhraseCount = userSettings.settings?.llmOptions ?? 10;
+      final requiredPhraseCount = _phraseSlotCount(userSettings.settings);
 
       String phraseContext = '';
 
@@ -9844,7 +11633,7 @@ VARIETY RULES:
       _isLoadingPhraseOptions = true;
       _isLoadingWordOptions = false;
       _isJokesMode = true;
-      _statusMessage = 'Loading jokes...';
+      _showStatusToast('Loading jokes...');
       _wordOptions = []; // No word options for jokes
       _phraseOptions = [];
       // Create a synthetic category for jokes display
@@ -9856,12 +11645,12 @@ VARIETY RULES:
         context,
         listen: false,
       );
-      final llmOptions = userSettings.settings?.llmOptions ?? 10;
+      final jokeCount = _phraseSlotCount(userSettings.settings);
       final userId = userSettings.userId ?? widget.aacUserId;
 
       final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
         'GET',
-        '${EnvironmentConfig.apiBaseUrl}/api/jokes/contextual?limit=$llmOptions',
+        '${EnvironmentConfig.apiBaseUrl}/api/jokes/contextual?limit=$jokeCount',
         baseHeaders: {'X-User-ID': userId},
       );
 
@@ -9914,25 +11703,21 @@ VARIETY RULES:
           setState(() {
             _phraseOptions = jokePhrases;
             _isLoadingPhraseOptions = false;
-            _statusMessage = 'Loaded ${jokePhrases.length} jokes';
           });
+          _showStatusToast('Loaded ${jokePhrases.length} jokes');
         }
       } else {
         debugPrint('[TapInterface] Jokes error: ${response.statusCode}');
         if (mounted) {
-          setState(() {
-            _isLoadingPhraseOptions = false;
-            _statusMessage = 'Error loading jokes: ${response.statusCode}';
-          });
+          setState(() => _isLoadingPhraseOptions = false);
+          _showStatusToast('Error loading jokes: ${response.statusCode}');
         }
       }
     } catch (e) {
       debugPrint('[TapInterface] Jokes exception: $e');
       if (mounted) {
-        setState(() {
-          _isLoadingPhraseOptions = false;
-          _statusMessage = 'Error loading jokes: $e';
-        });
+        setState(() => _isLoadingPhraseOptions = false);
+        _showStatusToast('Error loading jokes: $e');
       }
     }
   }
@@ -9950,7 +11735,7 @@ VARIETY RULES:
 
     setState(() {
       _isLoadingPhraseOptions = true;
-      _statusMessage = 'Loading different phrase options...';
+      _showStatusToast('Loading different phrase options...');
     });
 
     try {
@@ -10203,16 +11988,14 @@ VARIETY RULES:
       setState(() {
         _phraseOptions = newPhraseOptions;
         _isLoadingPhraseOptions = false;
-        _statusMessage = newPhraseOptions.isNotEmpty
-            ? 'Loaded ${newPhraseOptions.length} different phrase options'
-            : 'No more phrase options available';
       });
+      _showStatusToast(newPhraseOptions.isNotEmpty
+          ? 'Loaded ${newPhraseOptions.length} different phrase options'
+          : 'No more phrase options available');
     } catch (e) {
       debugPrint('TapInterface: Error loading different phrase options: $e');
-      setState(() {
-        _isLoadingPhraseOptions = false;
-        _statusMessage = 'Error loading different phrase options';
-      });
+      setState(() => _isLoadingPhraseOptions = false);
+      _showStatusToast('Error loading different phrase options');
     }
   }
 
@@ -10264,7 +12047,7 @@ VARIETY RULES:
   Future<void> _showSomethingElseAZDialog() async {
     if (_selectedCategory == null) {
       setState(() {
-        _statusMessage = 'Select a category first to use Something Else A-Z.';
+        _showStatusToast('Select a category first to use Something Else A-Z.');
       });
       return;
     }
@@ -10396,7 +12179,7 @@ VARIETY RULES:
         normalizedLetter != null && normalizedLetter.isNotEmpty;
     if (isLetterMode && _selectedCategory == null) {
       setState(() {
-        _statusMessage = 'Select a category first to filter by letter.';
+        _showStatusToast('Select a category first to filter by letter.');
       });
       return;
     }
@@ -10409,12 +12192,10 @@ VARIETY RULES:
       return;
     }
 
-    setState(() {
-      _isLoadingWordOptions = true;
-      _statusMessage = isLetterMode
-          ? 'Loading words starting with "${normalizedLetter.toUpperCase()}"...'
-          : 'Loading different word options...';
-    });
+    setState(() => _isLoadingWordOptions = true);
+    if (isLetterMode) {
+      _showStatusToast('Loading words starting with "${normalizedLetter.toUpperCase()}"...');
+    }
 
     try {
       List<String> newWordOptions = [];
@@ -10478,7 +12259,7 @@ VARIETY RULES:
         final wordOptionsStrings = await _tapService.generateCategoryWords(
           category: categoryForWords,
           buildSpaceContent: _buildSpaceText,
-          excludeWords: _wordOptions, // Exclude current words
+          excludeWords: {..._usedWordOptions, ..._wordOptions.map((w) => w.toLowerCase())}.toList(),
           maxOptions:
               requiredWordCount *
               2, // Request double to ensure we have enough after filtering
@@ -10486,10 +12267,9 @@ VARIETY RULES:
           currentMood: currentMood != 'No Mood Selected' ? currentMood : null,
         );
 
-        // Deduplicate and exclude current options
+        // Deduplicate and exclude all previously shown options
         final deduplicatedWords = _deduplicateWords(wordOptionsStrings);
-        final currentWordsLower = _wordOptions
-            .map((w) => w.toLowerCase())
+        final currentWordsLower = {..._usedWordOptions, ..._wordOptions.map((w) => w.toLowerCase())}
             .toSet();
         newWordOptions = deduplicatedWords
             .where((word) => !currentWordsLower.contains(word.toLowerCase()))
@@ -10518,9 +12298,20 @@ VARIETY RULES:
         String categoryLabel;
         if (selectedCategory != null &&
             _shouldUseDefaultHomeStarterWords(selectedCategory)) {
+          // Home board with no explicit word options — use the built-in AAC starter prompt.
           categoryLabel =
               _getDefaultHomeStarterPrompt(requiredWordCount + 10) +
               letterInstruction;
+        } else if (selectedCategory?.llmPrompt != null &&
+            selectedCategory!.llmPrompt!.isNotEmpty) {
+          // Board has a configured LLM prompt — use it verbatim (same as initial load)
+          // so we don't fall back to the category label and get off-topic words.
+          categoryLabel = selectedCategory.llmPrompt!;
+          if (currentMood != 'No Mood Selected' && currentMood.isNotEmpty) {
+            categoryLabel =
+                '$categoryLabel appropriate for someone feeling $currentMood';
+          }
+          categoryLabel = '$categoryLabel$letterInstruction';
         } else {
           categoryLabel = selectedCategory?.label ?? '';
           if (currentMood != 'No Mood Selected' && currentMood.isNotEmpty) {
@@ -10537,8 +12328,7 @@ VARIETY RULES:
         final rawWordOptions = await _tapService.generateCategoryWords(
           category: categoryLabel,
           buildSpaceContent: _buildSpaceText,
-          excludeWords:
-              _wordOptions, // Exclude current words to get different ones
+          excludeWords: {..._usedWordOptions, ..._wordOptions.map((w) => w.toLowerCase())}.toList(),
           maxOptions:
               requestedOptionsCount, // Request larger batches for letter filtering
           requestDifferentOptions: true, // Request different options
@@ -10598,9 +12388,7 @@ VARIETY RULES:
           );
         }
 
-        // CRITICAL FIX: Only use excludeOptions if we actually have options to exclude
-        // Otherwise, the API might not know what "different" means and return empty results
-        List<String> exclusions = _wordOptions.isNotEmpty ? _wordOptions : [];
+        final List<String> exclusions = {..._usedWordOptions, ..._wordOptions.map((w) => w.toLowerCase())}.toList();
         debugPrint(
           '[TapInterface] Excluding ${exclusions.length} current words: ${exclusions.take(5).toList()}${exclusions.length > 5 ? '...' : ''}',
         );
@@ -10875,6 +12663,9 @@ VARIETY RULES:
           _wordOptions,
         ); // Save old options for comparison
 
+        // Accumulate old words so subsequent Something Else calls never repeat them.
+        _usedWordOptions.addAll(_wordOptions.map((w) => w.toLowerCase()));
+
         // Assign new list references directly — do NOT call .clear() on the
         // old list because _categoryWordCache may share the same list object,
         // and mutating it would silently corrupt the cache.
@@ -10922,9 +12713,7 @@ VARIETY RULES:
           '[TapInterface] Are first 10 words identical? $areIdentical',
         );
 
-        // CRITICAL FIX: Force a complete rebuild by updating other state variables
         _isLoadingWordOptions = false;
-        _optionsRebuildKey++; // Force widget tree rebuild
 
         // IMPORTANT: Clear session-tracked missing images when loading fresh options
         // This allows us to re-log any missing images from the new word set
@@ -10932,20 +12721,14 @@ VARIETY RULES:
         debugPrint(
           '📋 Cleared session-tracked missing images for fresh word options',
         );
-
-        final timestamp = DateTime.now();
-        _statusMessage = newWordOptions.isNotEmpty
-            ? (isLetterMode
-                  ? 'Loaded ${newWordOptions.length} words starting with "${normalizedLetter.toUpperCase()}"'
-                  : 'FRESH OPTIONS #$_optionsRebuildKey loaded at ${timestamp.hour}:${timestamp.minute}:${timestamp.second} - ${newWordOptions.length} words')
-            : (isLetterMode
-                  ? 'No more category words starting with "${normalizedLetter.toUpperCase()}"'
-                  : 'No more word options available');
-
-        debugPrint(
-          '[TapInterface] setState completed with forced rebuild. Rebuild key: $_optionsRebuildKey, Status: $_statusMessage',
-        );
       });
+      if (!newWordOptions.isNotEmpty && isLetterMode) {
+        _showStatusToast('No more category words starting with "${normalizedLetter.toUpperCase()}"');
+      } else if (!newWordOptions.isNotEmpty) {
+        _showStatusToast('No more word options available');
+      } else if (isLetterMode) {
+        _showStatusToast('Loaded ${newWordOptions.length} words starting with "${normalizedLetter.toUpperCase()}"');
+      }
     } catch (e) {
       debugPrint('[TapInterface] ERROR loading different word options: $e');
       final requiredWordCount = userSettings.settings?.freestyleOptions ?? 29;
@@ -10965,10 +12748,10 @@ VARIETY RULES:
       setState(() {
         _wordOptions = localizedFallback;
         _isLoadingWordOptions = false;
-        _statusMessage = isLetterMode
-            ? 'Error loading words for "${normalizedLetter.toUpperCase()}"'
-            : 'Error loading different word options';
       });
+      _showStatusToast(isLetterMode
+          ? 'Error loading words for "${normalizedLetter.toUpperCase()}"'
+          : 'Error loading different word options');
     }
   }
 
@@ -10983,6 +12766,9 @@ VARIETY RULES:
       listen: true,
     );
     final userSettings = settingsProvider.settings;
+
+    // Keep sensitivity static in sync with loaded state on every build.
+    TapInterfaceButton.tapMinDurationMs = _tapMinDurationMs;
 
     // Get user-selected colors
     final Color headerTextColor = userSettings != null
@@ -11020,14 +12806,21 @@ VARIETY RULES:
                       ),
                     ],
                   ),
-                  child: Row(
+                  child: Listener(
+                    // Single pointer-down tracker for the whole action bar.
+                    // _withSensitivity() reads this timestamp to enforce the
+                    // minimum tap hold duration across all action bar buttons.
+                    onPointerDown: (_) =>
+                        _actionBarPointerDownTime = DateTime.now(),
+                    child: Row(
                     children: [
                       // Home Button (Icon Only) - Returns to original page
                       Tooltip(
+                        triggerMode: TooltipTriggerMode.manual,
                         message: 'Home',
                         child: Container(
-                          height: 40,
-                          width: 50,
+                          height: 44,
+                          width: 55,
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
                               colors: [
@@ -11049,10 +12842,10 @@ VARIETY RULES:
                             ],
                           ),
                           child: IconButton(
-                            onPressed: _resetPage,
+                            onPressed: _withSensitivity(_resetPage),
                             icon: const Icon(
                               Icons.home,
-                              size: 28,
+                              size: 31,
                               color: Colors.white,
                             ),
                             padding: EdgeInsets.zero,
@@ -11066,7 +12859,7 @@ VARIETY RULES:
                       // Speech History Text Field (serves as build space)
                       Expanded(
                         child: Container(
-                          height: 40,
+                          height: 44,
                           decoration: BoxDecoration(
                             border: Border.all(
                               color: Colors.grey[300] ?? Colors.grey.shade300,
@@ -11101,10 +12894,11 @@ VARIETY RULES:
 
                       // Speak Button (Icon Only) - Always speaks as-is
                       Tooltip(
+                        triggerMode: TooltipTriggerMode.manual,
                         message: 'Speak',
                         child: Container(
-                          height: 40,
-                          width: 65,
+                          height: 44,
+                          width: 72,
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
                               colors: [
@@ -11124,10 +12918,10 @@ VARIETY RULES:
                             ],
                           ),
                           child: IconButton(
-                            onPressed: _handleSpeakButtonPress,
+                            onPressed: _withSensitivity(_handleSpeakButtonPress),
                             icon: const Icon(
                               Icons.volume_up,
-                              size: 31,
+                              size: 34,
                               color: Colors.white,
                             ),
                             padding: EdgeInsets.zero,
@@ -11140,10 +12934,11 @@ VARIETY RULES:
 
                       // Auto Clean + Speak Button (Icon Only) - Always uses LLM cleanup
                       Tooltip(
+                        triggerMode: TooltipTriggerMode.manual,
                         message: 'Auto Clean + Speak',
                         child: Container(
-                          height: 40,
-                          width: 65,
+                          height: 44,
+                          width: 72,
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
                               colors: [
@@ -11163,10 +12958,10 @@ VARIETY RULES:
                             ],
                           ),
                           child: IconButton(
-                            onPressed: _handleAutoCleanSpeakButtonPress,
+                            onPressed: _withSensitivity(_handleAutoCleanSpeakButtonPress),
                             icon: const Icon(
                               Icons.auto_fix_high,
-                              size: 28,
+                              size: 31,
                               color: Colors.white,
                             ),
                             padding: EdgeInsets.zero,
@@ -11179,10 +12974,11 @@ VARIETY RULES:
 
                       // Backspace Button (Icon Only)
                       Tooltip(
+                        triggerMode: TooltipTriggerMode.manual,
                         message: 'Backspace',
                         child: Container(
-                          height: 40,
-                          width: 50,
+                          height: 44,
+                          width: 55,
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
                               colors: [
@@ -11202,10 +12998,10 @@ VARIETY RULES:
                             ],
                           ),
                           child: IconButton(
-                            onPressed: _backspaceSpeechHistory,
+                            onPressed: _withSensitivity(_backspaceSpeechHistory),
                             icon: const Icon(
                               Icons.backspace,
-                              size: 31,
+                              size: 34,
                               color: Colors.white,
                             ),
                             padding: EdgeInsets.zero,
@@ -11218,10 +13014,11 @@ VARIETY RULES:
 
                       // Clear Text Button (Icon Only) - NEW
                       Tooltip(
+                        triggerMode: TooltipTriggerMode.manual,
                         message: 'Clear Text',
                         child: Container(
-                          height: 40,
-                          width: 50,
+                          height: 44,
+                          width: 55,
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
                               colors: [
@@ -11241,10 +13038,10 @@ VARIETY RULES:
                             ],
                           ),
                           child: IconButton(
-                            onPressed: _clearSpeechText,
+                            onPressed: _withSensitivity(_clearSpeechText),
                             icon: const Icon(
                               Icons.close,
-                              size: 31,
+                              size: 34,
                               color: Colors.white,
                             ),
                             padding: EdgeInsets.zero,
@@ -11257,12 +13054,13 @@ VARIETY RULES:
 
                       // Audio Surfing Toggle Button (Icon Only)
                       Tooltip(
+                        triggerMode: TooltipTriggerMode.manual,
                         message: _isAudioSurfingEnabled
                             ? 'Audio Surfing: ON'
                             : 'Audio Surfing: OFF',
                         child: Container(
-                          height: 40,
-                          width: 50,
+                          height: 44,
+                          width: 55,
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
                               colors: _isAudioSurfingEnabled
@@ -11291,21 +13089,21 @@ VARIETY RULES:
                             ],
                           ),
                           child: IconButton(
-                            onPressed: () {
+                            onPressed: _withSensitivity(() {
                               setState(() {
                                 _isAudioSurfingEnabled =
                                     !_isAudioSurfingEnabled;
                                 _audioSurfingPreviewOptionKey = null;
-                                _statusMessage = _isAudioSurfingEnabled
-                                    ? 'Audio Surfing enabled. Tap once to preview, tap again to select.'
-                                    : 'Audio Surfing disabled.';
                               });
-                            },
+                              _showStatusToast(_isAudioSurfingEnabled
+                                  ? 'Audio Surfing enabled. Tap once to preview, tap again to select.'
+                                  : 'Audio Surfing disabled.');
+                            }),
                             icon: Icon(
                               _isAudioSurfingEnabled
                                   ? Icons.surround_sound
                                   : Icons.hearing,
-                              size: 28,
+                              size: 31,
                               color: Colors.white,
                             ),
                             padding: EdgeInsets.zero,
@@ -11318,10 +13116,11 @@ VARIETY RULES:
 
                       // History Button (Icon Only)
                       Tooltip(
+                        triggerMode: TooltipTriggerMode.manual,
                         message: 'History',
                         child: Container(
-                          height: 40,
-                          width: 50,
+                          height: 44,
+                          width: 55,
                           decoration: BoxDecoration(
                             gradient: LinearGradient(
                               colors: [
@@ -11341,10 +13140,10 @@ VARIETY RULES:
                             ],
                           ),
                           child: IconButton(
-                            onPressed: _showSpeechHistoryDialog,
+                            onPressed: _withSensitivity(_showSpeechHistoryDialog),
                             icon: const Icon(
                               Icons.menu_book,
-                              size: 31,
+                              size: 34,
                               color: Colors.white,
                             ),
                             padding: EdgeInsets.zero,
@@ -11352,351 +13151,281 @@ VARIETY RULES:
                           ),
                         ),
                       ),
+
+                      const SizedBox(width: 4),
+
+                      // Past Tense Toggle
+                      Tooltip(
+                        triggerMode: TooltipTriggerMode.manual,
+                        message: _variantMode == 'past'
+                            ? 'Past: ON (tap to disable)'
+                            : 'Past Tense Mode',
+                        child: GestureDetector(
+                          onTapDown: (_) =>
+                              _actionBarPointerDownTime = DateTime.now(),
+                          onTap: _withSensitivity(() {
+                            final newMode =
+                                _variantMode == 'past' ? null : 'past';
+                            setState(() => _variantMode = newMode);
+                            if (newMode != null) {
+                              _applyVariantModeToCurrentBoard(newMode);
+                            }
+                          }),
+                          child: Container(
+                            height: 44,
+                            width: 55,
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: _variantMode == 'past'
+                                    ? [
+                                        const Color(0xFFea580c),
+                                        const Color(0xFFc2410c),
+                                      ]
+                                    : [
+                                        const Color(0xFFf97316),
+                                        const Color(0xFFea580c),
+                                      ],
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                              ),
+                              borderRadius: BorderRadius.circular(6),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: const Color(0xFFea580c)
+                                      .withValues(alpha: _variantMode == 'past' ? 0.5 : 0.25),
+                                  offset: const Offset(0, 2),
+                                  blurRadius: 4,
+                                ),
+                              ],
+                            ),
+                            alignment: Alignment.center,
+                            child: const Text(
+                              '-d',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                fontFamily: 'monospace',
+                                letterSpacing: -0.5,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+
+                      const SizedBox(width: 4),
+
+                      // Plural Toggle
+                      Tooltip(
+                        triggerMode: TooltipTriggerMode.manual,
+                        message: _variantMode == 'plural'
+                            ? 'Plural: ON (tap to disable)'
+                            : 'Plural Mode',
+                        child: GestureDetector(
+                          onTapDown: (_) =>
+                              _actionBarPointerDownTime = DateTime.now(),
+                          onTap: _withSensitivity(() {
+                            final newMode =
+                                _variantMode == 'plural' ? null : 'plural';
+                            setState(() => _variantMode = newMode);
+                            if (newMode != null) {
+                              _applyVariantModeToCurrentBoard(newMode);
+                            }
+                          }),
+                          child: Container(
+                            height: 44,
+                            width: 55,
+                            decoration: BoxDecoration(
+                              gradient: LinearGradient(
+                                colors: _variantMode == 'plural'
+                                    ? [
+                                        const Color(0xFF2563eb),
+                                        const Color(0xFF1d4ed8),
+                                      ]
+                                    : [
+                                        const Color(0xFF3b82f6),
+                                        const Color(0xFF2563eb),
+                                      ],
+                                begin: Alignment.topCenter,
+                                end: Alignment.bottomCenter,
+                              ),
+                              borderRadius: BorderRadius.circular(6),
+                              boxShadow: [
+                                BoxShadow(
+                                  color: const Color(0xFF2563eb)
+                                      .withValues(alpha: _variantMode == 'plural' ? 0.5 : 0.25),
+                                  offset: const Offset(0, 2),
+                                  blurRadius: 4,
+                                ),
+                              ],
+                            ),
+                            alignment: Alignment.center,
+                            child: const Text(
+                              '-S',
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontSize: 20,
+                                fontWeight: FontWeight.bold,
+                                fontFamily: 'monospace',
+                                letterSpacing: -0.5,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
                     ],
+                  ),
                   ),
                 ),
 
                 // --- MAIN INTERFACE ---
                 Expanded(
-                  child: Row(
-                    children: [
-                      // Column 1: Categories
-                      Expanded(
-                        flex: 1,
-                        child: Container(
-                          margin: const EdgeInsets.only(right: 8),
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [
-                                Colors.purple[25] ?? Colors.purple.shade50,
-                                Colors.purple[50] ?? Colors.purple.shade100,
-                              ],
-                              begin: Alignment.topLeft,
-                              end: Alignment.bottomRight,
-                            ),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(
-                              color:
-                                  Colors.purple[300] ?? Colors.purple.shade300,
-                              width: 2,
-                            ),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.purple.withOpacity(0.2),
-                                offset: const Offset(0, 3),
-                                blurRadius: 8,
-                              ),
-                            ],
-                          ),
-                          child: Column(
-                            children: [
-                              // Section header
-                              Container(
-                                width: double.infinity,
-                                padding: const EdgeInsets.symmetric(
-                                  horizontal: 8,
-                                  vertical: 6,
-                                ),
-                                decoration: BoxDecoration(
-                                  color:
-                                      Colors.purple[50] ??
-                                      Colors.purple.shade50,
-                                  borderRadius: const BorderRadius.only(
-                                    topLeft: Radius.circular(10),
-                                    topRight: Radius.circular(10),
-                                  ),
-                                ),
-                                child: Material(
-                                  color: Colors.transparent,
-                                  child: InkWell(
-                                    onTap: _showAllCategoriesModal,
-                                    borderRadius: BorderRadius.circular(6),
-                                    child: Container(
-                                      padding: const EdgeInsets.symmetric(
-                                        horizontal: 6,
-                                        vertical: 6,
-                                      ),
-                                      decoration: BoxDecoration(
-                                        border: Border.all(
-                                          color: Colors.teal[300]!,
-                                          width: 1.5,
-                                        ),
-                                        borderRadius: BorderRadius.circular(6),
-                                        color: Colors.teal[50],
-                                      ),
-                                      child: Column(
-                                        mainAxisSize: MainAxisSize.min,
-                                        children: [
-                                          Text(
-                                            'BOARDS',
-                                            style: TextStyle(
-                                              fontSize: 8,
-                                              fontWeight: FontWeight.bold,
-                                              color: Colors.teal[800],
-                                              letterSpacing: 0.3,
-                                            ),
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Divider(
-                                            color: Colors.teal[300],
-                                            height: 1,
-                                            thickness: 1,
-                                          ),
-                                          const SizedBox(height: 4),
-                                          Row(
-                                            mainAxisAlignment:
-                                                MainAxisAlignment.center,
-                                            children: [
-                                              Icon(
-                                                Icons.library_books,
-                                                size: 32,
-                                                color: Colors.teal[800],
-                                              ),
-                                            ],
-                                          ),
-                                        ],
-                                      ),
-                                    ),
-                                  ),
-                                ),
-                              ),
-                              // Grid content
-                              Expanded(
-                                child: Padding(
-                                  padding: const EdgeInsets.all(6),
-                                  child: GridView.count(
-                                    padding: const EdgeInsets.only(bottom: 16),
-                                    crossAxisCount:
-                                        1, // Always 1 column for categories
-                                    childAspectRatio: _getCategoryAspectRatio(
-                                      userSettings?.gridColumns ?? 6,
-                                      1.1,
-                                    ), // Calculated to match main content button sizes
-                                    crossAxisSpacing: 4,
-                                    mainAxisSpacing: 4,
-                                    children: (_tapConfig?.buttons ?? [])
-                                        .where((category) => !category.hidden)
-                                        .map((category) {
-                                          final isSelected =
-                                              _selectedCategory == category;
-                                          final tapPictogramsDisabled =
-                                              userSettings
-                                                  ?.disableTapPictograms ??
-                                              false;
-                                          final tapPictogramsEnabled =
-                                              !tapPictogramsDisabled;
-                                          final tapSightWordLogicEnabled =
-                                              !tapPictogramsDisabled &&
-                                              (userSettings?.enableSightWords ??
-                                                  true);
-                                          return TapInterfaceButton(
-                                            label: category.label,
-                                            onPressed: () =>
-                                                _handleCategoryTap(category),
-                                            backgroundColor: isSelected
-                                                ? headerTextColor.withOpacity(
-                                                    0.8,
-                                                  )
-                                                : Colors.white,
-                                            foregroundColor: isSelected
-                                                ? Colors.white
-                                                : Colors.black87,
-                                            borderColor: isSelected
-                                                ? headerTextColor
-                                                : Colors.purple[300] ??
-                                                      Colors.purple.shade300,
-                                            fontSize: 12,
-                                            enablePictograms:
-                                                tapPictogramsEnabled,
-                                            sightWordGradeLevel: userSettings
-                                                ?.sightWordGradeLevel,
-                                            enableSightWords:
-                                                tapSightWordLogicEnabled,
-                                            padding: const EdgeInsets.all(2),
-                                            assignedImageUrl: category
-                                                .imageUrl, // Pass assigned image URL from database
-                                            shouldLogMissing:
-                                                false, // Don't log missing images for category sidebar buttons
-                                            cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
-                                          );
-                                        })
-                                        .toList(),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-
-                      // Columns 2-10: Options Grid
-                      Expanded(
-                        flex: 9,
-                        child: _buildOptionsGrid(userSettings, headerTextColor),
-                      ),
-                    ],
-                  ),
+                  child: _buildMainInterface(userSettings, headerTextColor),
                 ),
               ],
             ),
           ),
 
-          // --- ADMIN TOOLBAR ---
-          Positioned(
-            bottom: 0,
-            left: 0,
-            right: 0,
-            child: Container(
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.95),
-                boxShadow: [
-                  BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
-                    offset: const Offset(0, -2),
-                    blurRadius: 8,
-                  ),
-                ],
-              ),
-              child: Row(
-                children: [
-                  // Status Message - takes up remaining space (fade in/out)
-                  Expanded(
-                    child: AnimatedSwitcher(
-                      duration: const Duration(milliseconds: 450),
-                      switchInCurve: Curves.easeOut,
-                      switchOutCurve: Curves.easeIn,
-                      transitionBuilder: (child, animation) =>
-                          FadeTransition(opacity: animation, child: child),
-                      child:
-                          (_showBottomStatusText && _statusMessage.isNotEmpty)
-                          ? Container(
-                              key: ValueKey('tap_status_$_statusMessage'),
-                              padding: const EdgeInsets.symmetric(
-                                horizontal: 8,
-                                vertical: 4,
-                              ),
-                              margin: const EdgeInsets.only(right: 8),
-                              decoration: BoxDecoration(
-                                color: _isListeningForQuestion
-                                    ? Colors.orange.shade50
-                                    : _isListeningForWakeWord
-                                    ? Colors.green.shade50
-                                    : Colors.blue.shade50,
-                                borderRadius: BorderRadius.circular(4),
-                                border: Border.all(
-                                  color: _isListeningForQuestion
-                                      ? Colors.orange.shade200
-                                      : _isListeningForWakeWord
-                                      ? Colors.green.shade200
-                                      : Colors.blue.shade200,
-                                  width: 1,
-                                ),
-                              ),
-                              child: Text(
-                                _statusMessage,
-                                style: TextStyle(
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.w500,
-                                  color: _isListeningForQuestion
-                                      ? Colors.orange.shade700
-                                      : _isListeningForWakeWord
-                                      ? Colors.green.shade700
-                                      : Colors.blue.shade700,
-                                ),
-                                textAlign: TextAlign.center,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                              ),
-                            )
-                          : const SizedBox(key: ValueKey('tap_status_hidden')),
-                    ),
-                  ),
-
-                  // Admin buttons - Only show when unlocked
-                  if (!_isAdminToolbarLocked) ...[
-                    IconButton(
-                      icon: const Icon(Icons.settings, color: Colors.black87),
-                      tooltip: 'Admin Settings',
-                      onPressed: () => _onAdminButtonPressed('/admin-settings'),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.touch_app, color: Colors.black87),
-                      tooltip: 'Tap Interface Admin',
-                      onPressed: () =>
-                          _onAdminButtonPressed('/admin-tap-interface'),
-                    ),
-                    IconButton(
-                      icon: const Icon(
-                        Icons.location_on,
-                        color: Colors.black87,
-                      ),
-                      tooltip: 'User Current Location',
-                      onPressed: () =>
-                          _onAdminButtonPressed('/admin-user-current'),
-                    ),
-                    IconButton(
-                      icon: const Icon(
-                        Icons.info_outline,
-                        color: Colors.black87,
-                      ),
-                      tooltip: 'User Info',
-                      onPressed: () =>
-                          _onAdminButtonPressed('/admin-user-info'),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.book, color: Colors.black87),
-                      tooltip: 'User Diary',
-                      onPressed: () =>
-                          _onAdminButtonPressed('/admin-user-diary'),
-                    ),
-                    // Separator
-                    Container(
-                      height: 30,
-                      width: 1,
-                      color: Colors.grey[400],
-                      margin: const EdgeInsets.symmetric(horizontal: 4),
-                    ),
-                    // Switch User Account button
-                    IconButton(
-                      icon: const Icon(
-                        Icons.account_circle,
-                        color: Colors.black87,
-                      ),
-                      tooltip: 'Switch User Account',
-                      onPressed: _switchUserAccount,
-                    ),
-                    // Sign Out button
-                    IconButton(
-                      icon: const Icon(Icons.logout, color: Colors.black87),
-                      tooltip: 'Sign Out',
-                      onPressed: _signOut,
-                    ),
-                  ],
-
-                    if (musicService.isPlaying)
-                      IconButton(
-                        icon: const Icon(
-                          Icons.stop_circle,
-                          color: Colors.red,
+          // --- FLOATING STATUS TOAST ---
+          if (_statusMessage.isNotEmpty)
+            Positioned(
+              bottom: 72,
+              left: 16,
+              right: 72,
+              child: IgnorePointer(
+                child: AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 300),
+                  child: Container(
+                    key: ValueKey('toast_$_statusMessage'),
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: (_isListeningForQuestion
+                              ? Colors.orange.shade700
+                              : _isListeningForWakeWord
+                              ? Colors.green.shade700
+                              : Colors.blueGrey.shade700)
+                          .withValues(alpha: 0.92),
+                      borderRadius: BorderRadius.circular(8),
+                      boxShadow: [
+                        BoxShadow(
+                          color: Colors.black.withValues(alpha: 0.25),
+                          blurRadius: 8,
+                          offset: const Offset(0, 2),
                         ),
-                        tooltip: 'Stop Playing Music',
-                        onPressed: () {
-                          musicService.stopPlayback();
-                        },
-                      ),
-
-                  // Lock/Unlock Icon (moved to right side)
-                  IconButton(
-                    icon: Icon(
-                      _isAdminToolbarLocked ? Icons.lock : Icons.lock_open,
-                      color: Colors.black87,
+                      ],
                     ),
-                    tooltip: _isAdminToolbarLocked
-                        ? 'Unlock Admin Toolbar'
-                        : 'Lock Admin Toolbar',
-                    onPressed: _toggleAdminToolbarLock,
+                    child: Text(
+                      _statusMessage,
+                      style: const TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w500,
+                        color: Colors.white,
+                      ),
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
                   ),
-                ],
+                ),
+              ),
+            ),
+
+          // --- FLOATING ADMIN PANEL (when unlocked) ---
+          if (!_isAdminToolbarLocked)
+            Positioned(
+              bottom: 72,
+              right: 8,
+              child: Material(
+                elevation: 6,
+                borderRadius: BorderRadius.circular(12),
+                color: Colors.white.withValues(alpha: 0.97),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      IconButton(
+                        icon: const Icon(Icons.settings, color: Colors.black87),
+                        tooltip: 'Admin Settings',
+                        onPressed: () => _onAdminButtonPressed('/admin-settings'),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.touch_app, color: Colors.black87),
+                        tooltip: 'Tap Interface Admin',
+                        onPressed: () => _onAdminButtonPressed('/admin-tap-interface'),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.location_on, color: Colors.black87),
+                        tooltip: 'User Current Location',
+                        onPressed: () => _onAdminButtonPressed('/admin-user-current'),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.info_outline, color: Colors.black87),
+                        tooltip: 'User Info',
+                        onPressed: () => _onAdminButtonPressed('/admin-user-info'),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.book, color: Colors.black87),
+                        tooltip: 'User Diary',
+                        onPressed: () => _onAdminButtonPressed('/admin-user-diary'),
+                      ),
+                      Container(
+                        height: 28,
+                        width: 1,
+                        color: Colors.grey[300],
+                        margin: const EdgeInsets.symmetric(horizontal: 2),
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.account_circle, color: Colors.black87),
+                        tooltip: 'Switch User Account',
+                        onPressed: _switchUserAccount,
+                      ),
+                      IconButton(
+                        icon: const Icon(Icons.logout, color: Colors.black87),
+                        tooltip: 'Sign Out',
+                        onPressed: _signOut,
+                      ),
+                      if (musicService.isPlaying) ...[
+                        Container(
+                          height: 28,
+                          width: 1,
+                          color: Colors.grey[300],
+                          margin: const EdgeInsets.symmetric(horizontal: 2),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.stop_circle, color: Colors.red),
+                          tooltip: 'Stop Playing Music',
+                          onPressed: musicService.stopPlayback,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+            ),
+
+          // --- FLOATING LOCK BUTTON ---
+          Positioned(
+            bottom: 16,
+            right: 16,
+            child: Material(
+              elevation: 4,
+              borderRadius: BorderRadius.circular(24),
+              color: _isAdminToolbarLocked
+                  ? Colors.white.withValues(alpha: 0.85)
+                  : Colors.orange.shade50,
+              child: InkWell(
+                borderRadius: BorderRadius.circular(24),
+                onTap: _toggleAdminToolbarLock,
+                child: Padding(
+                  padding: const EdgeInsets.all(10),
+                  child: Icon(
+                    _isAdminToolbarLocked ? Icons.lock : Icons.lock_open,
+                    color: _isAdminToolbarLocked
+                        ? Colors.black54
+                        : Colors.orange.shade700,
+                    size: 20,
+                  ),
+                ),
               ),
             ),
           ),

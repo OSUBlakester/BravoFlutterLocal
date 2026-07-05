@@ -192,6 +192,7 @@ class PictogramService {
   // Current user context for future custom images feature
   String? _currentUserId;
   String? _currentIdToken;
+  String? _currentMascot;
   
   // Custom image batch preloading
   final List<CustomImage> _customImages = [];
@@ -252,7 +253,8 @@ class PictogramService {
   String _buildPrimaryCacheKey(String text, {String? locale}) {
     final normalized = _normalizeAsciiLookupKey(text);
     final isNonEnglish = locale != null && !locale.startsWith('en');
-    return isNonEnglish ? '${locale.toLowerCase()}:$normalized' : normalized;
+    final baseKey = isNonEnglish ? '${locale.toLowerCase()}:$normalized' : normalized;
+    return _currentMascot != null ? '$_currentMascot::$baseKey' : baseKey;
   }
 
   String _buildButtonSearchCooldownKey(String text, {String? locale}) {
@@ -287,9 +289,10 @@ class PictogramService {
     final isNonEnglish = locale != null && !locale.startsWith('en');
     final rawNormalized = _normalizeLookupKey(text);
     final asciiNormalized = _normalizeAsciiLookupKey(text);
+    final mascotPrefix = _currentMascot != null ? '$_currentMascot::' : '';
 
     if (!isNonEnglish) {
-      return [rawNormalized];
+      return ['$mascotPrefix$rawNormalized'];
     }
 
     final variants = <String>[];
@@ -301,8 +304,8 @@ class PictogramService {
       variants.add(key);
     }
 
-    addKey('${locale.toLowerCase()}:$asciiNormalized');
-    addKey('${locale.toLowerCase()}:$rawNormalized');
+    addKey('$mascotPrefix${locale.toLowerCase()}:$asciiNormalized');
+    addKey('$mascotPrefix${locale.toLowerCase()}:$rawNormalized');
     return variants;
   }
 
@@ -944,14 +947,32 @@ class PictogramService {
   }
   
   /// Set user context for custom images and clear caches if user changed
-  void setUserContext({required String userId, required String idToken}) {
+  void setUserContext({required String userId, required String idToken, String? mascot}) {
     final userChanged = _currentUserId != userId;
-    
+    final newMascot = (mascot != null && mascot.isNotEmpty) ? mascot : null;
+
+    // When no mascot is explicitly provided and the user hasn't changed, preserve
+    // the existing mascot. Button-level calls pass null/empty when settings haven't
+    // loaded yet — without this guard they would overwrite the correct mascot that
+    // was already set by the app-level call in app_loading_page.
+    final effectiveMascot = (newMascot != null || userChanged) ? newMascot : _currentMascot;
+    final mascotChanged = effectiveMascot != _currentMascot;
+
     _currentUserId = userId;
     _currentIdToken = idToken;
-    
-    debugPrint('🔧 PictogramService: Set user context - userId: $userId (global cache mode)');
-    
+    _currentMascot = effectiveMascot;
+
+    debugPrint('🔧 PictogramService: Set user context - userId: $userId mascot: $effectiveMascot');
+
+    // Clear image cache when mascot changes so mascot-preferred images are fetched fresh.
+    // Cache keys already include the mascot prefix, so this just evicts stale in-memory entries.
+    if (mascotChanged && !userChanged) {
+      debugPrint('🎭 PictogramService: Mascot changed to "$effectiveMascot", clearing image cache');
+      _imageCache.clear();
+      _customImageMatches.clear();
+      _inFlightImageLookups.clear();
+    }
+
     // Clear custom image cache when user changes to force fresh data
     if (userChanged) {
       debugPrint('🔄 PictogramService: User changed, clearing custom image cache for fresh data');
@@ -980,6 +1001,10 @@ class PictogramService {
       unawaited(preloadCustomImages(const <String>[]));
     }
   }
+
+  /// True when a mascot is active, meaning mascot-specific images should be
+  /// preferred over pre-assigned generic image URLs.
+  bool get hasMascot => _currentMascot != null && _currentMascot!.isNotEmpty;
 
   bool _isPersonalPronounLookup(String text, List<String>? keywords) {
     const pronouns = {
@@ -1204,6 +1229,9 @@ class PictogramService {
     if (keywords != null && keywords.isNotEmpty) {
       url += '&keywords=${Uri.encodeComponent(jsonEncode(keywords))}';
     }
+    if (_currentMascot != null) {
+      url += '&mascot=${Uri.encodeComponent(_currentMascot!)}';
+    }
 
     final headers = <String, String>{'Content-Type': 'application/json'};
     if (_currentIdToken != null) {
@@ -1214,7 +1242,7 @@ class PictogramService {
     }
 
     try {
-      debugPrint('🌐 PictogramService: button-search "$text" locale=$locale keywords=$keywords');
+      debugPrint('🌐 PictogramService: button-search "$text" locale=$locale keywords=$keywords mascot=$_currentMascot url=$url');
       final response = await http.get(Uri.parse(url), headers: headers)
           .timeout(const Duration(seconds: 5));
 
@@ -1231,6 +1259,14 @@ class PictogramService {
           final queryNorm = _normalizeLookupKey(text);
           String? bestSubconceptUrl;
           String? bestTagUrl;
+
+          // Three buckets for mascot-aware selection:
+          //   mascotMatch  — symbol.mascot == _currentMascot (best)
+          //   noMascot     — symbol.mascot is null/empty     (neutral fallback)
+          //   (wrong mascot symbols are skipped entirely)
+          // Without a mascot, use the original subconcept-preference logic.
+          String? mascotMatchUrl;
+          String? noMascotUrl;
 
           for (final raw in symbols) {
             if (raw is! Map) continue;
@@ -1258,7 +1294,28 @@ class PictogramService {
             final isMatch = allTerms.isEmpty ||
                 allTerms.any((t) => _areSingularPluralEquivalent(queryNorm, t));
 
-            if (isMatch) {
+            if (!isMatch) {
+              debugPrint(
+                '🌐 PictogramService: ⚠️ button-search rejected "${symbol['name']}" for "$text" — tags $symbolTags do not safely match',
+              );
+              continue;
+            }
+
+            if (_currentMascot != null) {
+              // Mascot-aware selection: bucket by mascot field, skip wrong mascots.
+              final symbolMascot = (symbol['mascot'] as String? ?? '').toLowerCase().trim();
+              if (symbolMascot == _currentMascot) {
+                mascotMatchUrl ??= symbolUrl;
+                debugPrint('🌐 PictogramService: ✅ mascot match "$_currentMascot" for "$text": $symbolUrl');
+              } else if (symbolMascot.isEmpty) {
+                noMascotUrl ??= symbolUrl;
+                debugPrint('🌐 PictogramService: 📎 no-mascot fallback for "$text": $symbolUrl');
+              } else {
+                debugPrint('🌐 PictogramService: ⛔ wrong mascot "$symbolMascot" skipped for "$text"');
+              }
+              // Stop as soon as we have an exact mascot match.
+              if (mascotMatchUrl != null) break;
+            } else {
               final subconceptIsBest =
                   symbolSubconcept.isNotEmpty &&
                   _areSingularPluralEquivalent(queryNorm, symbolSubconcept);
@@ -1277,11 +1334,12 @@ class PictogramService {
                   '🌐 PictogramService: ✅ button-search fallback tag match for "$text": $symbolUrl',
                 );
               }
-            } else {
-              debugPrint(
-                '🌐 PictogramService: ⚠️ button-search rejected "${symbol['name']}" for "$text" — tags $symbolTags do not safely match',
-              );
             }
+          }
+
+          // For mascot mode, prefer exact mascot match, then no-mascot generic.
+          if (_currentMascot != null) {
+            bestSubconceptUrl = mascotMatchUrl ?? noMascotUrl;
           }
 
           if (bestSubconceptUrl != null && bestSubconceptUrl.isNotEmpty) {
@@ -1399,18 +1457,23 @@ class PictogramService {
         unawaited(preloadCustomImages(const <String>[]));
       }
 
-      // PRIORITY 1.5: Check local library index cache (instant lookup)
-      if (!_libraryLoaded) {
-        await _initLocalLibrary();
-      }
-      final localLibraryUrl = _searchLocalLibraryIndex(text, keywords: keywords);
-      if (localLibraryUrl != null && localLibraryUrl.isNotEmpty) {
-        debugPrint('📚 PictogramService: Found local library match for "$text": $localLibraryUrl');
-        for (final key in cacheKeyVariants) {
-          _imageCache[key] = localLibraryUrl;
+      // PRIORITY 1.5: Check local library index cache (instant lookup).
+      // Skip when mascot is active — the local library index has no mascot field,
+      // so it returns whichever image was indexed first (which may be the wrong
+      // mascot). Defer to button-search which does proper mascot-aware selection.
+      if (_currentMascot == null) {
+        if (!_libraryLoaded) {
+          await _initLocalLibrary();
         }
-        await _saveCacheToPrefs();
-        return localLibraryUrl;
+        final localLibraryUrl = _searchLocalLibraryIndex(text, keywords: keywords);
+        if (localLibraryUrl != null && localLibraryUrl.isNotEmpty) {
+          debugPrint('📚 PictogramService: Found local library match for "$text": $localLibraryUrl');
+          for (final key in cacheKeyVariants) {
+            _imageCache[key] = localLibraryUrl;
+          }
+          await _saveCacheToPrefs();
+          return localLibraryUrl;
+        }
       }
 
       // Cache-only mode for first paint: avoid network-driven phased rendering.
@@ -1766,14 +1829,11 @@ class PictogramService {
     final unresolvedWords = <String>[];
 
     for (final word in uniqueWords) {
-      final normalized = _normalizeLookupKey(word);
-      final cacheKey = isNonEnglish
-          ? '${locale.toLowerCase()}:$normalized'
-          : normalized;
       final cacheKeyVariants = _buildCacheKeyVariants(word, locale: locale);
 
-      // Check in-memory cache first
-      if (_imageCache.containsKey(cacheKey) && _imageCache[cacheKey] != null) {
+      // Check in-memory cache first (use mascot-prefixed primary key when mascot is active)
+      final prefetchCheckKey = _buildPrimaryCacheKey(word, locale: locale);
+      if (_imageCache.containsKey(prefetchCheckKey) && _imageCache[prefetchCheckKey] != null) {
         continue;
       }
 
@@ -1805,13 +1865,17 @@ class PictogramService {
       }
       if (foundCustom) continue;
 
-      // PRIORITY 2: Check local library index lookup
-      final localUrl = _searchLocalLibraryIndex(word, keywords: keywordMap[word]);
-      if (localUrl != null && localUrl.isNotEmpty) {
-        for (final key in cacheKeyVariants) {
-          _imageCache[key] = localUrl;
+      // PRIORITY 2: Check local library index lookup.
+      // Skip when mascot is active — local library has no mascot metadata, so it
+      // may return a wrong-mascot image. Button-search handles mascot selection.
+      if (_currentMascot == null) {
+        final localUrl = _searchLocalLibraryIndex(word, keywords: keywordMap[word]);
+        if (localUrl != null && localUrl.isNotEmpty) {
+          for (final key in cacheKeyVariants) {
+            _imageCache[key] = localUrl;
+          }
+          continue;
         }
-        continue;
       }
 
       // If we couldn't resolve locally, add to list for remote batch search

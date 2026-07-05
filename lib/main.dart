@@ -5215,9 +5215,48 @@ The "keywords" key should contain 3-5 simple, concrete English words that match 
   final Map<String, DateTime> _llmPrefetchHistory = {};
   final Map<String, String> _translationCache = {};
   Timer? _llmPrefetchTimer;
+  Timer? _llmWatchdogTimer; // Safety net: resets stuck LLM state after timeout
   static const int _llmPrefetchMaxButtonsPerPage = 2;
   static const Duration _llmPrefetchDelay = Duration(milliseconds: 300);
   static const Duration _llmPrefetchHistoryTtl = Duration(minutes: 3);
+
+  // Watchdog fires if LLM processing has not completed after this long.
+  // With 2 retries × 30 s each, 75 s is generous but still bounded.
+  static const Duration _llmWatchdogTimeout = Duration(seconds: 75);
+
+  void _startLlmWatchdog() {
+    _llmWatchdogTimer?.cancel();
+    _llmWatchdogTimer = Timer(_llmWatchdogTimeout, () {
+      if (!mounted) return;
+      debugPrint(
+        '⚠️ LLM watchdog fired — LLM processing did not complete within '
+        '${_llmWatchdogTimeout.inSeconds}s. Resetting state and restarting scanning.',
+      );
+      // Force-clear every flag that blocks scanning / input.
+      _isProcessingLLM = false;
+      _isHandlingButtonActionFlow = false;
+      _llmRetryCount = 0;
+      _lastLLMQuery = null;
+      _lastLLMButtonData = null;
+      setState(() {
+        isLoading = false;
+        _showBottomStatusText = true;
+        statusMessage = '⚠️ AI request timed out — scanning restarted';
+      });
+      // Brief auto-clear of the error message.
+      Future.delayed(const Duration(seconds: 4), () {
+        if (mounted) setState(() => statusMessage = '');
+      });
+      _suppressScanning = false;
+      _maybeStartScanning();
+      unawaited(_forceRestartWakeWordService());
+    });
+  }
+
+  void _cancelLlmWatchdog() {
+    _llmWatchdogTimer?.cancel();
+    _llmWatchdogTimer = null;
+  }
 
   String _getUserLanguageInstruction() {
     final locale = mounted
@@ -9356,6 +9395,7 @@ Example: [{"option": "I need a break", "summary": "Need a break", "keywords": ["
         return;
       }
       _isProcessingLLM = true;
+      _startLlmWatchdog();
 
       // Always store both previous grid and page before showing LLM options
       previousPageName = currentPageName;
@@ -9685,9 +9725,20 @@ Example: [{"option": "I need a break", "summary": "Need a break", "keywords": ["
               });
             }
           } else {
-            setState(() {
-              statusMessage =
-                  'No options returned. LLM raw: ' + response.body.toString();
+            // LLM returned 200 but no usable options — treat like an error and
+            // restart scanning so the interface doesn't stay frozen.
+            debugPrint(
+              '🚨 LLM: 200 response but normalizedOptions is empty. Raw: ${response.body}',
+            );
+            _updateStatusMessageWithAutoReset(
+              '❌ AI returned no options — scanning restarted',
+              resetAfter: const Duration(seconds: 3),
+            );
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              if (!mounted) return;
+              _suppressScanning = false;
+              _maybeStartScanning();
+              unawaited(_forceRestartWakeWordService());
             });
           }
         } else {
@@ -9877,6 +9928,7 @@ Example: [{"option": "I need a break", "summary": "Need a break", "keywords": ["
           }
         });
       } finally {
+        _cancelLlmWatchdog();
         setState(() {
           isLoading = false;
           _isProcessingLLM = false;
@@ -13267,6 +13319,10 @@ Example: [{"option": "I need a break", "summary": "Need a break", "keywords": ["
           defaultPartnerLanguage: currentSettings.defaultPartnerLanguage,
           defaultPartnerVoice: currentSettings.defaultPartnerVoice,
           locationOverrideLanguages: currentSettings.locationOverrideLanguages,
+          tapWordsRows: currentSettings.tapWordsRows,
+          tapPhrasesRows: currentSettings.tapPhrasesRows,
+          tapDynamicRows: currentSettings.tapDynamicRows,
+          mascot: currentSettings.mascot,
         );
 
         // Save the settings

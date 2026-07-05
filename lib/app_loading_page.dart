@@ -101,6 +101,7 @@ class _AppLoadingPageState extends State<AppLoadingPage>
       PictogramService().setUserContext(
         userId: widget.aacUserId,
         idToken: widget.idToken,
+        mascot: userSettings.settings?.mascot,
       );
       
       // Step 2: Initialize pictogram cache (global shared library)
@@ -184,6 +185,7 @@ class _AppLoadingPageState extends State<AppLoadingPage>
       pictogramService.setUserContext(
         userId: widget.aacUserId,
         idToken: widget.idToken,
+        mascot: userSettings.settings?.mascot,
       );
       pictogramService.enablePictograms = true;
 

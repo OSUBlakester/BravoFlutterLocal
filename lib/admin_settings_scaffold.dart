@@ -22,6 +22,12 @@ class AdminSettingsPage extends StatefulWidget {
 class _AdminSettingsPageState extends State<AdminSettingsPage> {
   bool _isInitialized = false;
 
+  // Local preference: boards panel position ('left' | 'top' | 'right' | 'bottom')
+  String _menuPosition = 'left';
+
+  // Local preference: minimum tap hold duration in ms (0 = instant)
+  int _tapMinDurationMs = 0;
+
   // Controllers for editable fields
   final TextEditingController _toolbarPinController = TextEditingController();
 
@@ -75,7 +81,17 @@ class _AdminSettingsPageState extends State<AdminSettingsPage> {
     
     // Configure soft input mode for admin page (but don't show keyboard yet)
     _configureSoftInputModeForAdmin();
-    
+
+    // Load locally-stored preferences.
+    SharedPreferences.getInstance().then((prefs) {
+      if (mounted) {
+        setState(() {
+          _menuPosition = prefs.getString('tap_menu_position') ?? 'left';
+          _tapMinDurationMs = prefs.getInt('tap_min_duration_ms') ?? 0;
+        });
+      }
+    });
+
     // Use addPostFrameCallback to avoid setState() during build
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initializeProvider();
@@ -1682,7 +1698,172 @@ class _AdminSettingsPageState extends State<AdminSettingsPage> {
                         ),
                         const SizedBox(height: 20),
 
+                        // Menu Bar Location
+                        const Text(
+                          'Menu Bar Location:',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.black87,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            for (final pos in ['left', 'top', 'right', 'bottom'])
+                              Expanded(
+                                child: Padding(
+                                  padding: const EdgeInsets.only(right: 6),
+                                  child: GestureDetector(
+                                    onTap: () async {
+                                      setState(() => _menuPosition = pos);
+                                      final prefs = await SharedPreferences.getInstance();
+                                      await prefs.setString('tap_menu_position', pos);
+                                    },
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(vertical: 10),
+                                      decoration: BoxDecoration(
+                                        color: _menuPosition == pos
+                                            ? Colors.orange.shade100
+                                            : Colors.grey.shade100,
+                                        border: Border.all(
+                                          color: _menuPosition == pos
+                                              ? Colors.orange.shade400
+                                              : Colors.grey.shade300,
+                                          width: _menuPosition == pos ? 2 : 1,
+                                        ),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(
+                                            pos == 'left'   ? Icons.border_left
+                                            : pos == 'top'  ? Icons.border_top
+                                            : pos == 'right'? Icons.border_right
+                                                            : Icons.border_bottom,
+                                            size: 24,
+                                            color: _menuPosition == pos
+                                                ? Colors.orange.shade700
+                                                : Colors.grey.shade600,
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            '${pos[0].toUpperCase()}${pos.substring(1)}',
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: _menuPosition == pos
+                                                  ? FontWeight.bold
+                                                  : FontWeight.normal,
+                                              color: _menuPosition == pos
+                                                  ? Colors.orange.shade700
+                                                  : Colors.grey.shade600,
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        const Text(
+                          'Choose which edge of the screen the Boards panel appears on.',
+                          style: TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
+                        const SizedBox(height: 20),
 
+                        // Tap Sensitivity
+                        const Text(
+                          'Tap Sensitivity:',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w500,
+                            color: Colors.black87,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            for (final option in [
+                              (ms: 0,   label: 'Normal',  icon: Icons.touch_app),
+                              (ms: 100, label: 'Low',     icon: Icons.pan_tool_alt),
+                              (ms: 200, label: 'Medium',  icon: Icons.back_hand),
+                              (ms: 300, label: 'High',    icon: Icons.front_hand),
+                            ])
+                              Expanded(
+                                child: Padding(
+                                  padding: const EdgeInsets.only(right: 6),
+                                  child: GestureDetector(
+                                    onTap: () async {
+                                      setState(() => _tapMinDurationMs = option.ms);
+                                      final prefs = await SharedPreferences.getInstance();
+                                      await prefs.setInt('tap_min_duration_ms', option.ms);
+                                      debugPrint('[TapSensitivity] Saved tap_min_duration_ms=${option.ms} to SharedPreferences');
+                                    },
+                                    child: Container(
+                                      padding: const EdgeInsets.symmetric(vertical: 10),
+                                      decoration: BoxDecoration(
+                                        color: _tapMinDurationMs == option.ms
+                                            ? Colors.orange.shade100
+                                            : Colors.grey.shade100,
+                                        border: Border.all(
+                                          color: _tapMinDurationMs == option.ms
+                                              ? Colors.orange.shade400
+                                              : Colors.grey.shade300,
+                                          width: _tapMinDurationMs == option.ms ? 2 : 1,
+                                        ),
+                                        borderRadius: BorderRadius.circular(8),
+                                      ),
+                                      child: Column(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Icon(
+                                            option.icon,
+                                            size: 24,
+                                            color: _tapMinDurationMs == option.ms
+                                                ? Colors.orange.shade700
+                                                : Colors.grey.shade600,
+                                          ),
+                                          const SizedBox(height: 4),
+                                          Text(
+                                            option.label,
+                                            style: TextStyle(
+                                              fontSize: 11,
+                                              fontWeight: _tapMinDurationMs == option.ms
+                                                  ? FontWeight.bold
+                                                  : FontWeight.normal,
+                                              color: _tapMinDurationMs == option.ms
+                                                  ? Colors.orange.shade700
+                                                  : Colors.grey.shade600,
+                                            ),
+                                          ),
+                                          if (option.ms > 0)
+                                            Text(
+                                              '${option.ms}ms',
+                                              style: TextStyle(
+                                                fontSize: 10,
+                                                color: _tapMinDurationMs == option.ms
+                                                    ? Colors.orange.shade500
+                                                    : Colors.grey.shade400,
+                                              ),
+                                            ),
+                                        ],
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                        const SizedBox(height: 6),
+                        const Text(
+                          'Require a longer press to register a tap, reducing accidental activations.',
+                          style: TextStyle(fontSize: 12, color: Colors.grey),
+                        ),
+                        const SizedBox(height: 20),
 
                         // Color Settings
                         Row(

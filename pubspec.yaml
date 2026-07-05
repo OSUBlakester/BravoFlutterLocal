@@ -52,6 +52,7 @@ flutter_launcher_icons:
 flutter:
   uses-material-design: true
   assets:
+    - assets/tap_sound.mp3
     - assets/notification.mp3
     - assets/notification_v2.mp3
     - assets/test.mp3

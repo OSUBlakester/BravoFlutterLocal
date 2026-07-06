@@ -1371,11 +1371,82 @@ class _AuthPageState extends State<AuthPage> {
     );
   }
 
+  /// Returns true if the device can reach the internet.
+  /// Uses a raw socket connect to 8.8.8.8:53 (Google DNS) — cannot use
+  /// a cached DNS result, so it reliably detects wifi-off state.
+  Future<bool> _hasInternetConnection() async {
+    try {
+      final socket = await Socket.connect('8.8.8.8', 53,
+          timeout: const Duration(seconds: 3));
+      socket.destroy();
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
   Future<void> handleLogin() async {
     setState(() {
       isLoading = true;
       error = '';
     });
+
+    // Fast offline check — runs before Firebase to avoid 30-second retry wait.
+    final online = await _hasInternetConnection();
+    print('🔐 Network check: online=$online');
+    if (!online && mounted) {
+      setState(() { isLoading = false; });
+      final cached = await OfflineCacheService.loadProfile();
+      if (cached != null) {
+        bool continueOffline = false;
+        await showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            title: const Text('No Network Connection'),
+            content: Text(
+              'Cannot reach the login server. Continue offline using the last-used profile: ${cached.displayName}?\n\nSome features will be unavailable.',
+            ),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(ctx);
+                  SystemNavigator.pop();
+                },
+                child: const Text('Exit'),
+              ),
+              ElevatedButton(
+                onPressed: () {
+                  continueOffline = true;
+                  Navigator.pop(ctx);
+                },
+                child: const Text('Continue Offline'),
+              ),
+            ],
+          ),
+        );
+        if (continueOffline && mounted) {
+          Provider.of<OfflineModeProvider>(context, listen: false).setOffline(true);
+          final cachedIdToken =
+              await FirebaseAuth.instance.currentUser?.getIdToken(false) ?? '';
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (_) => AppLoadingPage(
+                idToken: cachedIdToken,
+                aacUserId: cached.userId,
+                displayName: cached.displayName,
+                useTapInterface: true,
+              ),
+            ),
+          );
+        }
+        return;
+      }
+      setState(() {
+        error = 'No network connection. Please connect to the internet and try again.';
+      });
+      return;
+    }
 
     // COMPREHENSIVE ERROR LOGGING AND USER FEEDBACK
     print('🔐🔐🔐 LOGIN ATTEMPT STARTED 🔐🔐🔐');

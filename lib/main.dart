@@ -47,6 +47,7 @@ import 'spelling_scan_page.dart';
 import 'numbers_scan_page.dart';
 import 'services/offline_cache_service.dart';
 import 'services/offline_mode_provider.dart';
+import 'services/music_playback_service.dart';
 
 bool hasPlayedInitialWaitForSwitchVoicePrompt = false;
 
@@ -2079,6 +2080,9 @@ class MyApp extends StatelessWidget {
         ),
         ChangeNotifierProvider<OfflineModeProvider>(
           create: (_) => OfflineModeProvider(),
+        ),
+        ChangeNotifierProvider<MusicPlaybackService>(
+          create: (_) => MusicPlaybackService(),
         ),
       ],
       child: MaterialApp(

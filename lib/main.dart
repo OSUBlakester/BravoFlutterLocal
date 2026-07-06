@@ -1433,6 +1433,73 @@ class _AuthPageState extends State<AuthPage> {
         print('🔐 ✅ Firebase authentication successful');
       } catch (authError) {
         print('🔐 ❌ Firebase authentication FAILED: $authError');
+
+        // Check if this is a network error — offer offline mode if a cached profile exists
+        final authErrStr = authError.toString().toLowerCase();
+        final isAuthNetworkError = authError is SocketException ||
+            authError is TimeoutException ||
+            authErrStr.contains('network') ||
+            authErrStr.contains('socketexception') ||
+            authErrStr.contains('timeout') ||
+            authErrStr.contains('failed host lookup') ||
+            authErrStr.contains('connection') ||
+            authErrStr.contains('unreachable');
+
+        if (isAuthNetworkError && mounted) {
+          setState(() { isLoading = false; });
+          final cached = await OfflineCacheService.loadProfile();
+          if (cached != null) {
+            bool continueOffline = false;
+            await showDialog(
+              context: context,
+              barrierDismissible: false,
+              builder: (ctx) => AlertDialog(
+                title: const Text('No Network Connection'),
+                content: Text(
+                  'Cannot reach the login server. Continue offline using the last-used profile: ${cached.displayName}?\n\nSome features will be unavailable.',
+                ),
+                actions: [
+                  TextButton(
+                    onPressed: () {
+                      Navigator.pop(ctx);
+                      SystemNavigator.pop();
+                    },
+                    child: const Text('Exit'),
+                  ),
+                  ElevatedButton(
+                    onPressed: () {
+                      continueOffline = true;
+                      Navigator.pop(ctx);
+                    },
+                    child: const Text('Continue Offline'),
+                  ),
+                ],
+              ),
+            );
+            if (continueOffline && mounted) {
+              final offlineProvider = Provider.of<OfflineModeProvider>(context, listen: false);
+              offlineProvider.setOffline(true);
+              final cachedIdToken = await FirebaseAuth.instance.currentUser?.getIdToken(false) ?? '';
+              Navigator.of(context).pushReplacement(
+                MaterialPageRoute(
+                  builder: (_) => AppLoadingPage(
+                    idToken: cachedIdToken,
+                    aacUserId: cached.userId,
+                    displayName: cached.displayName,
+                    useTapInterface: true,
+                  ),
+                ),
+              );
+            }
+            return;
+          }
+          // No cached profile — fall through to show auth error
+          setState(() {
+            error = 'No network connection. Please connect to the internet and try again.';
+          });
+          return;
+        }
+
         setState(() {
           error = 'LOGIN FAILED: ${authError.toString()}';
           isLoading = false;

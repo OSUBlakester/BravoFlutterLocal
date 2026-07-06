@@ -1410,6 +1410,74 @@ class _AuthPageState extends State<AuthPage> {
         );
       }
 
+      // --- STEP 1.5: Fast network check before Firebase auth ---
+      // Avoids waiting 30+ seconds for Firebase retry loop to exhaust.
+      print('🔐 STEP 1.5: Quick network connectivity check...');
+      bool hasNetwork = true;
+      try {
+        final result = await InternetAddress.lookup('firebase.google.com')
+            .timeout(const Duration(seconds: 3));
+        hasNetwork = result.isNotEmpty && result[0].rawAddress.isNotEmpty;
+      } catch (_) {
+        hasNetwork = false;
+      }
+      print('🔐 Network available: $hasNetwork');
+
+      if (!hasNetwork && mounted) {
+        setState(() { isLoading = false; });
+        final cached = await OfflineCacheService.loadProfile();
+        if (cached != null) {
+          bool continueOffline = false;
+          await showDialog(
+            context: context,
+            barrierDismissible: false,
+            builder: (ctx) => AlertDialog(
+              title: const Text('No Network Connection'),
+              content: Text(
+                'Cannot reach the login server. Continue offline using the last-used profile: ${cached.displayName}?\n\nSome features will be unavailable.',
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    SystemNavigator.pop();
+                  },
+                  child: const Text('Exit'),
+                ),
+                ElevatedButton(
+                  onPressed: () {
+                    continueOffline = true;
+                    Navigator.pop(ctx);
+                  },
+                  child: const Text('Continue Offline'),
+                ),
+              ],
+            ),
+          );
+          if (continueOffline && mounted) {
+            final offlineProvider = Provider.of<OfflineModeProvider>(context, listen: false);
+            offlineProvider.setOffline(true);
+            final cachedIdToken = await FirebaseAuth.instance.currentUser?.getIdToken(false) ?? '';
+            Navigator.of(context).pushReplacement(
+              MaterialPageRoute(
+                builder: (_) => AppLoadingPage(
+                  idToken: cachedIdToken,
+                  aacUserId: cached.userId,
+                  displayName: cached.displayName,
+                  useTapInterface: true,
+                ),
+              ),
+            );
+          }
+          return;
+        }
+        // No cached profile
+        setState(() {
+          error = 'No network connection. Please connect to the internet and try again.';
+        });
+        return;
+      }
+
       print('🔐 STEP 2: Attempting Firebase Auth login...');
       print('🔐 Email for authentication: "${emailController.text.trim()}"');
 

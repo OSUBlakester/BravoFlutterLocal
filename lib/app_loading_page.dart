@@ -1,8 +1,11 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'services/tap_interface_service.dart';
 import 'services/user_settings_provider.dart';
 import 'services/pictogram_service.dart';
+import 'services/offline_cache_service.dart';
+import 'services/offline_mode_provider.dart';
 import 'mood_selection_page.dart';
 import 'tap_interface_page.dart';
 
@@ -30,15 +33,13 @@ class _AppLoadingPageState extends State<AppLoadingPage>
   double _progress = 0.0;
   bool _hasError = false;
   String _errorMessage = '';
-  String _cacheStatsText = '';
 
   // Animation controller for the spinning speech bubble
   late AnimationController _animationController;
   late Animation<double> _rotationAnimation;
 
   // Preloaded data for tap interface (if needed)
-  TapInterfaceConfig? _tapConfig;
-  TapBoardsResponse? _tapBoardsResponse;
+  dynamic _tapConfig;
   List<String> _wordOptions = [];
   List<Map<String, String>> _phraseOptions = [];
 
@@ -75,88 +76,153 @@ class _AppLoadingPageState extends State<AppLoadingPage>
   Future<void> _loadAllAppData() async {
     try {
       final userSettings = Provider.of<UserSettingsProvider>(context, listen: false);
-      
+      final offlineModeProvider = Provider.of<OfflineModeProvider>(context, listen: false);
+      final isOffline = offlineModeProvider.isOffline;
+
+      // -----------------------------------------------------------------------
+      // OFFLINE PATH
+      // -----------------------------------------------------------------------
+      if (isOffline) {
+        setState(() {
+          _currentTask = 'Loading cached profile data...';
+          _progress = 0.2;
+        });
+
+        // Load settings from cache
+        final settingsJson = await OfflineCacheService.loadUserSettingsJson();
+        if (settingsJson != null) {
+          try {
+            final decoded = jsonDecode(settingsJson) as Map<String, dynamic>;
+            userSettings.settings = UserSettings.fromJson(decoded);
+          } catch (e) {
+            debugPrint('AppLoadingPage: Failed to parse cached settings: $e');
+          }
+        }
+
+        setState(() {
+          _currentTask = 'Loading cached interface...';
+          _progress = 0.5;
+        });
+
+        // Load tap config from cache
+        final tapConfigJson = await OfflineCacheService.loadTapConfigJson();
+        if (tapConfigJson != null) {
+          try {
+            final decoded = jsonDecode(tapConfigJson) as Map<String, dynamic>;
+            _tapConfig = TapInterfaceConfig.fromJson(decoded);
+          } catch (e) {
+            debugPrint('AppLoadingPage: Failed to parse cached tap config: $e');
+          }
+        }
+
+        setState(() {
+          _currentTask = 'Ready!';
+          _progress = 1.0;
+        });
+
+        await Future.delayed(const Duration(milliseconds: 500));
+
+        if (mounted) {
+          Navigator.of(context).pushReplacement(
+            MaterialPageRoute(
+              builder: (_) => TapInterfacePage(
+                idToken: widget.idToken,
+                aacUserId: widget.aacUserId,
+                displayName: widget.displayName,
+                preloadedConfig: _tapConfig,
+                preloadedWordOptions: const [],
+                preloadedPhraseOptions: const [],
+                isOfflineMode: true,
+              ),
+            ),
+          );
+        }
+        return;
+      }
+
+      // -----------------------------------------------------------------------
+      // ONLINE PATH (unchanged)
+      // -----------------------------------------------------------------------
+
       // Step 1: CRITICAL - Update UserSettingsProvider with correct profile information
       setState(() {
         _currentTask = 'Preparing user profile...';
         _progress = 0.05;
       });
-      
+
       // CRITICAL FIX: Update the provider with the selected profile's information
       print('🔧 AppLoadingPage: Current provider userId: ${userSettings.userId}');
       print('🔧 AppLoadingPage: Widget aacUserId: ${widget.aacUserId}');
       print('🔧 AppLoadingPage: Setting provider userId to: ${widget.aacUserId}');
-      
+
       userSettings.idToken = widget.idToken;
       userSettings.userId = widget.aacUserId;
-      
+
       print('🔧 AppLoadingPage: Provider userId after update: ${userSettings.userId}');
-      
+
       // Ensure settings are loaded with the correct profile
       await userSettings.fetchSettings();
-      
+
       print('🔧 AppLoadingPage: Settings fetched for profile: ${userSettings.userId}');
-      
+
       // Set user context in PictogramService for debugging
       PictogramService().setUserContext(
         userId: widget.aacUserId,
         idToken: widget.idToken,
         mascot: userSettings.settings?.mascot,
       );
-      
+
       // Step 2: Initialize pictogram cache (global shared library)
       setState(() {
         _currentTask = 'Loading image cache...';
         _progress = 0.1;
       });
-      
+
       await PictogramService().loadCacheFromPrefs();
-      
-      // Step 2: Prepare image preload phase
+
+      // Step 2: Preload common images for mood selection and interface
       setState(() {
         _currentTask = 'Preloading interface images...';
         _progress = 0.3;
       });
 
+      // SKIP image preloading during splash screen to prevent unwanted API calls and missing_images logging
+      // Images will be loaded naturally/lazily when the user navigates to different pages
+      // This prevents the "preload logging bug" where image searches during splash trigger false missing_images entries
       setState(() {
         _currentTask = 'Finalizing initialization...';
         _progress = 0.68;
       });
-      
+
       // Brief delay to allow UI to update
       await Future.delayed(const Duration(milliseconds: 100));
-      
-      debugPrint('🚀 Running profile image warmup during splash...');
-      
-      // Step 3: Prepare tap data and warm profile image cache for ALL flows.
-      // This ensures mood-selection flow still warms Tap images before user enters Tap page.
-      setState(() {
-        _currentTask = 'Preparing communication interface...';
-        _progress = 0.7;
-      });
 
-      final tapService = TapInterfaceService(userSettingsProvider: userSettings);
+      debugPrint('⏭️ Skipping image preload during splash screen (images will load on demand)');
 
-      // Always fetch config/boards so warmup has deterministic source data.
-      _tapConfig = await tapService.fetchTapInterfaceConfig();
-      _tapBoardsResponse = await tapService.fetchTapBoards();
-
+      // Step 3: Load tap interface data if needed
       if (widget.useTapInterface) {
-        // Load initial options used by Tap first render only when launching Tap directly.
-        final currentMood =
-            userSettings.settings?.currentMood ?? 'No Mood Selected';
+        setState(() {
+          _currentTask = 'Preparing communication interface...';
+          _progress = 0.7;
+        });
+
+        final tapService = TapInterfaceService(userSettingsProvider: userSettings);
+
+        // Load config
+        _tapConfig = await tapService.fetchTapInterfaceConfig();
+
+        // Load initial options based on current mood
+        final currentMood = userSettings.settings?.currentMood ?? 'No Mood Selected';
 
         String wordContext = 'general communication topics';
-        String phraseContext =
-            'general conversation starters and common phrases';
+        String phraseContext = 'general conversation starters and common phrases';
 
         if (currentMood != 'No Mood Selected' && currentMood.isNotEmpty) {
-          wordContext =
-              'general communication topics appropriate for someone feeling $currentMood';
-          phraseContext =
-              'general conversation starters and common phrases appropriate for someone feeling $currentMood';
+          wordContext = 'general communication topics appropriate for someone feeling $currentMood';
+          phraseContext = 'general conversation starters and common phrases appropriate for someone feeling $currentMood';
         }
 
+        // Load word and phrase options in parallel
         final futures = await Future.wait([
           tapService.generateFreestyleOptions(
             context: wordContext,
@@ -174,76 +240,26 @@ class _AppLoadingPageState extends State<AppLoadingPage>
         _phraseOptions = futures[1] as List<Map<String, String>>;
       }
 
-      setState(() {
-        _currentTask = 'Caching images for this profile...';
-        _progress = 0.82;
-        _cacheStatsText = 'Starting cache warmup...';
-      });
-
-      final assignedImageUrls = _collectTapAssignedImageUrls();
-      final pictogramService = PictogramService();
-      pictogramService.setUserContext(
-        userId: widget.aacUserId,
-        idToken: widget.idToken,
-        mascot: userSettings.settings?.mascot,
-      );
-      pictogramService.enablePictograms = true;
-
-      final warmupStopwatch = Stopwatch()..start();
-
-      // Safe mode: warm files from known URLs only.
-      // Avoid running term-based matching at login, which can degrade quality
-      // by caching weak/incorrect term matches before user-visible lookup.
-      final existingCachedWarmedCount = await pictogramService
-          .warmDiskCacheForExistingCachedUrls(
-            maxItems: 500,
-            maxConcurrent: 10,
-          )
-          .timeout(const Duration(seconds: 20), onTimeout: () {
-            debugPrint(
-              '⏱️ AppLoadingPage: existing-cache disk warmup timed out; continuing startup',
-            );
-            return 0;
-          });
-
-      final assignedWarmedCount = await pictogramService
-          .warmDiskCacheForImageUrls(
-            imageUrls: assignedImageUrls,
-            maxItems: 350,
-            maxConcurrent: 10,
-          )
-          .timeout(const Duration(seconds: 20), onTimeout: () {
-            debugPrint(
-              '⏱️ AppLoadingPage: assigned-image disk warmup timed out; continuing startup',
-            );
-            return 0;
-          });
-
-      final elapsedMs = warmupStopwatch.elapsedMilliseconds;
-      final stats =
-          'knownCacheWarmed=$existingCachedWarmedCount, assignedUrls=${assignedImageUrls.length}, assignedWarmed=$assignedWarmedCount, elapsed=${(elapsedMs / 1000).toStringAsFixed(1)}s';
-      setState(() {
-        _cacheStatsText = stats;
-      });
-      debugPrint('✅ AppLoadingPage cache warmup complete: $stats');
-      
       // Step 4: Final preparation and verification
       setState(() {
         _currentTask = 'Preparing interface...';
         _progress = 0.9;
       });
-      
+
+      // Persist data for offline use (best-effort, non-blocking)
+      _saveOfflineCache(userSettings);
+
       // Longer delay to ensure all async operations complete
       await Future.delayed(const Duration(milliseconds: 1000));
-      
+
       setState(() {
         _currentTask = 'Ready!';
         _progress = 1.0;
       });
-      
+
       // Show completion state longer so user sees 100%
       await Future.delayed(const Duration(milliseconds: 800));
-      
+
       if (mounted) {
         // Navigate to appropriate page based on interface type
         if (widget.useTapInterface) {
@@ -273,7 +289,7 @@ class _AppLoadingPageState extends State<AppLoadingPage>
           );
         }
       }
-      
+
     } catch (e) {
       setState(() {
         _hasError = true;
@@ -283,7 +299,24 @@ class _AppLoadingPageState extends State<AppLoadingPage>
     }
   }
 
-  List<String> _collectTapAssignedImageUrls() {
+  /// Saves current loaded data to offline cache (best-effort, non-blocking).
+  void _saveOfflineCache(UserSettingsProvider userSettings) {
+    final audioUrls = _collectTapAudioUrls();
+    OfflineCacheService.saveAll(
+      userId: widget.aacUserId,
+      displayName: widget.displayName,
+      settingsJson: jsonEncode(userSettings.settings?.toJson() ?? {}),
+      tapConfigJson: jsonEncode(_tapConfig?.toJson() ?? {}),
+      tapBoardsJson: '{}', // tap boards not fetched in this version
+      audioUrls: audioUrls,
+      idToken: widget.idToken,
+    ).catchError((e) {
+      debugPrint('AppLoadingPage: Offline cache save failed: $e');
+    });
+  }
+
+  /// Collects all custom audio file URLs from the tap config.
+  List<String> _collectTapAudioUrls() {
     final urls = <String>[];
     final seen = <String>{};
 
@@ -297,11 +330,7 @@ class _AppLoadingPageState extends State<AppLoadingPage>
 
     void collectCategoryUrls(TapInterfaceCategory category) {
       if (category.hidden) return;
-      addUrl(category.imageUrl);
-      for (final boardWord in category.boardWordOptions) {
-        if (boardWord.hidden) continue;
-        addUrl(boardWord.imageUrl);
-      }
+      addUrl(category.customAudioFile);
       for (final child in category.children) {
         collectCategoryUrls(child);
       }
@@ -309,14 +338,6 @@ class _AppLoadingPageState extends State<AppLoadingPage>
 
     for (final category in _tapConfig?.buttons ?? const <TapInterfaceCategory>[]) {
       collectCategoryUrls(category);
-    }
-
-    for (final board in _tapBoardsResponse?.boards ?? const <TapBoard>[]) {
-      addUrl(board.imageUrl);
-      for (final button in board.buttons) {
-        if (button.hidden) continue;
-        addUrl(button.imageUrl);
-      }
     }
 
     return urls;
@@ -403,21 +424,6 @@ class _AppLoadingPageState extends State<AppLoadingPage>
                 ),
                 
                 const SizedBox(height: 15),
-
-                if (_cacheStatsText.isNotEmpty)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(horizontal: 16),
-                    child: Text(
-                      _cacheStatsText,
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.white.withOpacity(0.72),
-                      ),
-                      textAlign: TextAlign.center,
-                    ),
-                  ),
-
-                if (_cacheStatsText.isNotEmpty) const SizedBox(height: 8),
                 
                 Text(
                   '${(_progress * 100).toInt()}%',

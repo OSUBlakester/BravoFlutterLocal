@@ -12177,6 +12177,8 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           emailSubjectTemplate: currentSettings.emailSubjectTemplate,
           personalVolume: currentSettings.personalVolume,
           systemVolume: currentSettings.systemVolume,
+          playWaitForSwitchChime: currentSettings.playWaitForSwitchChime,
+          mascot: currentSettings.mascot,
         );
 
         // Save the settings

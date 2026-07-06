@@ -1436,13 +1436,19 @@ class _AuthPageState extends State<AuthPage> {
 
         // Check if this is a network error — offer offline mode if a cached profile exists
         final authErrStr = authError.toString().toLowerCase();
-        final isAuthNetworkError = authError is SocketException ||
+        final isFirebaseNetworkError = authError is FirebaseAuthException &&
+            (authError.code == 'network-request-failed' ||
+             authError.code == 'too-many-requests' ||
+             authError.message?.toLowerCase().contains('network') == true);
+        final isAuthNetworkError = isFirebaseNetworkError ||
+            authError is SocketException ||
             authError is TimeoutException ||
+            authErrStr.contains('network-request-failed') ||
             authErrStr.contains('network') ||
             authErrStr.contains('socketexception') ||
             authErrStr.contains('timeout') ||
             authErrStr.contains('failed host lookup') ||
-            authErrStr.contains('connection') ||
+            authErrStr.contains('connection refused') ||
             authErrStr.contains('unreachable');
 
         if (isAuthNetworkError && mounted) {
@@ -1696,6 +1702,11 @@ class _AuthPageState extends State<AuthPage> {
               print(
                 '🔵 AuthenticationWrapper - Using default profile: ${defaultProfile['display_name']} (${defaultProfile['aac_user_id']})',
               );
+              // Cache profile for offline use
+              await OfflineCacheService.saveProfile(
+                userId: defaultProfile['aac_user_id'],
+                displayName: defaultProfile['display_name'] ?? 'User',
+              );
               // Default profile found - check for mood selection
               final settingsProvider = Provider.of<UserSettingsProvider>(
                 context,
@@ -1772,6 +1783,12 @@ class _AuthPageState extends State<AuthPage> {
           if (userProfiles.length == 1) {
             final selectedAacUserId = userProfiles[0]['aac_user_id'];
             final selectedDisplayName = userProfiles[0]['display_name'];
+
+            // Cache profile for offline use
+            await OfflineCacheService.saveProfile(
+              userId: selectedAacUserId ?? '',
+              displayName: selectedDisplayName ?? 'User',
+            );
 
             // Check for mood selection
             final settingsProvider = Provider.of<UserSettingsProvider>(

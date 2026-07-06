@@ -12178,6 +12178,13 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           personalVolume: currentSettings.personalVolume,
           systemVolume: currentSettings.systemVolume,
           playWaitForSwitchChime: currentSettings.playWaitForSwitchChime,
+          tapWordsRows: currentSettings.tapWordsRows,
+          tapPhrasesRows: currentSettings.tapPhrasesRows,
+          tapDynamicRows: currentSettings.tapDynamicRows,
+          userLanguage: currentSettings.userLanguage,
+          defaultPartnerLanguage: currentSettings.defaultPartnerLanguage,
+          defaultPartnerVoice: currentSettings.defaultPartnerVoice,
+          locationOverrideLanguages: currentSettings.locationOverrideLanguages,
           mascot: currentSettings.mascot,
         );
 

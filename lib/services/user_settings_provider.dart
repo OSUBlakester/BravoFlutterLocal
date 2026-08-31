@@ -224,7 +224,7 @@ class UserSettings {
       countryCode: json['CountryCode'] ?? '',
       speechRate: json['speech_rate'] ?? 180,
       llmOptions: json['LLMOptions'] ?? 10,
-      freestyleOptions: json['FreestyleOptions'] ?? 20,
+      freestyleOptions: json['FreestyleOptions'] ?? 30,
       scanningOff: json['ScanningOff'] ?? false,
       summaryOff: json['SummaryOff'] ?? false,
       selectedTtsVoiceName: json['selected_tts_voice_name'] ?? '',
@@ -390,6 +390,20 @@ class UserSettingsProvider extends ChangeNotifier {
     await prefs.setBool(_playWaitForSwitchChimePrefsKey, value);
   }
 
+  String get _tapDynamicRowsPrefsKey =>
+      'tapDynamicRows_${userId ?? 'anonymous'}';
+
+  Future<int?> _loadLocalTapDynamicRows() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!prefs.containsKey(_tapDynamicRowsPrefsKey)) return null;
+    return prefs.getInt(_tapDynamicRowsPrefsKey);
+  }
+
+  Future<void> _saveLocalTapDynamicRows(int value) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt(_tapDynamicRowsPrefsKey, value);
+  }
+
   /// Safely notify listeners, deferring if we're currently in a build phase.
   /// This prevents "setState() during build" errors.
   void safeNotifyListeners() {
@@ -475,6 +489,15 @@ class UserSettingsProvider extends ChangeNotifier {
             settings!.playWaitForSwitchChime,
           );
         }
+        if (jsonData['tapDynamicRows'] == null) {
+          final localDynRows = await _loadLocalTapDynamicRows();
+          if (localDynRows != null) {
+            settings!.tapDynamicRows = localDynRows;
+            debugPrint('🔔 Using local fallback for tapDynamicRows: $localDynRows');
+          }
+        } else {
+          await _saveLocalTapDynamicRows(settings!.tapDynamicRows);
+        }
         debugPrint("🔍 waitForSwitchToScan after fromJson: ${settings?.waitForSwitchToScan}");
         error = null;
       } else {
@@ -518,6 +541,7 @@ class UserSettingsProvider extends ChangeNotifier {
     
     try {
       await _saveLocalPlayWaitForSwitchChime(newSettings.playWaitForSwitchChime);
+      await _saveLocalTapDynamicRows(newSettings.tapDynamicRows);
 
       // Use authenticated request with automatic token refresh
       final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
@@ -536,6 +560,9 @@ class UserSettingsProvider extends ChangeNotifier {
         settings = UserSettings.fromJson(responseJson);
         if (responseJson['playWaitForSwitchChime'] == null) {
           settings!.playWaitForSwitchChime = newSettings.playWaitForSwitchChime;
+        }
+        if (responseJson['tapDynamicRows'] == null) {
+          settings!.tapDynamicRows = newSettings.tapDynamicRows;
         }
         error = null;
         isLoading = false;

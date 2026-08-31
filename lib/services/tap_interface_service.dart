@@ -189,6 +189,7 @@ class TapBoardButton {
   final String buttonType;   // "static" or "dynamic"
   final String? pastTense;   // past tense variant text
   final String? plural;      // plural variant text
+  final int? poolIndex;      // position in the full static pool (for pagination)
 
   const TapBoardButton({
     required this.id,
@@ -211,6 +212,7 @@ class TapBoardButton {
     this.buttonType = 'static',
     this.pastTense,
     this.plural,
+    this.poolIndex,
   });
 
   factory TapBoardButton.fromJson(Map<String, dynamic> json) {
@@ -229,7 +231,13 @@ class TapBoardButton {
         json['custom_audio_file'],
       ),
       actionType: TapInterfaceCategory._nullableString(json['action_type']),
-      afterSelection: (json['after_selection'] ?? 'do_nothing').toString(),
+      afterSelection: (() {
+        final v = (json['after_selection'] ?? 'do_nothing').toString();
+        // 'use_ai' is only ever a transient backend value that exists before a
+        // board is generated; treat it as 'do_nothing' so stale disk-cached
+        // values never re-trigger AI board generation.
+        return v == 'use_ai' ? 'do_nothing' : v;
+      })(),
       targetBoardId: TapInterfaceCategory._nullableString(
         json['target_board_id'] ?? json['targetBoardId'],
       ),
@@ -250,6 +258,7 @@ class TapBoardButton {
       buttonType: (json['button_type'] ?? 'static').toString(),
       pastTense: TapInterfaceCategory._nullableString(json['past_tense']),
       plural: TapInterfaceCategory._nullableString(json['plural']),
+      poolIndex: (json['pool_index'] as num?)?.toInt(),
     );
   }
 
@@ -274,6 +283,7 @@ class TapBoardButton {
     String? buttonType,
     String? pastTense,
     String? plural,
+    int? poolIndex,
   }) {
     return TapBoardButton(
       id: id ?? this.id,
@@ -296,6 +306,7 @@ class TapBoardButton {
       buttonType: buttonType ?? this.buttonType,
       pastTense: pastTense ?? this.pastTense,
       plural: plural ?? this.plural,
+      poolIndex: poolIndex ?? this.poolIndex,
     );
   }
 
@@ -325,6 +336,7 @@ class TapBoardButton {
     'button_type': buttonType,
     'past_tense': pastTense,
     'plural': plural,
+    'pool_index': poolIndex,
   };
 }
 
@@ -345,6 +357,7 @@ class TapBoard {
   final String? textColor;
   final int defaultColumns;
   final int maxRows;
+  final int? dynamicRows;
   final bool hidden;
   final bool createdDuringMigration;
   final List<TapBoardButton> buttons;
@@ -366,10 +379,34 @@ class TapBoard {
     this.textColor,
     this.defaultColumns = 12,
     this.maxRows = 7,
+    this.dynamicRows,
     this.hidden = false,
     this.createdDuringMigration = false,
     this.buttons = const [],
   });
+
+  Map<String, dynamic> toJson() => {
+    'id': id,
+    'label': label,
+    'board_type': boardType,
+    'llm_prompt': llmPrompt,
+    'prompt_category': promptCategory,
+    'prompt_topic': promptTopic,
+    'prompt_examples': promptExamples,
+    'prompt_exclusions': promptExclusions,
+    'static_options': staticOptions,
+    'speech_text': speechText,
+    'image_url': imageUrl,
+    'custom_audio_file': customAudioFile,
+    'background_color': backgroundColor,
+    'text_color': textColor,
+    'default_columns': defaultColumns,
+    'max_rows': maxRows,
+    'dynamic_rows': dynamicRows,
+    'hidden': hidden,
+    'created_during_migration': createdDuringMigration,
+    'buttons': buttons.map((b) => b.toJson()).toList(),
+  };
 
   factory TapBoard.fromJson(Map<String, dynamic> json) {
     return TapBoard(
@@ -401,6 +438,7 @@ class TapBoard {
       textColor: TapInterfaceCategory._nullableString(json['text_color']),
       defaultColumns: (json['default_columns'] as num?)?.toInt() ?? 12,
       maxRows: (json['max_rows'] as num?)?.toInt() ?? 7,
+      dynamicRows: (json['dynamic_rows'] as num?)?.toInt(),
       hidden: TapInterfaceCategory._parseHidden(
         json['hidden'] ?? json['is_hidden'] ?? json['isHidden'],
       ),
@@ -419,6 +457,10 @@ class TapBoardSettings {
   final String? homeBoardId;
 
   const TapBoardSettings({this.homeBoardId});
+
+  Map<String, dynamic> toJson() => {
+    'home_board_id': homeBoardId,
+  };
 
   factory TapBoardSettings.fromJson(Map<String, dynamic> json) {
     return TapBoardSettings(
@@ -466,6 +508,11 @@ class TapBoardsResponse {
 
     return const <String, dynamic>{};
   }
+
+  Map<String, dynamic> toJson() => {
+    'boards': boards.map((b) => b.toJson()).toList(),
+    'board_settings': boardSettings.toJson(),
+  };
 
   factory TapBoardsResponse.fromJson(Map<String, dynamic> json) {
     return TapBoardsResponse(
@@ -847,8 +894,8 @@ class TapInterfaceService {
             'X-User-ID': userSettingsProvider.userId ?? '',
             'Content-Type': 'application/json',
           },
-          maxRetries: 1,
-          timeoutSeconds: 8,
+          maxRetries: 0,
+          timeoutSeconds: 60,
         );
 
         if (response.statusCode == 200) {
@@ -878,8 +925,8 @@ class TapInterfaceService {
             'X-User-ID': userSettingsProvider.userId ?? '',
             'Content-Type': 'application/json',
           },
-          maxRetries: 1,
-          timeoutSeconds: 8,
+          maxRetries: 0,
+          timeoutSeconds: 60,
         );
 
         if (response.statusCode == 200) {
@@ -1084,6 +1131,7 @@ class TapInterfaceService {
     int maxOptions = 27,
     bool requestDifferentOptions = false,
     String? currentMood,
+    String? customPrompt,
   }) async {
     final userLanguage = userSettingsProvider.settings?.userLanguage ?? 'en-US';
     try {
@@ -1122,6 +1170,9 @@ class TapInterfaceService {
           'current_mood': extractedMood,
           'user_language': userLanguage,
           'target_locale': userLanguage,
+          'max_options': maxOptions,
+          if (customPrompt != null && customPrompt.isNotEmpty)
+            'custom_prompt': customPrompt,
         }),
       );
 
@@ -1406,6 +1457,7 @@ class TapInterfaceService {
     int maxOptions = 27,
     bool requestDifferentOptions = false,
     String? currentMood,
+    String? customPrompt,
   }) async {
     final userLanguage = userSettingsProvider.settings?.userLanguage ?? 'en-US';
     try {
@@ -1430,6 +1482,9 @@ class TapInterfaceService {
           'current_mood': extractedMood,
           'user_language': userLanguage,
           'target_locale': userLanguage,
+          'max_options': maxOptions,
+          if (customPrompt != null && customPrompt.isNotEmpty)
+            'custom_prompt': customPrompt,
         }),
       );
 
@@ -1616,19 +1671,25 @@ class TapInterfaceService {
         print('✅ Full parsed data structure: $data');
 
         // Use the exact same response parsing as freestyle_page.dart
-        final rawOptions = data['word_options'] ?? [];
-        print(
-          '✅ Freestyle API word_options field exists: ${data.containsKey('word_options')}',
-        );
-        print('✅ Freestyle API Raw Options: $rawOptions');
-        print('✅ Freestyle API Raw Options Type: ${rawOptions.runtimeType}');
-        print(
-          '✅ Freestyle API Raw Options Length: ${rawOptions is List ? rawOptions.length : 'N/A'}',
-        );
+        // API sometimes returns word_options as a JSON-encoded string instead of
+        // a parsed list. Normalise to a List<dynamic> before processing.
+        List<dynamic> rawOptions = [];
+        if (data is Map) {
+          final rawField = data['word_options'];
+          if (rawField is List) {
+            rawOptions = rawField;
+          } else if (rawField is String && rawField.isNotEmpty) {
+            try {
+              final decoded = json.decode(rawField);
+              if (decoded is List) rawOptions = decoded;
+            } catch (_) { /* leave rawOptions empty */ }
+          }
+        }
+        debugPrint('✅ Freestyle API Raw Options length: ${rawOptions.length}');
 
         final options = <String>[];
 
-        if (rawOptions is List) {
+        if (rawOptions.isNotEmpty) {
           for (var i = 0; i < rawOptions.length; i++) {
             final option = rawOptions[i];
             String raw = '';
@@ -1666,11 +1727,14 @@ class TapInterfaceService {
                 raw = trimmed;
               }
             } else if (option is Map<String, dynamic>) {
-              raw =
+              // Prefer named text fields; if all are null, skip this item
+              // rather than calling option.toString() which gives {text: Bye, keywords: [...]}
+              final extracted =
                   option['option']?.toString() ??
                   option['text']?.toString() ??
-                  option['word']?.toString() ??
-                  option.toString();
+                  option['word']?.toString();
+              if (extracted == null) continue;
+              raw = extracted;
             } else {
               raw = option.toString();
             }
@@ -1678,13 +1742,20 @@ class TapInterfaceService {
             final normalized = _normalizeOptionText(raw);
             final trimmedText = normalized.trim();
 
-            // Filter out invalid options
+            // Filter out invalid options — covers multiple JSON/metadata leak formats:
+            //   '":"'           → text":"Bye","keywords":["hello"]  (quoted keys)
+            //   'keywords'      → text: Bye, keywords: [hello]      (unquoted keys)
+            //   ': ['           → key: [value, ...]                 (list value)
+            //   starts with '{' → full JSON object
+            //   starts with '[' → JSON array (e.g. ["demo","presentation"])
             if (trimmedText.isNotEmpty &&
-                trimmedText.length > 0 &&
                 trimmedText.length <= 50 &&
                 !trimmedText.contains('here are') &&
                 !trimmedText.startsWith('{') &&
-                !trimmedText.contains('option":') &&
+                !trimmedText.startsWith('[') &&
+                !trimmedText.contains('":"') &&
+                !trimmedText.toLowerCase().contains('keywords') &&
+                !trimmedText.contains(': [') &&
                 !trimmedText.startsWith('```') &&
                 trimmedText != 'json') {
               options.add(normalized);
@@ -2756,5 +2827,122 @@ class TapInterfaceService {
     }
 
     return text;
+  }
+
+  /// Calls /api/tap-interface/boards/{boardId}/assign-all-images to re-assign
+  /// images for every button on an existing board using the server's current
+  /// key-term stripping and negation-guarding logic.  Returns a map of
+  /// button id → image_url for every button that got an image; returns null
+  /// on any failure so the caller can gracefully degrade.
+  Future<Map<String, String?>?> assignAllImages(String boardId) async {
+    if (boardId.isEmpty) return null;
+    try {
+      debugPrint('[TapService] 🖼️ assignAllImages for board "$boardId"');
+      final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+        'POST',
+        '${EnvironmentConfig.apiBaseUrl}/api/tap-interface/boards/$boardId/assign-all-images',
+        baseHeaders: {
+          'X-User-ID': userSettingsProvider.userId ?? '',
+          'Content-Type': 'application/json',
+        },
+        body: json.encode({'board_id': boardId}),
+      );
+
+      if (response.statusCode != 200 && response.statusCode != 201) {
+        debugPrint('[TapService] ❌ assignAllImages HTTP ${response.statusCode}');
+        return null;
+      }
+
+      final data = json.decode(response.body) as Map<String, dynamic>;
+
+      // Response may come as:
+      //   { "buttons": [{id, image_url}, ...] }
+      // or wrapped in a "board":
+      //   { "board": { "buttons": [...] } }
+      List<dynamic>? buttonsList;
+      if (data['buttons'] is List) {
+        buttonsList = data['buttons'] as List;
+      } else if (data['board'] is Map) {
+        final board = data['board'] as Map<String, dynamic>;
+        if (board['buttons'] is List) buttonsList = board['buttons'] as List;
+      }
+
+      if (buttonsList == null) {
+        debugPrint('[TapService] ❌ assignAllImages: unexpected response shape');
+        return null;
+      }
+
+      final result = <String, String?>{};
+      for (final raw in buttonsList) {
+        if (raw is! Map<String, dynamic>) continue;
+        final id = raw['id']?.toString();
+        final url = raw['image_url']?.toString();
+        if (id != null) result[id] = (url != null && url.isNotEmpty) ? url : null;
+      }
+      debugPrint('[TapService] ✅ assignAllImages: got images for ${result.length} buttons');
+      return result;
+    } catch (e) {
+      debugPrint('[TapService] ❌ assignAllImages error: $e');
+      return null;
+    }
+  }
+
+  /// Calls /api/tap-interface/bravo-build to generate a complete board with
+  /// up to 30 buttons that have images already assigned and are saved to
+  /// Firestore.  Returns the new board on success or null on failure.
+  Future<TapBoard?> callBravoBuild({
+    required String buttonLabel,
+    String? sourceBoardId,
+    String? buttonId,
+    String? context,
+  }) async {
+    try {
+      debugPrint(
+        '[TapService] 🏗️ callBravoBuild label="$buttonLabel" source=$sourceBoardId',
+      );
+      final response = await AuthenticatedHttpClient.makeAuthenticatedRequest(
+        'POST',
+        '${EnvironmentConfig.apiBaseUrl}/api/tap-interface/bravo-build',
+        baseHeaders: {
+          'X-User-ID': userSettingsProvider.userId ?? '',
+          'Content-Type': 'application/json',
+        },
+        body: json.encode({
+          'button_label': buttonLabel,
+          if (sourceBoardId != null && sourceBoardId.isNotEmpty)
+            'source_board_id': sourceBoardId,
+          if (buttonId != null && buttonId.isNotEmpty) 'button_id': buttonId,
+          if (context != null && context.isNotEmpty) 'context': context,
+        }),
+      );
+
+      if (response.statusCode != 200 && response.statusCode != 201) {
+        debugPrint(
+          '[TapService] ❌ bravo-build HTTP ${response.statusCode}: ${response.body.substring(0, response.body.length.clamp(0, 300))}',
+        );
+        return null;
+      }
+
+      final data = json.decode(response.body) as Map<String, dynamic>;
+      if (data['success'] != true) {
+        debugPrint('[TapService] ❌ bravo-build returned success=false');
+        return null;
+      }
+
+      final boardJson = data['board'] as Map<String, dynamic>?;
+      if (boardJson == null) {
+        debugPrint('[TapService] ❌ bravo-build response missing "board" key');
+        return null;
+      }
+
+      final board = TapBoard.fromJson(boardJson);
+      debugPrint(
+        '[TapService] ✅ bravo-build returned board "${board.label}" with ${board.buttons.length} buttons',
+      );
+      return board;
+    } catch (e) {
+      debugPrint('[TapService] ❌ callBravoBuild error: $e');
+      return null;
+    }
   }
 }

@@ -9,6 +9,7 @@ import 'package:just_audio/just_audio.dart';
 import 'package:provider/provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'services/apple_music_service.dart';
 import 'services/music_playback_service.dart';
 import 'services/user_settings_provider.dart';
 import 'main.dart'; // Import for SpeechBubbleButton
@@ -39,16 +40,12 @@ class MusicPage extends StatefulWidget {
   final String idToken;
   final String aacUserId;
   final String displayName;
-  final Future<void> Function(String musicContext)? onTalkAboutMusic;
-  final Future<void> Function()? onTalkAboutSomethingElse;
 
   const MusicPage({
     super.key,
     required this.idToken,
     required this.aacUserId,
     required this.displayName,
-    this.onTalkAboutMusic,
-    this.onTalkAboutSomethingElse,
   });
 
   @override
@@ -79,6 +76,11 @@ class _MusicPageState extends State<MusicPage> with WidgetsBindingObserver {
   String _scanningPhase = 'playlists'; // 'playlists' | 'controls'
   bool _musicIsPlayingState = false;
 
+  // Set to true once the initial playlist load finishes (success or failure).
+  // Scanning is blocked until this fires so TTS doesn't announce items before
+  // the list is visible on screen.
+  bool _playlistsLoaded = false;
+
   // --- Audio State ---
   FlutterTts? _flutterTts;
   bool _isAnnouncing = false;
@@ -96,6 +98,13 @@ class _MusicPageState extends State<MusicPage> with WidgetsBindingObserver {
   Color _lightColor = const Color(0xFFFB4F14);
 
   MusicPlaybackService? _musicService;
+  AppleMusicService? _appleMusicService;
+
+  // Which music service is active: 'spotify' | 'apple_music'
+  String _servicePreference = 'spotify';
+
+  // True while a modal dialog is open — blocks all switch/key handling.
+  bool _dialogIsOpen = false;
 
   @override
   void initState() {
@@ -108,17 +117,57 @@ class _MusicPageState extends State<MusicPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _musicService = Provider.of<MusicPlaybackService>(context, listen: false);
       _musicService?.addListener(_onMusicServiceChanged);
+      _appleMusicService = Provider.of<AppleMusicService>(context, listen: false);
+      _appleMusicService?.addListener(_onAppleMusicServiceChanged);
 
-      // Await initialization to prevent race conditions on startup configuration checks
+      // Clear any stale App Remote / in-flight state from a previous session so
+      // playPlaylistUri does not try to disconnect a dropped iOS connection (which
+      // can hang) before reconnecting.
+      _musicService?.prepareForNewSession();
+      _appleMusicService?.prepareForNewSession();
+
+      // Load saved service preference, then initialise whichever service is active.
       unawaited(() async {
-        await _musicService!.ensureInitialized();
-        if (mounted && _musicService!.isConfigured) {
-          await _musicService!.refreshPlaylists();
+        // First launch: no preference saved yet — ask the user which service to use.
+        // _startScanningAfterDelay() is called AFTER the dialog so the scanning
+        // loop (and its "Connecting to …" TTS) doesn't fire while the picker is open.
+        final hasPref = await AppleMusicService.hasServicePreference();
+        if (!mounted) return;
+        if (!hasPref) {
+          final picked = await showDialog<String>(
+            context: context,
+            barrierDismissible: false,
+            builder: (_) => const _ServicePickerDialog(),
+          );
+          if (!mounted) return;
+          // Treat a dismissed dialog (null) as Spotify so the page is never stuck.
+          final chosen = picked ?? 'spotify';
+          await AppleMusicService.saveServicePreference(chosen);
+          setState(() => _servicePreference = chosen);
         }
+
+        final pref = await AppleMusicService.loadServicePreference();
+        if (!mounted) return;
+        setState(() { _servicePreference = pref; });
+
+        // Start scanning now that _servicePreference is known — the polling loop's
+        // TTS announcement will name the correct service (Spotify vs Apple Music).
+        _startScanningAfterDelay();
+
+        if (pref == 'apple_music') {
+          await _appleMusicService?.loadPlaylists();
+        } else {
+          await _musicService!.ensureInitialized();
+          if (mounted && _musicService!.isConfigured) {
+            await _musicService!.refreshPlaylists();
+          }
+        }
+        // Signal that loading is complete so scanning and switch input may begin.
+        if (mounted) setState(() => _playlistsLoaded = true);
       }());
 
-      // Always start scanning and request keyboard focus immediately on page load
-      _startScanningAfterDelay();
+      // Keyboard focus only — scanning now starts inside the async block above
+      // so it never fires before the service-picker dialog is dismissed.
       _keyboardFocusNode.requestFocus();
 
       // Always schedule delayed focus requests to survive route transitions
@@ -142,6 +191,7 @@ class _MusicPageState extends State<MusicPage> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _keyboardFocusNode.removeListener(_onFocusChanged);
     _musicService?.removeListener(_onMusicServiceChanged);
+    _appleMusicService?.removeListener(_onAppleMusicServiceChanged);
     _cleanupResources();
     _keyboardFocusNode.dispose();
 
@@ -238,12 +288,10 @@ class _MusicPageState extends State<MusicPage> with WidgetsBindingObserver {
       _scanningTimer = null;
 
       _startSilenceLoop();
-      // Delay audio routing change so Spotify's App Remote audio session fully
-      // establishes before forceSpeaker() calls setActive(true). An immediate
-      // AVAudioSession change interrupts Spotify and pauses playback.
-      Future.delayed(const Duration(milliseconds: 2000), () {
-        if (mounted) _resetAudioRouteToSpeaker();
-      });
+      // Do NOT call _resetAudioRouteToSpeaker() here. forceSpeaker() activates
+      // Bravo's AVAudioSession, which steals audio focus from Spotify and causes
+      // a ~20 second pause. Audio routing is set immediately before each TTS
+      // announcement, so there is no need to set it proactively on play/resume.
 
       _keyboardFocusNode.requestFocus();
       Future.delayed(const Duration(milliseconds: 100), () {
@@ -261,6 +309,31 @@ class _MusicPageState extends State<MusicPage> with WidgetsBindingObserver {
       setState(() {
         _musicIsPlayingState = false;
       });
+      _stopSilenceLoop();
+    }
+  }
+
+  void _onAppleMusicServiceChanged() {
+    if (!mounted) return;
+    final apple = _appleMusicService;
+    if (apple == null || _servicePreference != 'apple_music') return;
+
+    if (apple.isPlaying && !_musicIsPlayingState && _scanningPhase == 'controls' && !_isScanning) {
+      setState(() {
+        _musicIsPlayingState = true;
+        _isScanning = false;
+        _isScanningPaused = true;
+        _waitingForUserInput = true;
+        _scanningIndex = -1;
+      });
+      _scanningTimer?.cancel();
+      _scanningTimer = null;
+      _startSilenceLoop();
+      // Do NOT call _resetAudioRouteToSpeaker() here — same reason as the
+      // Spotify listener: forceSpeaker() steals audio focus and interrupts playback.
+      _keyboardFocusNode.requestFocus();
+    } else if (!apple.isPlaying && _musicIsPlayingState) {
+      setState(() { _musicIsPlayingState = false; });
       _stopSilenceLoop();
     }
   }
@@ -515,14 +588,35 @@ class _MusicPageState extends State<MusicPage> with WidgetsBindingObserver {
 
   void _startScanningAfterDelay() {
     if (_scanningOff) return;
-
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      Future.delayed(const Duration(milliseconds: 800), () {
-        if (mounted && !_isAnnouncing) {
-          _maybeStartScanning();
+      _pollUntilPlaylistsLoadedThenScan();
+    });
+  }
+
+  // Waits up to 20 s for the initial Spotify connection + playlist fetch to
+  // complete before starting the scan cycle.  Announces "Connecting to Spotify"
+  // once so the user knows the app is working.  Falls through after the timeout
+  // so a network failure does not lock the user out of scanning entirely.
+  void _pollUntilPlaylistsLoadedThenScan({int elapsedMs = 0}) {
+    if (!mounted) return;
+    if (elapsedMs == 0) {
+      // Announce loading on first call (TTS may not be ready yet — small delay).
+      Future.delayed(const Duration(milliseconds: 600), () {
+        if (mounted && !_playlistsLoaded && _flutterTts != null) {
+          final svcName = _servicePreference == 'apple_music' ? 'Apple Music' : 'Spotify';
+          unawaited(_flutterTts!.speak('Connecting to $svcName, please wait'));
         }
       });
-    });
+    }
+    if (_playlistsLoaded || elapsedMs >= 20000) {
+      Future.delayed(const Duration(milliseconds: 400), () {
+        if (mounted && !_isAnnouncing) _maybeStartScanning();
+      });
+    } else {
+      Future.delayed(const Duration(milliseconds: 300), () {
+        _pollUntilPlaylistsLoadedThenScan(elapsedMs: elapsedMs + 300);
+      });
+    }
   }
 
   void _maybeStartScanning() {
@@ -635,8 +729,7 @@ class _MusicPageState extends State<MusicPage> with WidgetsBindingObserver {
     bool shouldPauseAfterScan = false;
 
     if (_scanningPhase == 'playlists') {
-      final music = Provider.of<MusicPlaybackService>(context, listen: false);
-      final playlistsList = music.playlists.isNotEmpty ? music.playlists : music.fallbackPlaylists;
+      final playlistsList = _activePlaylists();
 
       setState(() {
         _scanningIndex++;
@@ -653,7 +746,7 @@ class _MusicPageState extends State<MusicPage> with WidgetsBindingObserver {
       // _scanningPhase == 'controls'
       setState(() {
         _scanningIndex++;
-        if (_scanningIndex > 5) {
+        if (_scanningIndex > 3) {
           _scanningIndex = 0; // Wrap around to index 0 (Pause/Resume)
           _scanCycleCount++;
 
@@ -681,6 +774,19 @@ class _MusicPageState extends State<MusicPage> with WidgetsBindingObserver {
     }
   }
 
+  // Returns playlist names for whichever service is active.
+  List<({String name})> _activePlaylists() {
+    if (_servicePreference == 'apple_music') {
+      return _appleMusicService?.playlists
+              .map((p) => (name: p.name))
+              .toList() ??
+          [];
+    }
+    final music = Provider.of<MusicPlaybackService>(context, listen: false);
+    final raw = music.playlists.isNotEmpty ? music.playlists : music.fallbackPlaylists;
+    return raw.map((p) => (name: p.name)).toList();
+  }
+
   void _announceCurrentButton() async {
     try {
       String text = '';
@@ -688,10 +794,9 @@ class _MusicPageState extends State<MusicPage> with WidgetsBindingObserver {
         if (_scanningIndex == -1) {
           text = 'Go Back';
         } else {
-          final music = Provider.of<MusicPlaybackService>(context, listen: false);
-          final playlistsList = music.playlists.isNotEmpty ? music.playlists : music.fallbackPlaylists;
-          if (_scanningIndex >= 0 && _scanningIndex < playlistsList.length) {
-            text = playlistsList[_scanningIndex].name;
+          final list = _activePlaylists();
+          if (_scanningIndex >= 0 && _scanningIndex < list.length) {
+            text = list[_scanningIndex].name;
           } else {
             return;
           }
@@ -699,17 +804,13 @@ class _MusicPageState extends State<MusicPage> with WidgetsBindingObserver {
       } else {
         // _scanningPhase == 'controls'
         if (_scanningIndex == 0) {
-          text = 'Resume';
+          text = 'Continue';
         } else if (_scanningIndex == 1) {
           text = 'Skip Song';
         } else if (_scanningIndex == 2) {
           text = 'Change Music';
         } else if (_scanningIndex == 3) {
           text = 'Stop Playing';
-        } else if (_scanningIndex == 4) {
-          text = 'Talk About Music';
-        } else if (_scanningIndex == 5) {
-          text = 'Talk About Something Else';
         }
       }
 
@@ -775,11 +876,32 @@ class _MusicPageState extends State<MusicPage> with WidgetsBindingObserver {
 
     final music = Provider.of<MusicPlaybackService>(context, listen: false);
 
+    // Announce before switching audio route to speaker so the user hears the
+    // confirmation through their Bluetooth/personal device while Spotify connects.
+    // This is especially important when switching takes 30-60 s.
+    if (_flutterTts != null) {
+      try {
+        await _flutterTts!.speak('Starting ${playlist.name}, please wait');
+        // Let the announcement begin before handing audio to Spotify/speaker.
+        await Future.delayed(const Duration(milliseconds: 800));
+      } catch (_) {}
+    }
+
     await _resetAudioRouteToSpeaker();
 
     if (!mounted) return;
 
     _keyboardFocusNode.requestFocus();
+
+    // Reconnect App Remote immediately before playing so the connection is
+    // fresh. The initState reconnect drops before the user picks a playlist,
+    // causing playPlaylistUri() to fall through the full 30-60s timeout chain.
+    // Calling here means: still-connected → instant (Swift singleton guard returns
+    // true immediately); dropped → ~3s fresh reconnect. Either way, playPlaylistUri()
+    // then takes the fast direct-play path instead of the reconnect cascade.
+    await music.ensureAppRemoteConnected();
+
+    if (!mounted) return;
     await _playWithFeedback(context, music, playlist);
 
     if (mounted) {
@@ -814,59 +936,100 @@ class _MusicPageState extends State<MusicPage> with WidgetsBindingObserver {
     });
   }
 
+  Future<void> _selectAppleMusicPlaylist(ApplePlaylist playlist) async {
+    _currentSpeechId++;
+    _flutterTts?.stop();
+    _pauseScanning();
+    setState(() {
+      _scanningPhase = 'controls';
+      _musicIsPlayingState = true;
+      _scanningIndex = -1;
+    });
+    final apple = Provider.of<AppleMusicService>(context, listen: false);
+    await _resetAudioRouteToSpeaker();
+    if (!mounted) return;
+    _keyboardFocusNode.requestFocus();
+    await apple.playPlaylist(playlist);
+    if (mounted && !apple.isPlaying) {
+      setState(() {
+        _scanningPhase = 'playlists';
+        _musicIsPlayingState = false;
+      });
+      _startScanning(force: true);
+    } else {
+      await _startSilenceLoop();
+    }
+    if (mounted) _keyboardFocusNode.requestFocus();
+  }
+
   void _handlePauseResume() async {
-    final music = Provider.of<MusicPlaybackService>(context, listen: false);
     _pauseScanning();
     _keyboardFocusNode.requestFocus();
-    if (music.isPlaying) {
-      await music.pause();
+    if (_servicePreference == 'apple_music') {
+      final apple = Provider.of<AppleMusicService>(context, listen: false);
+      if (apple.isPlaying) {
+        await apple.pause();
+      } else {
+        await apple.resume();
+        // Do NOT call _resetAudioRouteToSpeaker() here — forceSpeaker() activates
+        // Bravo's AVAudioSession which steals audio focus and pauses the music.
+        // Audio routing is set right before each TTS announcement instead.
+      }
     } else {
-      // Resume FIRST, then wait before routing audio. forceSpeaker() calls
-      // AVAudioSession.setActive(true) which interrupts Spotify's audio session
-      // if triggered within the first ~2 seconds of App Remote playback.
-      await music.resume();
-      await Future.delayed(const Duration(milliseconds: 1500));
-      await _resetAudioRouteToSpeaker();
-      if (music.isConnected) {
-        await _startSilenceLoop();
+      final music = Provider.of<MusicPlaybackService>(context, listen: false);
+      if (music.isPlaying) {
+        await music.pause();
+      } else {
+        await music.resume();
+        // Do NOT call _resetAudioRouteToSpeaker() here — same reason as above.
       }
     }
   }
 
   void _handleSkipNext() async {
-    final music = Provider.of<MusicPlaybackService>(context, listen: false);
     _pauseScanning();
     _keyboardFocusNode.requestFocus();
-    await _resetAudioRouteToSpeaker();
-    await music.skipNext();
+    // Do NOT call _resetAudioRouteToSpeaker() here — forceSpeaker() steals audio
+    // focus mid-playback and interrupts Spotify. Route is set before TTS instead.
+    if (_servicePreference == 'apple_music') {
+      await Provider.of<AppleMusicService>(context, listen: false).skipNext();
+    } else {
+      await Provider.of<MusicPlaybackService>(context, listen: false).skipNext();
+    }
   }
 
   void _handleStopPlayback() async {
-    final music = Provider.of<MusicPlaybackService>(context, listen: false);
     _pauseScanning();
     _keyboardFocusNode.requestFocus();
-    await music.stopPlayback();
+    if (_servicePreference == 'apple_music') {
+      await Provider.of<AppleMusicService>(context, listen: false).stopPlayback();
+    } else {
+      await Provider.of<MusicPlaybackService>(context, listen: false).stopPlayback();
+    }
     setState(() {
       _scanningPhase = 'playlists';
       _musicIsPlayingState = false;
       _scanningIndex = -1;
     });
     await _stopSilenceLoop();
-    _handleBackButton(); // Return to the prior page
+    _handleBackButton();
   }
 
   void _handleChangeMusic() async {
-    final music = Provider.of<MusicPlaybackService>(context, listen: false);
     _pauseScanning();
     _keyboardFocusNode.requestFocus();
-    await music.stopPlayback();
+    if (_servicePreference == 'apple_music') {
+      await Provider.of<AppleMusicService>(context, listen: false).stopPlayback();
+    } else {
+      await Provider.of<MusicPlaybackService>(context, listen: false).stopPlayback();
+    }
     setState(() {
       _scanningPhase = 'playlists';
       _musicIsPlayingState = false;
       _scanningIndex = -1;
     });
     await _stopSilenceLoop();
-    _startScanning(force: true); // Start scanning playlists immediately!
+    _startScanning(force: true);
   }
 
   void _handleControlBarSelection(int index) async {
@@ -883,15 +1046,6 @@ class _MusicPageState extends State<MusicPage> with WidgetsBindingObserver {
       _handleChangeMusic();
     } else if (index == 3) {
       _handleStopPlayback();
-    } else if (index == 4) {
-      final music = Provider.of<MusicPlaybackService>(context, listen: false);
-      if (widget.onTalkAboutMusic != null) {
-        await widget.onTalkAboutMusic!(music.musicContextSummary);
-      }
-    } else if (index == 5) {
-      if (widget.onTalkAboutSomethingElse != null) {
-        await widget.onTalkAboutSomethingElse!();
-      }
     }
   }
 
@@ -899,6 +1053,26 @@ class _MusicPageState extends State<MusicPage> with WidgetsBindingObserver {
     debugPrint('MusicPage: Spacebar pressed - _waitingForUserInput=$_waitingForUserInput, _isScanningPaused=$_isScanningPaused, _isScanning=$_isScanning, _scanningIndex=$_scanningIndex, _scanningPhase=$_scanningPhase');
     final settingsProvider = Provider.of<UserSettingsProvider>(context, listen: false);
     final scanMode = settingsProvider.settings?.scanMode ?? 'auto';
+
+    // Block all switch input until the initial Spotify connection and playlist
+    // load are complete.  Premature input during this window leaves the state
+    // machine inconsistent (scanning starts before music is ready, _onMusicServiceChanged
+    // is ignored because _isScanning=true, controls phase becomes unresponsive).
+    if (!_playlistsLoaded) {
+      debugPrint('MusicPage: Spacebar blocked — Spotify still loading (playlistsLoaded=$_playlistsLoaded)');
+      return;
+    }
+
+    // Block switch input while a playlist is loading / App Remote is reconnecting.
+    // Presses during this window set _isScanning=true which breaks the state machine
+    // once playback eventually starts (_onMusicServiceChanged is ignored).
+    if (_servicePreference != 'apple_music') {
+      final music = Provider.of<MusicPlaybackService>(context, listen: false);
+      if (music.isReconnecting) {
+        debugPrint('MusicPage: Spacebar blocked — playlist loading in progress (isReconnecting=true)');
+        return;
+      }
+    }
 
     if (_isAnnouncing) {
       debugPrint('MusicPage: Spacebar ignored while announcement is in progress');
@@ -922,11 +1096,12 @@ class _MusicPageState extends State<MusicPage> with WidgetsBindingObserver {
         debugPrint('MusicPage: Spacebar - Starting control scanning phase');
 
         // Pause music playback first so scanning and music do not overlap.
-        // Uses Web API (not App Remote) to keep the App Remote write pipeline
-        // clean for the subsequent resume/skip command the user will select.
-        final music = Provider.of<MusicPlaybackService>(context, listen: false);
-        if (music.isPlaying) {
-          unawaited(music.pauseForScanning());
+        if (_servicePreference == 'apple_music') {
+          final apple = Provider.of<AppleMusicService>(context, listen: false);
+          if (apple.isPlaying) unawaited(apple.pauseForScanning());
+        } else {
+          final music = Provider.of<MusicPlaybackService>(context, listen: false);
+          if (music.isPlaying) unawaited(music.pauseForScanning());
         }
 
         // Route audio prompts to Bluetooth speaker (personal)
@@ -958,7 +1133,11 @@ class _MusicPageState extends State<MusicPage> with WidgetsBindingObserver {
         });
         debugPrint('MusicPage: _handleSpacebarPress starting silence loop');
         unawaited(_startSilenceLoop());
-        debugPrint('MusicPage: _handleSpacebarPress silence loop done, announcing current button');
+        // Give Spotify a moment to process the pause command before TTS begins.
+        // pauseForScanning() is fire-and-forget above — without this gap the TTS
+        // announcement overlaps with still-playing music when the App Remote is slow.
+        await Future.delayed(const Duration(milliseconds: 700));
+        debugPrint('MusicPage: _handleSpacebarPress announcing current button');
         _announceCurrentButton();
         if (scanMode == 'auto') {
           debugPrint('MusicPage: _handleSpacebarPress starting scanning timer with delay=$_scanDelay');
@@ -992,12 +1171,16 @@ class _MusicPageState extends State<MusicPage> with WidgetsBindingObserver {
       debugPrint('MusicPage: Spacebar - Selecting button at index $_scanningIndex');
       if (_scanningIndex == -1) {
         _handleBackButton();
+      } else if (_servicePreference == 'apple_music') {
+        final apple = Provider.of<AppleMusicService>(context, listen: false);
+        if (_scanningIndex >= 0 && _scanningIndex < apple.playlists.length) {
+          _selectAppleMusicPlaylist(apple.playlists[_scanningIndex]);
+        }
       } else {
         final music = Provider.of<MusicPlaybackService>(context, listen: false);
         final playlistsList = music.playlists.isNotEmpty ? music.playlists : music.fallbackPlaylists;
         if (_scanningIndex >= 0 && _scanningIndex < playlistsList.length) {
-          final playlist = playlistsList[_scanningIndex];
-          _selectPlaylistAndStartPlayback(playlist);
+          _selectPlaylistAndStartPlayback(playlistsList[_scanningIndex]);
         }
       }
     }
@@ -1063,7 +1246,7 @@ class _MusicPageState extends State<MusicPage> with WidgetsBindingObserver {
       await player.play();
       await player.playerStateStream.firstWhere(
         (state) => state.processingState == ProcessingState.completed,
-      );
+      ).timeout(const Duration(seconds: 5));
     } catch (e) {
       debugPrint(
         'MusicPage waitForSwitchNotification: Playback failed: $e',
@@ -1076,122 +1259,29 @@ class _MusicPageState extends State<MusicPage> with WidgetsBindingObserver {
     }
   }
 
-  void _showSpotifySettingsDialog(BuildContext context, MusicPlaybackService music) {
-    final clientIdController = TextEditingController(text: music.clientId);
-    final redirectUriController = TextEditingController(text: music.redirectUri);
-
-    showDialog(
+  void _showMusicSettingsDialog(BuildContext context) {
+    _pauseScanning();
+    setState(() { _dialogIsOpen = true; });
+    showDialog<String>(
       context: context,
-      builder: (context) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: Row(
-            children: [
-              const Icon(Icons.music_note, color: Color(0xFF0369A1)),
-              const SizedBox(width: 8),
-              const Text('Spotify API Settings'),
-            ],
-          ),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'To access your playlists, you can configure your own Spotify Client ID & Redirect URI. '
-                  'Make sure your test Spotify user is added to your app\'s "Users and Access" list in the Spotify Developer Dashboard.',
-                  style: TextStyle(fontSize: 13, color: Colors.black54),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: clientIdController,
-                  decoration: const InputDecoration(
-                    labelText: 'Client ID',
-                    hintText: '32-character Client ID',
-                    border: OutlineInputBorder(),
-                    helperText: 'From Spotify Developer Dashboard',
-                  ),
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: redirectUriController,
-                  decoration: const InputDecoration(
-                    labelText: 'Redirect URI',
-                    hintText: 'e.g. bravo://spotify-auth-callback',
-                    border: OutlineInputBorder(),
-                    helperText: 'Must match Spotify Dashboard Redirect URIs',
-                  ),
-                ),
-              ],
-            ),
-          ),
-          actionsAlignment: MainAxisAlignment.spaceBetween,
-          actions: [
-            TextButton(
-              onPressed: () async {
-                final confirm = await showDialog<bool>(
-                  context: context,
-                  builder: (ctx) => AlertDialog(
-                    title: const Text('Reset Credentials?'),
-                    content: const Text('This will restore the default developer Client ID and Redirect URI.'),
-                    actions: [
-                      TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: const Text('Cancel')),
-                      ElevatedButton(onPressed: () => Navigator.of(ctx).pop(true), child: const Text('Reset')),
-                    ],
-                  ),
-                );
-                if (confirm == true) {
-                  await music.clearCredentials();
-                  if (context.mounted) {
-                    Navigator.of(context).pop();
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Credentials reset to defaults.')),
-                    );
-                  }
-                }
-              },
-              style: TextButton.styleFrom(foregroundColor: Colors.red),
-              child: const Text('Reset Default'),
-            ),
-            Row(
-              children: [
-                TextButton(
-                  onPressed: () => Navigator.of(context).pop(),
-                  child: const Text('Cancel'),
-                ),
-                ElevatedButton(
-                  onPressed: () async {
-                    final newClientId = clientIdController.text.trim();
-                    final newRedirectUri = redirectUriController.text.trim();
-                    if (newClientId.isEmpty || newRedirectUri.isEmpty) {
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Both Client ID and Redirect URI are required.')),
-                      );
-                      return;
-                    }
-                    await music.saveCredentials(
-                      clientId: newClientId,
-                      redirectUri: newRedirectUri,
-                    );
-                    if (context.mounted) {
-                      Navigator.of(context).pop();
-                      ScaffoldMessenger.of(context).showSnackBar(
-                        const SnackBar(content: Text('Spotify API credentials saved.')),
-                      );
-                    }
-                  },
-                  child: const Text('Save'),
-                ),
-              ],
-            ),
-          ],
-        );
-      },
-    );
+      barrierDismissible: false,
+      builder: (_) => _MusicSettingsDialog(
+        initialService: _servicePreference,
+      ),
+    ).then((saved) {
+      if (!mounted) return;
+      setState(() { _dialogIsOpen = false; });
+      if (saved == null) return;
+      setState(() { _servicePreference = saved; });
+      if (saved == 'apple_music') _appleMusicService?.loadPlaylists();
+      ScaffoldMessenger.of(this.context).showSnackBar(
+        SnackBar(content: Text(saved == 'apple_music' ? 'Switched to Apple Music.' : 'Spotify settings saved.')),
+      );
+    });
   }
 
   void _handleRawKey(RawKeyEvent event) {
-    if (ModalRoute.of(context)?.isCurrent == false) {
+    if (_dialogIsOpen || ModalRoute.of(context)?.isCurrent == false) {
       return;
     }
 
@@ -1243,6 +1333,15 @@ class _MusicPageState extends State<MusicPage> with WidgetsBindingObserver {
   @override
   Widget build(BuildContext context) {
     final music = context.watch<MusicPlaybackService>();
+    final apple = context.watch<AppleMusicService>();
+    final usingApple = _servicePreference == 'apple_music';
+
+    final String? activeError = usingApple ? apple.lastError : music.lastError;
+    final bool activeIsInfo = usingApple ? false : music.webApiForbidden;
+    final String? activeTrack = usingApple ? apple.currentTrack : music.currentTrack;
+    final String? activeArtist = usingApple ? apple.currentArtist : music.currentArtist;
+    final String? activePlaylist = usingApple ? apple.currentPlaylistName : music.currentPlaylistName;
+    final bool activeIsPlaying = usingApple ? apple.isPlaying : music.isPlaying;
 
     return PopScope(
       onPopInvokedWithResult: (didPop, result) async {
@@ -1261,14 +1360,9 @@ class _MusicPageState extends State<MusicPage> with WidgetsBindingObserver {
             ),
             actions: [
               IconButton(
-                tooltip: 'Spotify Settings',
-                onPressed: () => _showSpotifySettingsDialog(context, music),
+                tooltip: 'Music Settings',
+                onPressed: () => _showMusicSettingsDialog(context),
                 icon: const Icon(Icons.settings),
-              ),
-              IconButton(
-                tooltip: 'Home',
-                onPressed: _handleBackButton,
-                icon: const Icon(Icons.home),
               ),
             ],
           ),
@@ -1276,30 +1370,90 @@ class _MusicPageState extends State<MusicPage> with WidgetsBindingObserver {
             child: Column(
               children: [
                 _StatusBanner(
-                  errorText: music.lastError,
-                  isInfo: music.webApiForbidden,
+                  // During initial load show "Connecting to Spotify..." with a
+                  // spinner rather than an error — isLoading covers the window
+                  // between page open and the first playlistsLoaded signal.
+                  errorText: (!usingApple && music.isLoading)
+                      ? 'Connecting to Spotify...'  // shown only when usingApple=false
+                      : activeError,
+                  isInfo: activeIsInfo,
+                  isReconnecting: !usingApple && (music.isReconnecting || music.isLoading),
                 ),
-                _NowPlayingCard(music: music),
+                _NowPlayingCard(
+                  currentTrack: activeTrack,
+                  currentArtist: activeArtist,
+                  currentPlaylistName: activePlaylist,
+                ),
                 Expanded(
-                  child: _MusicContent(
-                    music: music,
-                    isScanning: _isScanning,
-                    isScanningPaused: _isScanningPaused,
-                    scanningIndex: _scanningIndex,
-                    scanningPhase: _scanningPhase,
-                    darkColor: _darkColor,
-                    lightColor: _lightColor,
-                    gridColumns: _gridColumns,
-                    buttonSize: _buttonSize,
-                    resumeScanning: _resumeScanning,
-                    pauseScanning: _pauseScanning,
-                    stopScanning: _stopScanning,
-                    handleBackButton: _handleBackButton,
-                    onPlaylistSelected: _selectPlaylistAndStartPlayback,
+                  child: Stack(
+                    children: [
+                      usingApple
+                          ? _AppleMusicContent(
+                              apple: apple,
+                              isScanning: _isScanning,
+                              isScanningPaused: _isScanningPaused,
+                              scanningIndex: _scanningIndex,
+                              scanningPhase: _scanningPhase,
+                              darkColor: _darkColor,
+                              lightColor: _lightColor,
+                              gridColumns: _gridColumns,
+                              buttonSize: _buttonSize,
+                              resumeScanning: _resumeScanning,
+                              pauseScanning: _pauseScanning,
+                              handleBackButton: _handleBackButton,
+                              onPlaylistSelected: _selectAppleMusicPlaylist,
+                            )
+                          : _MusicContent(
+                              music: music,
+                              isScanning: _isScanning,
+                              isScanningPaused: _isScanningPaused,
+                              scanningIndex: _scanningIndex,
+                              scanningPhase: _scanningPhase,
+                              darkColor: _darkColor,
+                              lightColor: _lightColor,
+                              gridColumns: _gridColumns,
+                              buttonSize: _buttonSize,
+                              resumeScanning: _resumeScanning,
+                              pauseScanning: _pauseScanning,
+                              stopScanning: _stopScanning,
+                              handleBackButton: _handleBackButton,
+                              onPlaylistSelected: _selectPlaylistAndStartPlayback,
+                            ),
+                      // Full-area loading overlay shown while Spotify is connecting
+                      // or switching playlists — more visible than the top banner.
+                      if (!usingApple && music.isReconnecting)
+                        Container(
+                          color: Colors.black54,
+                          child: Center(
+                            child: Column(
+                              mainAxisSize: MainAxisSize.min,
+                              children: [
+                                const CircularProgressIndicator(
+                                  color: Colors.white,
+                                  strokeWidth: 3,
+                                ),
+                                const SizedBox(height: 20),
+                                Padding(
+                                  padding: const EdgeInsets.symmetric(horizontal: 32),
+                                  child: Text(
+                                    music.lastError ?? 'Starting playlist...',
+                                    style: const TextStyle(
+                                      color: Colors.white,
+                                      fontSize: 18,
+                                      fontWeight: FontWeight.w500,
+                                    ),
+                                    textAlign: TextAlign.center,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
                 _ControlBar(
-                  music: music,
+                  isPlaying: activeIsPlaying,
                   isScanning: _isScanning,
                   scanningIndex: _scanningIndex,
                   scanningPhase: _scanningPhase,
@@ -1309,16 +1463,6 @@ class _MusicPageState extends State<MusicPage> with WidgetsBindingObserver {
                   onSkipNext: _handleSkipNext,
                   onStopPlayback: _handleStopPlayback,
                   onChangeMusic: _handleChangeMusic,
-                  onTalkAboutMusic: () async {
-                    if (widget.onTalkAboutMusic != null) {
-                      await widget.onTalkAboutMusic!(music.musicContextSummary);
-                    }
-                  },
-                  onTalkAboutSomethingElse: () async {
-                    if (widget.onTalkAboutSomethingElse != null) {
-                      await widget.onTalkAboutSomethingElse!();
-                    }
-                  },
                 ),
               ],
             ),
@@ -1332,10 +1476,12 @@ class _MusicPageState extends State<MusicPage> with WidgetsBindingObserver {
 class _StatusBanner extends StatelessWidget {
   final String? errorText;
   final bool isInfo;
+  final bool isReconnecting;
 
   const _StatusBanner({
     required this.errorText,
     this.isInfo = false,
+    this.isReconnecting = false,
   });
 
   @override
@@ -1344,31 +1490,56 @@ class _StatusBanner extends StatelessWidget {
       return const SizedBox.shrink();
     }
 
+    // Three visual states:
+    //   isReconnecting → neutral blue spinner (working, not an error)
+    //   isInfo         → blue info icon (informational)
+    //   default        → orange warning icon (actual error)
+    final Color bgColor = isReconnecting
+        ? const Color(0xFFEFF6FF)
+        : isInfo
+            ? const Color(0xFFEFF6FF)
+            : const Color(0xFFFFF2EE);
+    final Color borderColor = isReconnecting
+        ? const Color(0xFF93C5FD)
+        : isInfo
+            ? const Color(0xFFBFDBFE)
+            : const Color(0xFFFFB49F);
+    final Color textColor = isReconnecting
+        ? const Color(0xFF1E40AF)
+        : isInfo
+            ? const Color(0xFF1E3A8A)
+            : const Color(0xFF7A2E0E);
+
     return Container(
       width: double.infinity,
       margin: const EdgeInsets.fromLTRB(12, 8, 12, 4),
       padding: const EdgeInsets.all(10),
       decoration: BoxDecoration(
-        color: isInfo ? const Color(0xFFEFF6FF) : const Color(0xFFFFF2EE),
+        color: bgColor,
         borderRadius: BorderRadius.circular(10),
-        border: Border.all(
-          color: isInfo ? const Color(0xFFBFDBFE) : const Color(0xFFFFB49F),
-        ),
+        border: Border.all(color: borderColor),
       ),
       child: Row(
         children: [
-          Icon(
-            isInfo ? Icons.info_outline : Icons.warning_amber_rounded,
-            color: isInfo ? const Color(0xFF1E40AF) : const Color(0xFFB54708),
-          ),
+          if (isReconnecting)
+            SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                valueColor: AlwaysStoppedAnimation<Color>(textColor),
+              ),
+            )
+          else
+            Icon(
+              isInfo ? Icons.info_outline : Icons.warning_amber_rounded,
+              color: isInfo ? const Color(0xFF1E40AF) : const Color(0xFFB54708),
+            ),
           const SizedBox(width: 8),
           Expanded(
             child: Text(
               errorText!,
-              style: TextStyle(
-                color:
-                    isInfo ? const Color(0xFF1E3A8A) : const Color(0xFF7A2E0E),
-              ),
+              style: TextStyle(color: textColor),
             ),
           ),
         ],
@@ -1378,22 +1549,28 @@ class _StatusBanner extends StatelessWidget {
 }
 
 class _NowPlayingCard extends StatelessWidget {
-  final MusicPlaybackService music;
+  final String? currentTrack;
+  final String? currentArtist;
+  final String? currentPlaylistName;
 
-  const _NowPlayingCard({required this.music});
+  const _NowPlayingCard({
+    this.currentTrack,
+    this.currentArtist,
+    this.currentPlaylistName,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final title = music.currentTrack?.trim().isNotEmpty == true
-        ? music.currentTrack!
+    final title = currentTrack?.trim().isNotEmpty == true
+        ? currentTrack!
         : 'Nothing playing';
 
     final subtitleParts = <String>[];
-    if (music.currentArtist?.trim().isNotEmpty == true) {
-      subtitleParts.add(music.currentArtist!);
+    if (currentArtist?.trim().isNotEmpty == true) {
+      subtitleParts.add(currentArtist!);
     }
-    if (music.currentPlaylistName?.trim().isNotEmpty == true) {
-      subtitleParts.add('Playlist: ${music.currentPlaylistName}');
+    if (currentPlaylistName?.trim().isNotEmpty == true) {
+      subtitleParts.add('Playlist: $currentPlaylistName');
     }
     final subtitle = subtitleParts.join(' • ');
 
@@ -1482,10 +1659,13 @@ class _MusicContent extends StatelessWidget {
     ];
 
     final availableWidth = MediaQuery.of(context).size.width - 40; // Account for padding
-    final spacing = 10.0;
-    final gridPadding = 20.0;
+    const spacing = 10.0;
+    const gridPadding = 20.0;
 
-    double effectiveButtonSize = (availableWidth / gridColumns).clamp(40.0, buttonSize);
+    // Never use more columns than there are buttons — prevents tiny invisible tiles
+    // when only a handful of fallback playlists are shown on a wide grid setting.
+    final effectiveColumns = allButtons.length.clamp(1, gridColumns);
+    double effectiveButtonSize = (availableWidth / effectiveColumns).clamp(40.0, buttonSize);
     final double fontSize = ((effectiveButtonSize / 10) * 1.44).clamp(14.4, 25.9);
 
     final showFallbackBanner = music.playlists.isEmpty;
@@ -1577,7 +1757,7 @@ class _MusicContent extends StatelessWidget {
               child: GridView.builder(
                 physics: const AlwaysScrollableScrollPhysics(),
                 gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: gridColumns,
+                  crossAxisCount: effectiveColumns,
                   childAspectRatio: 1.0,
                   crossAxisSpacing: spacing,
                   mainAxisSpacing: spacing,
@@ -1630,7 +1810,7 @@ class _MusicContent extends StatelessWidget {
 }
 
 class _ControlBar extends StatelessWidget {
-  final MusicPlaybackService music;
+  final bool isPlaying;
   final bool isScanning;
   final int scanningIndex;
   final String scanningPhase;
@@ -1640,11 +1820,9 @@ class _ControlBar extends StatelessWidget {
   final VoidCallback onSkipNext;
   final VoidCallback onStopPlayback;
   final VoidCallback onChangeMusic;
-  final Future<void> Function() onTalkAboutMusic;
-  final Future<void> Function() onTalkAboutSomethingElse;
 
   const _ControlBar({
-    required this.music,
+    required this.isPlaying,
     required this.isScanning,
     required this.scanningIndex,
     required this.scanningPhase,
@@ -1654,8 +1832,6 @@ class _ControlBar extends StatelessWidget {
     required this.onSkipNext,
     required this.onStopPlayback,
     required this.onChangeMusic,
-    required this.onTalkAboutMusic,
-    required this.onTalkAboutSomethingElse,
   });
 
   @override
@@ -1665,8 +1841,6 @@ class _ControlBar extends StatelessWidget {
     final bool showHighlight1 = isControlsPhase && isScanning && scanningIndex == 1;
     final bool showHighlight2 = isControlsPhase && isScanning && scanningIndex == 2;
     final bool showHighlight3 = isControlsPhase && isScanning && scanningIndex == 3;
-    final bool showHighlight4 = isControlsPhase && isScanning && scanningIndex == 4;
-    final bool showHighlight5 = isControlsPhase && isScanning && scanningIndex == 5;
 
     return Container(
       width: double.infinity,
@@ -1693,8 +1867,8 @@ class _ControlBar extends StatelessWidget {
                   : null,
               elevation: showHighlight0 ? 8.0 : null,
             ),
-            icon: Icon((music.isPlaying && !isScanning) ? Icons.pause : Icons.play_arrow),
-            label: Text((music.isPlaying && !isScanning) ? 'Pause' : 'Resume'),
+            icon: Icon((isPlaying && !isScanning) ? Icons.pause : Icons.play_arrow),
+            label: Text((isPlaying && !isScanning) ? 'Pause' : 'Continue'),
           ),
           ElevatedButton.icon(
             onPressed: onSkipNext,
@@ -1733,32 +1907,358 @@ class _ControlBar extends StatelessWidget {
             icon: const Icon(Icons.stop),
             label: const Text('Stop Playing'),
           ),
-          OutlinedButton.icon(
-            onPressed: onTalkAboutMusic,
-            style: OutlinedButton.styleFrom(
-              side: BorderSide(
-                color: showHighlight4 ? lightColor : Colors.grey.shade300,
-                width: showHighlight4 ? 3.0 : 1.0,
-              ),
-              backgroundColor: showHighlight4 ? lightColor.withOpacity(0.1) : null,
-            ),
-            icon: const Icon(Icons.record_voice_over),
-            label: const Text('Talk About Music'),
+        ],
+      ),
+    );
+  }
+}
+
+// Shown on the very first Music page launch when no service preference has been
+// saved. Cannot be dismissed without picking a service — barrierDismissible: false.
+class _ServicePickerDialog extends StatefulWidget {
+  const _ServicePickerDialog();
+
+  @override
+  State<_ServicePickerDialog> createState() => _ServicePickerDialogState();
+}
+
+class _ServicePickerDialogState extends State<_ServicePickerDialog> {
+  String _selected = 'spotify';
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Row(
+        children: [
+          Icon(Icons.music_note, color: Color(0xFF0369A1)),
+          SizedBox(width: 8),
+          Text('Choose Music Service'),
+        ],
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Which music service would you like to use?',
+            style: TextStyle(fontSize: 15),
           ),
-          OutlinedButton.icon(
-            onPressed: onTalkAboutSomethingElse,
-            style: OutlinedButton.styleFrom(
-              side: BorderSide(
-                color: showHighlight5 ? lightColor : Colors.grey.shade300,
-                width: showHighlight5 ? 3.0 : 1.0,
+          const SizedBox(height: 16),
+          Row(
+            children: [
+              Expanded(
+                child: _ServiceToggleButton(
+                  label: 'Spotify',
+                  icon: Icons.music_note,
+                  selected: _selected == 'spotify',
+                  onTap: () => setState(() => _selected = 'spotify'),
+                ),
               ),
-              backgroundColor: showHighlight5 ? lightColor.withOpacity(0.1) : null,
-            ),
-            icon: const Icon(Icons.forum),
-            label: const Text('Talk About Something Else'),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _ServiceToggleButton(
+                  label: 'Apple Music',
+                  icon: Icons.apple,
+                  selected: _selected == 'apple_music',
+                  onTap: () => setState(() => _selected = 'apple_music'),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            _selected == 'apple_music'
+                ? 'Uses your device\'s Music library. Allow access under Settings > Privacy & Security > Media & Apple Music.'
+                : 'Plays music from your Spotify account. You\'ll be prompted to connect Spotify on the next screen.',
+            style: const TextStyle(fontSize: 13, color: Colors.black54),
           ),
         ],
       ),
+      actions: [
+        ElevatedButton(
+          style: ElevatedButton.styleFrom(
+            backgroundColor: const Color(0xFF0369A1),
+            foregroundColor: Colors.white,
+          ),
+          onPressed: () => Navigator.of(context).pop(_selected),
+          child: const Text('Get Started'),
+        ),
+      ],
+    );
+  }
+}
+
+class _MusicSettingsDialog extends StatefulWidget {
+  final String initialService;
+
+  const _MusicSettingsDialog({required this.initialService});
+
+  @override
+  State<_MusicSettingsDialog> createState() => _MusicSettingsDialogState();
+}
+
+class _MusicSettingsDialogState extends State<_MusicSettingsDialog> {
+  late String _selectedService;
+
+  @override
+  void initState() {
+    super.initState();
+    _selectedService = widget.initialService;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+      title: const Row(
+        children: [
+          Icon(Icons.settings, color: Color(0xFF0369A1)),
+          SizedBox(width: 8),
+          Text('Music Settings'),
+        ],
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text('Music Service', style: TextStyle(fontWeight: FontWeight.w600)),
+          const SizedBox(height: 12),
+          Row(
+            children: [
+              Expanded(
+                child: _ServiceToggleButton(
+                  label: 'Spotify',
+                  icon: Icons.music_note,
+                  selected: _selectedService == 'spotify',
+                  onTap: () => setState(() => _selectedService = 'spotify'),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: _ServiceToggleButton(
+                  label: 'Apple Music',
+                  icon: Icons.apple,
+                  selected: _selectedService == 'apple_music',
+                  onTap: () => setState(() => _selectedService = 'apple_music'),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          Text(
+            _selectedService == 'apple_music'
+                ? 'Uses your device\'s Music library. Allow access under Settings > Privacy & Security > Media & Apple Music.'
+                : 'Plays music from your Spotify account.',
+            style: const TextStyle(fontSize: 13, color: Colors.black54),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        ElevatedButton(
+          onPressed: _save,
+          child: const Text('Save'),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _save() async {
+    await AppleMusicService.saveServicePreference(_selectedService);
+    if (mounted) Navigator.of(context).pop(_selectedService);
+  }
+}
+
+class _ServiceToggleButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final bool selected;
+  final VoidCallback onTap;
+
+  const _ServiceToggleButton({
+    required this.label,
+    required this.icon,
+    required this.selected,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 150),
+        padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
+        decoration: BoxDecoration(
+          color: selected ? const Color(0xFF0369A1) : Colors.grey[100],
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: selected ? const Color(0xFF0369A1) : Colors.grey[300]!,
+            width: 2,
+          ),
+        ),
+        child: Row(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(icon, size: 18, color: selected ? Colors.white : Colors.grey[700]),
+            const SizedBox(width: 6),
+            Text(
+              label,
+              style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: selected ? Colors.white : Colors.grey[700],
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AppleMusicContent extends StatelessWidget {
+  final AppleMusicService apple;
+  final bool isScanning;
+  final bool isScanningPaused;
+  final int scanningIndex;
+  final String scanningPhase;
+  final Color darkColor;
+  final Color lightColor;
+  final int gridColumns;
+  final double buttonSize;
+  final VoidCallback resumeScanning;
+  final VoidCallback pauseScanning;
+  final VoidCallback handleBackButton;
+  final Function(ApplePlaylist) onPlaylistSelected;
+
+  const _AppleMusicContent({
+    required this.apple,
+    required this.isScanning,
+    required this.isScanningPaused,
+    required this.scanningIndex,
+    required this.scanningPhase,
+    required this.darkColor,
+    required this.lightColor,
+    required this.gridColumns,
+    required this.buttonSize,
+    required this.resumeScanning,
+    required this.pauseScanning,
+    required this.handleBackButton,
+    required this.onPlaylistSelected,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    if (apple.isLoading) {
+      return const Center(child: CircularProgressIndicator());
+    }
+
+    if (apple.lastError != null && apple.playlists.isEmpty) {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              const Icon(Icons.apple, size: 48, color: Colors.grey),
+              const SizedBox(height: 12),
+              Text(apple.lastError!, textAlign: TextAlign.center, style: const TextStyle(color: Colors.black54)),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: apple.loadPlaylists,
+                icon: const Icon(Icons.refresh),
+                label: const Text('Retry'),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final allButtons = [
+      {'name': 'Go Back', 'isBackButton': true},
+      ...apple.playlists.map((p) => {'name': p.name, 'isBackButton': false, 'playlist': p}),
+    ];
+
+    final availableWidth = MediaQuery.of(context).size.width - 40;
+    const spacing = 10.0;
+    const gridPadding = 20.0;
+    final effectiveButtonSize = (availableWidth / gridColumns).clamp(40.0, buttonSize);
+    final fontSize = ((effectiveButtonSize / 10) * 1.44).clamp(14.4, 25.9);
+
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+          child: Row(
+            children: [
+              ElevatedButton.icon(
+                onPressed: apple.loadPlaylists,
+                icon: const Icon(Icons.queue_music),
+                label: const Text('Refresh Playlists'),
+              ),
+            ],
+          ),
+        ),
+        Expanded(
+          child: Container(
+            color: Colors.grey[100],
+            padding: const EdgeInsets.all(gridPadding),
+            child: Scrollbar(
+              thumbVisibility: true,
+              child: GridView.builder(
+                physics: const AlwaysScrollableScrollPhysics(),
+                gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                  crossAxisCount: gridColumns,
+                  childAspectRatio: 1.0,
+                  crossAxisSpacing: spacing,
+                  mainAxisSpacing: spacing,
+                ),
+                itemCount: allButtons.length,
+                itemBuilder: (context, index) {
+                  final button = allButtons[index];
+                  final isBackButton = button['isBackButton'] == true;
+                  final label = button['name'] as String;
+                  final buttonScanIndex = isBackButton ? -1 : index - 1;
+                  final isHighlighted = scanningPhase == 'playlists' &&
+                      buttonScanIndex == scanningIndex &&
+                      (isScanning || isScanningPaused);
+
+                  return Padding(
+                    padding: const EdgeInsets.all(2.0),
+                    child: SizedBox(
+                      width: effectiveButtonSize,
+                      height: effectiveButtonSize,
+                      child: SpeechBubbleButton(
+                        label: label,
+                        onPressed: () {
+                          if (isScanningPaused && !isScanning && scanningPhase == 'playlists') {
+                            resumeScanning();
+                          } else if (isBackButton) {
+                            handleBackButton();
+                          } else {
+                            onPlaylistSelected(button['playlist'] as ApplePlaylist);
+                          }
+                        },
+                        isActive: true,
+                        isHighlighted: isHighlighted,
+                        darkColor: darkColor,
+                        lightColor: lightColor,
+                        fontSize: fontSize,
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+        ),
+      ],
     );
   }
 }

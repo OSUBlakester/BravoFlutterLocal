@@ -25,8 +25,8 @@ class _AdminSettingsPageState extends State<AdminSettingsPage> {
   // Local preference: boards panel position ('left' | 'top' | 'right' | 'bottom')
   String _menuPosition = 'left';
 
-  // Local preference: minimum tap hold duration in ms (0 = instant)
-  int _tapMinDurationMs = 0;
+  // Local preference: minimum tap hold duration in ms. Default = Low (100ms).
+  int _tapMinDurationMs = 100;
 
   // Controllers for editable fields
   final TextEditingController _toolbarPinController = TextEditingController();
@@ -87,7 +87,7 @@ class _AdminSettingsPageState extends State<AdminSettingsPage> {
       if (mounted) {
         setState(() {
           _menuPosition = prefs.getString('tap_menu_position') ?? 'left';
-          _tapMinDurationMs = prefs.getInt('tap_min_duration_ms') ?? 0;
+          _tapMinDurationMs = prefs.getInt('tap_min_duration_ms') ?? 100;
         });
       }
     });

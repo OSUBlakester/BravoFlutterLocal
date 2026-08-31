@@ -2,7 +2,7 @@ name: bravo_aac
 description: "Bravo AAC - Augmentative and Alternative Communication"
 publish_to: 'none'
 
-version: 1.0.2+43
+version: 1.0.2+44
 
 environment:
   sdk: ^3.8.1
@@ -65,3 +65,5 @@ flutter:
     - assets/whitespeechbubble.jpg
     - assets/dolch_sight_words.json
     - assets/spelling_fallback_words.txt
+    - assets/right_answer.mp3
+    - assets/wrong_answer.mp3

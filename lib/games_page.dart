@@ -47,6 +47,13 @@ class GamesPage extends StatefulWidget {
   _GamesPageState createState() => _GamesPageState();
 }
 
+// Built-in picnic options that get a free first-item anchor turn.
+// Custom options (anything not in this set) always validate every item.
+const _kDefaultPicnicOptions = {
+  'Rhyming', 'Same Color', 'Same First Letter', 'Alphabet Next Letter',
+  'Same Vowel Sound', 'Same Last Letter', 'Same Number of Syllables',
+};
+
 class _GamesPageState extends State<GamesPage> {
   bool _skipTtsStopOnDispose = false;
   // Game state
@@ -102,7 +109,7 @@ class _GamesPageState extends State<GamesPage> {
   late stt.SpeechToText _speech;
   bool _isListening = false;
   String _listeningFor =
-      ''; // 'ready', 'yes_no', 'yes_no_guess', 'wake_word', 'intent', 'player_question', 'player_guess', 'story_wake_word', 'story_partner_question'
+      ''; // 'ready', 'yes_no', 'yes_no_guess', 'wake_word', 'intent', 'player_question', 'player_guess', 'story_wake_word', 'story_partner_question', 'picnic_partner_speech'
   String _realtimeTranscript = ''; // Real-time transcription display
   bool _isProcessingSpeechResult = false; // Guard against duplicate callbacks
   String _lastProcessedTranscript =
@@ -287,6 +294,25 @@ class _GamesPageState extends State<GamesPage> {
   int _hmAlphabetScanIndex = 0;
   Timer? _hmAlphabetScanTimer;
   bool _hmIsAlphabetScanning = false;
+
+  // Picnic Game state
+  List<String> _picnicAllOptions = [];
+  Map<String, String?> _picnicOptionImages = {}; // label → custom imageUrl from server
+  String? _picnicSelectedOption;
+  String? _picnicFirstPlayer;
+  String? _picnicCurrentPlayer;
+  String? _picnicAnchorItem;
+  String? _picnicCurrentLetter;
+  List<String> _picnicUsedItemsThisTurn = [];
+  List<String> _picnicPlayedItems = [];
+  List<Map<String, dynamic>> _picnicLog = [];
+  String _picnicWrongExplanation = '';
+  bool _isPicnicTransitionInProgress = false;
+  Timer? _picnicPartnerSilenceTimer;     // 3s after first speech
+  Timer? _picnicPartnerNoSpeechTimer;    // 10s initial no-speech timeout
+  Timer? _picnicPartnerHardTimeoutTimer; // 30s hard cap
+  Timer? _picnicPartnerRestartTimer;     // fast restart after finalResult
+  bool _picnicPartnerFirstSpeechDetected = false;
   int? _hmLastProcessedLetterCount; // Track to prevent double-processing
 
   // Hangman custom categories
@@ -433,8 +459,16 @@ class _GamesPageState extends State<GamesPage> {
       }
 
       debugPrint(
-        'Games page: [FAST_RESTART] Restarting listener from $source for $_listeningFor (speech.isListening=${_speech.isListening})',
+        'Games page: [FAST_RESTART] Restarting listener from $source for $_listeningFor (speech.isListening=${_speech.isListening}, isAvailable=${_speech.isAvailable})',
       );
+      // If the speech engine became unavailable after repeated stop/start cycles,
+      // reinitialize it before restarting so we get a fresh iOS SFSpeechRecognizer.
+      if (!_speech.isAvailable) {
+        debugPrint('Games page: [FAST_RESTART] Speech not available — reinitializing before restart');
+        await _initializeSpeech();
+        if (!mounted || _isExiting) return;
+        if (_listeningFor.isEmpty) return;
+      }
       await _startListening(_listeningFor);
     });
   }
@@ -632,7 +666,7 @@ class _GamesPageState extends State<GamesPage> {
 
     await _startListeningWithGuard(
       'wake_word',
-      preListenDelay: const Duration(milliseconds: 1200),
+      preListenDelay: const Duration(milliseconds: 150),
       ignoreWindow: const Duration(milliseconds: 3000),
     );
   }
@@ -641,8 +675,11 @@ class _GamesPageState extends State<GamesPage> {
     return listeningFor == 'player_question' ||
         listeningFor == 'player_guess' ||
         listeningFor == 'story_partner_question' ||
-      listeningFor == 'hm_letter_count' ||
-      listeningFor == 'hm_letter';
+        listeningFor == 'picnic_partner_speech' ||
+        listeningFor == 'wake_word' ||
+        listeningFor == 'story_wake_word' ||
+        listeningFor == 'hm_letter_count' ||
+        listeningFor == 'hm_letter';
   }
 
   Future<void> _initializeSpeech() async {
@@ -807,8 +844,12 @@ class _GamesPageState extends State<GamesPage> {
     // For story questions, use a long pause so our 10s/30s timeout timers can control the session
     final pauseDuration = (listeningFor == 'story_partner_question')
         ? Duration(seconds: 20) // Allow 20s silence between utterances (our timeout controls the session)
+      : (listeningFor == 'picnic_partner_speech')
+      ? Duration(seconds: 10) // Match WakeWordService pauseFor; 3s silence timer controls commit
       : (listeningFor == 'player_question')
       ? Duration(seconds: 4)
+      : (listeningFor == 'wake_word' || listeningFor == 'story_wake_word')
+      ? Duration(seconds: 3) // Short pause so non-matching partials reset quickly instead of stalling 60s
       : (listeningFor == 'yes_no' ||
               listeningFor == 'yes_no_guess' ||
               listeningFor == 'hm_letter_count' ||
@@ -917,6 +958,46 @@ class _GamesPageState extends State<GamesPage> {
             _lastProcessedTranscript = transcript;
             _speech.stop();
             _handleSpeechResult(transcript, listeningFor);
+          } else if (listeningFor == 'picnic_partner_speech') {
+            // Guard against late finalResult callbacks that arrive after _speech.stop()
+            if (!_isListening || _listeningFor != 'picnic_partner_speech') return;
+            if (transcript.isNotEmpty) {
+              if (!_picnicPartnerFirstSpeechDetected) {
+                _picnicPartnerFirstSpeechDetected = true;
+                _picnicPartnerNoSpeechTimer?.cancel();
+              }
+              // Always reset the 3s silence timer — never commit immediately on finalResult.
+              // iOS fires finalResult prematurely (mid-sentence), so we can't distinguish
+              // "user is done" from "iOS gave up early." The silence timer commits only after
+              // 3s with no new results.
+              _picnicPartnerSilenceTimer?.cancel();
+              _picnicPartnerSilenceTimer = Timer(const Duration(seconds: 3), () {
+                if (!mounted || _isExiting) return;
+                if (!_isListening || _listeningFor != 'picnic_partner_speech') return;
+                if (_isProcessingSpeechResult) return;
+                final t = transcript.trim();
+                if (t.isEmpty) return;
+                _isProcessingSpeechResult = true;
+                _lastProcessedTranscript = t;
+                _speech.stop();
+                _handleSpeechResult(t, 'picnic_partner_speech');
+              });
+
+              // When iOS fires finalResult the session ends and _scheduleFastListeningRestart
+              // would normally wait 1s before resuming. That 1s gap means continuing speech
+              // is missed and the silence timer fires on an incomplete transcript. Instead,
+              // restart immediately (200ms) so new partials keep the silence timer alive.
+              if (result.finalResult) {
+                _picnicPartnerRestartTimer?.cancel();
+                _picnicPartnerRestartTimer = Timer(const Duration(milliseconds: 200), () async {
+                  if (!mounted || _isExiting) return;
+                  if (!_isListening || _listeningFor != 'picnic_partner_speech') return;
+                  if (_isProcessingSpeechResult) return;
+                  _listeningRestartTimer?.cancel(); // prevent the 1s restart from conflicting
+                  await _startListening('picnic_partner_speech');
+                });
+              }
+            }
           } else if (listeningFor == 'story_partner_question') {
             if (transcript.isNotEmpty) {
               _storyQuestionNoSpeechTimer?.cancel();
@@ -1102,12 +1183,17 @@ class _GamesPageState extends State<GamesPage> {
 
   Future<void> _startListeningWithGuard(
     String listeningFor, {
-    Duration preListenDelay = const Duration(milliseconds: 1400),
+    Duration preListenDelay = const Duration(milliseconds: 150),
     Duration ignoreWindow = const Duration(milliseconds: 3500),
   }) async {
+    // Run WakeWordService teardown concurrently with the pre-listen delay so
+    // both finish in parallel instead of sequentially.
+    final wakeWordStopFuture = WakeWordService.forceStopAndReset();
     if (preListenDelay.inMilliseconds > 0) {
       await Future.delayed(preListenDelay);
     }
+    await wakeWordStopFuture;
+    WakeWordService.wakeWordShouldBeActive = false;
     if (!mounted || _isExiting) return;
 
     var effectiveIgnoreWindow = ignoreWindow;
@@ -1169,6 +1255,10 @@ class _GamesPageState extends State<GamesPage> {
     _listeningRestartTimer?.cancel();
     _storyQuestionNoSpeechTimer?.cancel();
     _storyQuestionHardTimeoutTimer?.cancel();
+    _picnicPartnerSilenceTimer?.cancel();
+    _picnicPartnerNoSpeechTimer?.cancel();
+    _picnicPartnerHardTimeoutTimer?.cancel();
+    _picnicPartnerRestartTimer?.cancel();
     _clearHmLetterSilenceTimer();
     if (_listeningFor == 'player_guess') {
       _clearGuessNoInputTimeoutWindow();
@@ -1216,6 +1306,8 @@ class _GamesPageState extends State<GamesPage> {
         debugPrint('Games page: MATCHED wake word');
         if (_selectedGame == 'hangman' && _hmMode == 'mode-b') {
           await _hmHandleWakeWordForModeB();
+        } else if (_selectedGame == 'picnic') {
+          await _picnicHandleWakeWord();
         } else if (_isGuessGame) {
           await _handleGuessWakeWordDetected();
         } else {
@@ -1244,9 +1336,17 @@ class _GamesPageState extends State<GamesPage> {
       });
       await _startListeningWithGuard(
         'story_partner_question',
-        preListenDelay: const Duration(milliseconds: 500),
+        preListenDelay: const Duration(milliseconds: 100),
         ignoreWindow: const Duration(milliseconds: 1200),
       );
+      return;
+    }
+
+    if (listeningMode == 'picnic_partner_speech') {
+      _picnicPartnerSilenceTimer?.cancel();
+      _picnicPartnerNoSpeechTimer?.cancel();
+      _picnicPartnerHardTimeoutTimer?.cancel();
+      await _picnicProcessPartnerSpeech(transcript);
       return;
     }
 
@@ -1415,7 +1515,7 @@ class _GamesPageState extends State<GamesPage> {
           );
           await _startListeningWithGuard(
             'hm_letter',
-            preListenDelay: const Duration(milliseconds: 250),
+            preListenDelay: const Duration(milliseconds: 150),
             ignoreWindow: const Duration(milliseconds: 350),
           );
         } else {
@@ -1428,7 +1528,7 @@ class _GamesPageState extends State<GamesPage> {
         await _speak("I didn't catch a letter. Please say one letter.");
         await _startListeningWithGuard(
           'hm_letter',
-          preListenDelay: const Duration(milliseconds: 250),
+          preListenDelay: const Duration(milliseconds: 150),
           ignoreWindow: const Duration(milliseconds: 350),
         );
       }
@@ -1834,7 +1934,13 @@ class _GamesPageState extends State<GamesPage> {
           _currentOptionType != 'ttt_finished' &&
           _currentOptionType != 'hm_alphabet' &&
           _currentOptionType != 'hm_playing' &&
-          _currentOptionType != 'hm_finished')
+          _currentOptionType != 'hm_finished' &&
+          _currentOptionType != 'picnic_option' &&
+          _currentOptionType != 'picnic_who_first' &&
+          _currentOptionType != 'picnic_letter' &&
+          _currentOptionType != 'picnic_item' &&
+          _currentOptionType != 'picnic_wrong_answer' &&
+          _currentOptionType != 'picnic_finished')
         'Exit Game',
     ];
   }
@@ -1868,7 +1974,21 @@ class _GamesPageState extends State<GamesPage> {
         _startGuessGame('what');
       } else if (option == 'Story Builder') {
         _startStoryBuilder();
+      } else if (option == 'Picnic Game') {
+        _startPicnicGame();
       }
+    } else if (_currentOptionType == 'picnic_option') {
+      _picnicSelectOption(option);
+    } else if (_currentOptionType == 'picnic_who_first') {
+      _picnicSelectWhoFirst(option);
+    } else if (_currentOptionType == 'picnic_letter') {
+      _picnicSelectLetter(option);
+    } else if (_currentOptionType == 'picnic_item') {
+      _picnicUserItemSelected(option);
+    } else if (_currentOptionType == 'picnic_wrong_answer') {
+      _picnicHandleWrongAnswer(option);
+    } else if (_currentOptionType == 'picnic_finished') {
+      _picnicHandleFinished(option);
     } else if (_currentOptionType.startsWith('story_')) {
       _handleStoryOptionSelection(option);
     } else if (_currentOptionType == 'role') {
@@ -1945,7 +2065,7 @@ class _GamesPageState extends State<GamesPage> {
     );
     await _startListeningWithGuard(
       'wake_word',
-      preListenDelay: const Duration(milliseconds: 1800),
+      preListenDelay: const Duration(milliseconds: 100),
       ignoreWindow: const Duration(milliseconds: 4000),
     );
   }
@@ -2012,7 +2132,7 @@ class _GamesPageState extends State<GamesPage> {
     await _speak('I\'m listening. Do you have a question or guess?');
     await _startListeningWithGuard(
       'intent',
-      preListenDelay: const Duration(milliseconds: 450),
+      preListenDelay: const Duration(milliseconds: 100),
       ignoreWindow: const Duration(milliseconds: 3000),
     );
     _isWakeWordTransitionInProgress = false;
@@ -2031,7 +2151,7 @@ class _GamesPageState extends State<GamesPage> {
       await _speak('Ready for your question');
       await _startListeningWithGuard(
         'player_question',
-        preListenDelay: const Duration(milliseconds: 450),
+        preListenDelay: const Duration(milliseconds: 100),
         ignoreWindow: const Duration(milliseconds: 3000),
       );
       _isIntentTransitionInProgress = false;
@@ -2039,7 +2159,7 @@ class _GamesPageState extends State<GamesPage> {
       await _speak('Ready for your guess');
       await _startListeningWithGuard(
         'player_guess',
-        preListenDelay: const Duration(milliseconds: 450),
+        preListenDelay: const Duration(milliseconds: 100),
         ignoreWindow: const Duration(milliseconds: 3000),
       );
       _isIntentTransitionInProgress = false;
@@ -2289,7 +2409,8 @@ class _GamesPageState extends State<GamesPage> {
         final wordCount = text.trim().isEmpty
             ? 0
             : text.trim().split(RegExp(r'\s+')).length;
-        final cooldownMs = (2200 + (wordCount * 120)).clamp(2200, 7000).toInt();
+        // Keep suppression just long enough for TTS echo to fade (~600ms base).
+        final cooldownMs = (600 + (wordCount * 50)).clamp(600, 2000).toInt();
         _suppressSpeechInputFor(Duration(milliseconds: cooldownMs));
       }
     } else {
@@ -2586,7 +2707,7 @@ class _GamesPageState extends State<GamesPage> {
     );
     await _startListeningWithGuard(
       'story_wake_word',
-      preListenDelay: const Duration(milliseconds: 800),
+      preListenDelay: const Duration(milliseconds: 150),
       ignoreWindow: const Duration(milliseconds: 1800),
     );
   }
@@ -2762,7 +2883,7 @@ class _GamesPageState extends State<GamesPage> {
 
     await _startListeningWithGuard(
       'story_wake_word',
-      preListenDelay: const Duration(milliseconds: 800),
+      preListenDelay: const Duration(milliseconds: 150),
       ignoreWindow: const Duration(milliseconds: 1800),
     );
   }
@@ -2776,7 +2897,7 @@ class _GamesPageState extends State<GamesPage> {
     await _speak("I'm listening. Say The End to finish the story.");
     await _startListeningWithGuard(
       'story_partner_question',
-      preListenDelay: const Duration(milliseconds: 500),
+      preListenDelay: const Duration(milliseconds: 100),
       ignoreWindow: const Duration(milliseconds: 1200),
     );
   }
@@ -3985,7 +4106,7 @@ class _GamesPageState extends State<GamesPage> {
     );
     await _startListeningWithGuard(
       'ready',
-      preListenDelay: const Duration(milliseconds: 1200),
+      preListenDelay: const Duration(milliseconds: 150),
       ignoreWindow: const Duration(milliseconds: 3000),
     );
   }
@@ -4002,7 +4123,7 @@ class _GamesPageState extends State<GamesPage> {
     await _speak('How many letters are in your word? Say the number.');
     await _startListeningWithGuard(
       'hm_letter_count',
-      preListenDelay: const Duration(milliseconds: 1200),
+      preListenDelay: const Duration(milliseconds: 150),
       ignoreWindow: const Duration(milliseconds: 3000),
     );
   }
@@ -4303,7 +4424,7 @@ class _GamesPageState extends State<GamesPage> {
     await _speak('Is the letter $letter in your word? Say yes or no.');
     await _startListeningWithGuard(
       'hm_yes_no',
-      preListenDelay: const Duration(milliseconds: 1200),
+      preListenDelay: const Duration(milliseconds: 150),
       ignoreWindow: const Duration(milliseconds: 3000),
     );
   }
@@ -4710,7 +4831,7 @@ class _GamesPageState extends State<GamesPage> {
     // Start listening for wake word (Mode B) using guarded startup like Guess Mode B.
     await _startListeningWithGuard(
       'wake_word',
-      preListenDelay: const Duration(milliseconds: 1800),
+      preListenDelay: const Duration(milliseconds: 100),
       ignoreWindow: const Duration(milliseconds: 4000),
     );
   }
@@ -4751,7 +4872,7 @@ class _GamesPageState extends State<GamesPage> {
 
       await _startListeningWithGuard(
         'wake_word',
-        preListenDelay: const Duration(milliseconds: 1800),
+        preListenDelay: const Duration(milliseconds: 100),
         ignoreWindow: const Duration(milliseconds: 4000),
       );
     } else {
@@ -4781,7 +4902,7 @@ class _GamesPageState extends State<GamesPage> {
 
       await _startListeningWithGuard(
         'wake_word',
-        preListenDelay: const Duration(milliseconds: 1800),
+        preListenDelay: const Duration(milliseconds: 100),
         ignoreWindow: const Duration(milliseconds: 4000),
       );
     }
@@ -4806,7 +4927,7 @@ class _GamesPageState extends State<GamesPage> {
 
       await _startListeningWithGuard(
         'hm_letter',
-        preListenDelay: const Duration(milliseconds: 900),
+        preListenDelay: const Duration(milliseconds: 150),
         ignoreWindow: const Duration(milliseconds: 1500),
       );
     } finally {
@@ -5109,6 +5230,706 @@ class _GamesPageState extends State<GamesPage> {
         context,
       ).showSnackBar(SnackBar(content: Text('Error resetting categories: $e')));
     }
+  }
+
+  // ===== PICNIC GAME METHODS =====
+
+  void _picnicResetState() {
+    _picnicAllOptions = [];
+    _picnicOptionImages = {};
+    _picnicSelectedOption = null;
+    _picnicFirstPlayer = null;
+    _picnicCurrentPlayer = null;
+    _picnicAnchorItem = null;
+    _picnicCurrentLetter = null;
+    _picnicUsedItemsThisTurn = [];
+    _picnicPlayedItems = [];
+    _picnicLog = [];
+    _picnicWrongExplanation = '';
+    _isPicnicTransitionInProgress = false;
+  }
+
+  Future<void> _picnicPlaySound(String assetName) async {
+    try {
+      final player = AudioPlayer();
+      await player.setAsset('assets/$assetName');
+      await player.play();
+      await player.dispose();
+    } catch (e) {
+      debugPrint('[Picnic] Sound error: $e');
+    }
+  }
+
+  // Returns "a X", "an X", or "some X" matching the web app's withArticle() logic.
+  String _picnicWithArticle(String item) {
+    final s = item.trim();
+    final lower = s.toLowerCase();
+    final firstWord = lower.split(RegExp(r'\s+')).first;
+    const uncountable = {
+      'water', 'juice', 'milk', 'soda', 'lemonade', 'tea', 'coffee',
+      'sunscreen', 'sunblock', 'lotion', 'sand', 'mud', 'dirt', 'snow', 'ice',
+      'grass', 'flour', 'sugar', 'salt', 'rice', 'pasta', 'bread', 'cheese',
+      'butter', 'cream', 'soup', 'salad', 'fruit', 'candy', 'chocolate',
+      'honey', 'ketchup', 'mustard', 'sauce', 'food', 'air', 'wind', 'rain',
+      'sunshine', 'shade', 'sunlight', 'popcorn', 'trail mix', 'granola',
+    };
+    if (uncountable.contains(firstWord) || uncountable.contains(lower)) return 'some $s';
+    if (RegExp(r's$').hasMatch(lower) &&
+        !RegExp(r'ss$|us$|is$|ous$|ness$|ess$|gas$|yes$').hasMatch(lower)) {
+      return 'some $s';
+    }
+    if (RegExp(r'^[aeiou]', caseSensitive: false).hasMatch(s)) return 'an $s';
+    return 'a $s';
+  }
+
+  void _startPicnicGame() async {
+    _picnicResetState();
+    _deferSelectionScanning = true;
+    setState(() {
+      _selectedGame = 'picnic';
+      _currentView = 'loading';
+      _isLoading = true;
+      _statusText = 'Loading game options...';
+    });
+
+    try {
+      final response = await http.get(
+        Uri.parse('${EnvironmentConfig.apiBaseUrl}/api/games/picnic/categories'),
+        headers: {
+          'Authorization': 'Bearer ${widget.idToken}',
+          'X-User-ID': widget.aacUserId,
+        },
+      );
+
+      if (!mounted) return;
+      List<String> options = [];
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        final rawList = data['all_categories'] ?? data['options'] ?? [];
+        if (rawList is List) {
+          for (final entry in rawList) {
+            if (entry is String && entry.trim().isNotEmpty) {
+              options.add(entry.trim());
+            } else if (entry is Map) {
+              final label = (entry['label'] as String?)?.trim() ?? '';
+              if (label.isNotEmpty) {
+                options.add(label);
+                final imageUrl = entry['imageUrl'] as String?;
+                if (imageUrl != null && imageUrl.isNotEmpty) {
+                  _picnicOptionImages[label] = imageUrl;
+                }
+              }
+            }
+          }
+        }
+      }
+      if (options.isEmpty) {
+        options = ['Rhyming', 'Same Color', 'Same First Letter',
+          'Alphabet Next Letter', 'Same Vowel Sound', 'Same Last Letter',
+          'Same Number of Syllables'];
+      }
+      _picnicAllOptions = options;
+
+      await _speak("Let's play I'm going on a picnic! Choose a game option.");
+      if (!mounted) return;
+
+      _deferSelectionScanning = true;
+      setState(() {
+        _currentOptions = [...options, 'Exit Game'];
+        _currentOptionType = 'picnic_option';
+        _currentView = 'picnic_option_selection';
+        _statusText = 'Choose a game option';
+        _isLoading = false;
+      });
+      if (_enableScanning && mounted) {
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (mounted) {
+            _deferSelectionScanning = false;
+            _restartScanningForSelectionStep(announceWaitPrompt: false);
+          }
+        });
+      } else {
+        _deferSelectionScanning = false;
+      }
+    } catch (e) {
+      debugPrint('[Picnic] Error loading options, using defaults: $e');
+      if (!mounted) return;
+      _picnicAllOptions = ['Rhyming', 'Same Color', 'Same First Letter',
+        'Alphabet Next Letter', 'Same Vowel Sound', 'Same Last Letter',
+        'Same Number of Syllables'];
+      await _speak("Let's play I'm going on a picnic! Choose a game option.");
+      if (!mounted) return;
+      _deferSelectionScanning = true;
+      setState(() {
+        _currentOptions = [..._picnicAllOptions, 'Exit Game'];
+        _currentOptionType = 'picnic_option';
+        _currentView = 'picnic_option_selection';
+        _statusText = 'Choose a game option';
+        _isLoading = false;
+      });
+      if (_enableScanning && mounted) {
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (mounted) {
+            _deferSelectionScanning = false;
+            _restartScanningForSelectionStep(announceWaitPrompt: false);
+          }
+        });
+      } else {
+        _deferSelectionScanning = false;
+      }
+    }
+  }
+
+  void _picnicSelectOption(String option) async {
+    if (option == 'Exit Game') { _picnicExitToMenu(); return; }
+    _picnicSelectedOption = option;
+    _stopScanning();
+
+    _deferSelectionScanning = true;
+    setState(() {
+      _currentOptions = ['Me', 'You', 'Exit Game'];
+      _currentOptionType = 'picnic_who_first';
+      _currentView = 'picnic_who_first';
+      _statusText = 'Who goes first?';
+    });
+    await _speak('$option. Who goes first?');
+    if (_enableScanning && mounted) {
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (mounted) {
+          _deferSelectionScanning = false;
+          _restartScanningForSelectionStep(announceWaitPrompt: false);
+        }
+      });
+    } else {
+      _deferSelectionScanning = false;
+    }
+  }
+
+  void _picnicSelectWhoFirst(String player) async {
+    if (player == 'Exit Game') { _picnicExitToMenu(); return; }
+    _picnicFirstPlayer = player == 'Me' ? 'me' : 'partner';
+    _picnicCurrentPlayer = _picnicFirstPlayer;
+    _stopScanning();
+
+    if (_picnicCurrentPlayer == 'me') {
+      await _speak('I go first. Give me a moment to choose an item.');
+    } else {
+      await _speak('You go first.');
+    }
+    if (!mounted) return;
+
+    if (_picnicSelectedOption == 'Alphabet Next Letter') {
+      final letters = List.generate(26, (i) => String.fromCharCode(65 + i));
+      _deferSelectionScanning = true;
+      setState(() {
+        _currentOptions = [...letters, 'Exit Game'];
+        _currentOptionType = 'picnic_letter';
+        _currentView = 'picnic_letter_selection';
+        _statusText = 'Choose a starting letter';
+      });
+      await _speak('Choose a starting letter.');
+      if (_enableScanning && mounted) {
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (mounted) {
+            _deferSelectionScanning = false;
+            _restartScanningForSelectionStep(announceWaitPrompt: false);
+          }
+        });
+      } else {
+        _deferSelectionScanning = false;
+      }
+    } else {
+      _picnicStartTurn();
+    }
+  }
+
+  void _picnicSelectLetter(String letter) async {
+    if (letter == 'Exit Game') { _picnicExitToMenu(); return; }
+    _picnicCurrentLetter = letter;
+    await _speak('Starting letter is $letter.');
+    _picnicStartTurn();
+  }
+
+  void _picnicStartTurn() {
+    if (_picnicCurrentPlayer == 'me') {
+      _picnicShowUserTurn();
+    } else {
+      _picnicShowPartnerTurn();
+    }
+  }
+
+  Future<void> _picnicShowUserTurn({bool isRetry = false}) async {
+    if (!isRetry) _picnicUsedItemsThisTurn = [];
+    _stopScanning();
+    setState(() {
+      _currentView = 'loading';
+      _isLoading = true;
+      _statusText = 'Thinking of options...';
+    });
+
+    try {
+      final response = await http.post(
+        Uri.parse('${EnvironmentConfig.apiBaseUrl}/api/games/picnic/generate-items'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ${widget.idToken}',
+          'X-User-ID': widget.aacUserId,
+        },
+        body: jsonEncode({
+          'option': _picnicSelectedOption,
+          'anchor_item': _picnicAnchorItem,
+          'current_letter': _picnicCurrentLetter,
+          'previous_items': [..._picnicPlayedItems, ..._picnicUsedItemsThisTurn],
+        }),
+      );
+
+      if (!mounted) return;
+      List<String> items = [];
+      if (response.statusCode == 200) {
+        final data = jsonDecode(response.body);
+        items = List<String>.from(data['items'] ?? data['options'] ?? []);
+      }
+      if (items.isEmpty) items = ['apple', 'ball', 'cake'];
+      _picnicUsedItemsThisTurn.addAll(items);
+
+      _deferSelectionScanning = true;
+      setState(() {
+        _currentOptions = [...items, 'Something Else', 'Clue', 'Exit Game'];
+        _currentOptionType = 'picnic_item';
+        _currentView = 'picnic_user_turn';
+        _statusText = _picnicGetPatternHint();
+        _isLoading = false;
+      });
+      if (_enableScanning && mounted) {
+        Future.delayed(const Duration(milliseconds: 500), () {
+          if (mounted) {
+            _deferSelectionScanning = false;
+            _restartScanningForSelectionStep(announceWaitPrompt: false);
+          }
+        });
+      } else {
+        _deferSelectionScanning = false;
+      }
+    } catch (e) {
+      debugPrint('[Picnic] Error generating items: $e');
+      if (mounted) {
+        setState(() { _isLoading = false; });
+        _picnicExitToMenu();
+      }
+    }
+  }
+
+  String _picnicGetPatternHint() {
+    if (_picnicAnchorItem == null) {
+      return "Choose something to bring to the picnic — your pick sets the pattern!";
+    }
+    switch (_picnicSelectedOption) {
+      case 'Same First Letter':
+        return 'Choose something starting with "${_picnicAnchorItem![0].toUpperCase()}"';
+      case 'Alphabet Next Letter':
+        return 'Choose something starting with "${_picnicCurrentLetter ?? '?'}"';
+      case 'Same Last Letter':
+        final last = _picnicAnchorItem!.replaceAll(RegExp(r'[^a-zA-Z]'), '');
+        return 'Choose something ending with "${last.isNotEmpty ? last[last.length - 1].toUpperCase() : '?'}"';
+      default:
+        return 'Pattern: $_picnicSelectedOption';
+    }
+  }
+
+  // Spoken clue text — mirrors the web app's getClueText().
+  String _picnicGetClueText() {
+    final option = _picnicSelectedOption ?? '';
+    final anchor = _picnicAnchorItem;
+    if (anchor == null) {
+      return option.isNotEmpty ? 'Game option: $option' : '';
+    }
+    switch (option) {
+      case 'Rhyming':
+        return 'Choose something that rhymes with "$anchor"';
+      case 'Same Color':
+        return 'Choose something the same color as "$anchor"';
+      case 'Same First Letter':
+        return 'Choose something starting with the letter "${anchor[0].toUpperCase()}"';
+      case 'Alphabet Next Letter':
+        return 'Choose something starting with "${_picnicCurrentLetter ?? '?'}"';
+      case 'Same Vowel Sound':
+        return 'Choose something with the same vowel sound as "$anchor"';
+      case 'Same Last Letter':
+        final last = anchor.replaceAll(RegExp(r'[^a-zA-Z]'), '');
+        final letter = last.isNotEmpty ? last[last.length - 1].toUpperCase() : '?';
+        return 'Choose something ending with the letter "$letter"';
+      case 'Same Number of Syllables':
+        return 'Choose something with the same number of syllables as "$anchor"';
+      default:
+        return '$option: choose something like "$anchor"';
+    }
+  }
+
+  Future<void> _picnicUserItemSelected(String item) async {
+    if (item == 'Exit Game') { _picnicShowGameOver(); return; }
+    if (item == 'Something Else') { _picnicShowUserTurn(isRetry: true); return; }
+    if (item == 'Clue') {
+      final clue = _picnicGetClueText();
+      if (clue.isNotEmpty) await _speak(clue);
+      return;
+    }
+
+    _stopScanning();
+
+    // Already played — announce the picnic sentence, play wrong chime, show error
+    if (_picnicPlayedItems.contains(item.toLowerCase())) {
+      _picnicLog.add({'player': 'me', 'item': item, 'valid': false});
+      await _speak("I'm going on a picnic and I am bringing ${_picnicWithArticle(item)}.");
+      await _picnicPlaySound('wrong_answer.mp3');
+      _picnicShowWrongAnswer(item, 'That item has already been used. Try something different!');
+      return;
+    }
+
+    setState(() {
+      _currentView = 'loading';
+      _isLoading = true;
+      _statusText = 'Checking...';
+    });
+
+    // Alphabet and custom options always validate every item.
+    // Built-in options (except Alphabet) get a free first-item anchor turn.
+    final alwaysCheck = !_kDefaultPicnicOptions.contains(_picnicSelectedOption) ||
+        _picnicSelectedOption == 'Alphabet Next Letter';
+    final isAnchorTurn = !alwaysCheck && _picnicAnchorItem == null;
+
+    try {
+      bool fits = true;
+      String explanation = '';
+
+      if (!isAnchorTurn) {
+        final response = await http.post(
+          Uri.parse('${EnvironmentConfig.apiBaseUrl}/api/games/picnic/check-item'),
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': 'Bearer ${widget.idToken}',
+            'X-User-ID': widget.aacUserId,
+          },
+          body: jsonEncode({
+            'option': _picnicSelectedOption,
+            'item': item,
+            'anchor_item': _picnicAnchorItem,
+            'current_letter': _picnicCurrentLetter,
+          }),
+        );
+        if (!mounted) return;
+        if (response.statusCode == 200) {
+          final data = jsonDecode(response.body);
+          fits = data['fits'] ?? true;
+          explanation = data['explanation'] ?? '';
+        }
+      }
+
+      // Announce the picnic sentence first (always, win or lose)
+      await _speak("I'm going on a picnic and I am bringing ${_picnicWithArticle(item)}.");
+      if (!mounted) return;
+
+      if (fits || isAnchorTurn) {
+        _picnicLog.add({'player': 'me', 'item': item, 'valid': true});
+        // Anchor turn skips the right-answer chime (web: `if (!isAnchorTurn)`)
+        if (!isAnchorTurn) await _picnicPlaySound('right_answer.mp3');
+        await _picnicAfterValidTurn(item);
+      } else {
+        _picnicLog.add({'player': 'me', 'item': item, 'valid': false});
+        await _picnicPlaySound('wrong_answer.mp3');
+        _picnicShowWrongAnswer(item, explanation);
+      }
+    } catch (e) {
+      debugPrint('[Picnic] Error checking item: $e');
+      if (mounted) {
+        setState(() { _isLoading = false; });
+        _picnicShowUserTurn(isRetry: true);
+      }
+    }
+  }
+
+  Future<void> _picnicAfterValidTurn(String item) async {
+    if (_picnicAnchorItem == null) _picnicAnchorItem = item;
+    _picnicPlayedItems.add(item.toLowerCase());
+
+    if (_picnicSelectedOption == 'Alphabet Next Letter' && _picnicCurrentLetter != null) {
+      final code = _picnicCurrentLetter!.toUpperCase().codeUnitAt(0);
+      _picnicCurrentLetter = code >= 90 ? 'A' : String.fromCharCode(code + 1);
+    }
+
+    _picnicUsedItemsThisTurn = [];
+    _picnicCurrentPlayer = _picnicCurrentPlayer == 'me' ? 'partner' : 'me';
+
+    if (_picnicCurrentPlayer == 'me') {
+      await _speak('Give me a moment to choose an item.');
+      if (!mounted) return;
+    }
+    _picnicStartTurn();
+  }
+
+  Future<void> _picnicShowPartnerTurn() async {
+    _stopListening();
+    final wakeWord = _wakeWord;
+    String hint = _picnicGetPatternHint();
+    if (hint == _picnicGetPatternHint() && _picnicAnchorItem == null) hint = '';
+
+    setState(() {
+      _currentView = 'picnic_partner_turn';
+      _statusText = 'Say "$wakeWord" when ready to tell me what you are bringing.';
+      _currentOptions = ['Exit Game'];
+      _currentOptionType = 'picnic_wrong_answer';
+    });
+
+    // Proactively reinitialize the speech engine before each partner turn.
+    // After multiple stop/start cycles iOS's SFSpeechRecognizer accumulates state
+    // and silently fails to start a new session. Reinitializing here (while TTS
+    // plays) gives us a fresh recognizer without adding user-visible latency.
+    final reinitFuture = _initializeSpeech();
+    await _speak('Say "$wakeWord" when you are ready.');
+    await reinitFuture; // ensure reinit completes before we start listening
+    if (!mounted) return;
+
+    await _startListeningWithGuard(
+      'wake_word',
+      preListenDelay: const Duration(milliseconds: 300),
+      ignoreWindow: const Duration(milliseconds: 4000),
+    );
+
+    // Secondary health check: if the recognizer still reports not listening 400ms
+    // after _startListening returned, something failed — reinit and try once more.
+    await Future.delayed(const Duration(milliseconds: 400));
+    if (mounted && _isListening && _listeningFor == 'wake_word' &&
+        (!_speech.isListening || !_speech.isAvailable)) {
+      debugPrint('[Picnic] wake_word recognizer failed after proactive reinit — reinitializing again');
+      await _initializeSpeech();
+      if (mounted && _isListening && _listeningFor == 'wake_word') {
+        await _startListening('wake_word');
+      }
+    }
+  }
+
+  Future<void> _picnicHandleWakeWord() async {
+    if (_isPicnicTransitionInProgress) return;
+    _isPicnicTransitionInProgress = true;
+    _stopListening();
+
+    setState(() {
+      _statusText = "I'm listening. What are you bringing to the picnic?";
+    });
+    await _speak("I'm listening. What are you bringing to the picnic?");
+    if (!mounted) { _isPicnicTransitionInProgress = false; return; }
+
+    _picnicPartnerFirstSpeechDetected = false;
+
+    await _startListeningWithGuard(
+      'picnic_partner_speech',
+      preListenDelay: const Duration(milliseconds: 400),
+      ignoreWindow: const Duration(milliseconds: 500),
+    );
+
+    if (!mounted) { _isPicnicTransitionInProgress = false; return; }
+
+    // 10s no-speech initial timeout (same as WakeWordService _questionInitialTimeoutDuration)
+    _picnicPartnerNoSpeechTimer = Timer(const Duration(seconds: 10), () {
+      if (!mounted || _isExiting) return;
+      if (!_isListening || _listeningFor != 'picnic_partner_speech') return;
+      if (_picnicPartnerFirstSpeechDetected) return;
+      _stopListening();
+      _picnicShowPartnerTurn();
+    });
+
+    // 30s hard cap (same as WakeWordService _questionHardTimeoutDuration)
+    _picnicPartnerHardTimeoutTimer = Timer(const Duration(seconds: 30), () {
+      if (!mounted || _isExiting) return;
+      if (!_isListening || _listeningFor != 'picnic_partner_speech') return;
+      _stopListening();
+      _picnicShowPartnerTurn();
+    });
+
+    _isPicnicTransitionInProgress = false;
+  }
+
+  Future<void> _picnicProcessPartnerSpeech(String transcript) async {
+    _stopListening();
+    setState(() {
+      _currentView = 'loading';
+      _isLoading = true;
+      _statusText = 'Checking...';
+    });
+
+    try {
+      // Extract item from speech
+      final extractRes = await http.post(
+        Uri.parse('${EnvironmentConfig.apiBaseUrl}/api/games/picnic/extract-item'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ${widget.idToken}',
+          'X-User-ID': widget.aacUserId,
+        },
+        body: jsonEncode({'speech_text': transcript}),
+      );
+
+      if (!mounted) return;
+      String partnerItem = transcript;
+      if (extractRes.statusCode == 200) {
+        final data = jsonDecode(extractRes.body);
+        partnerItem = (data['item'] as String?)?.trim().isNotEmpty == true
+            ? data['item'] as String
+            : transcript;
+      }
+
+      if (_picnicPlayedItems.contains(partnerItem.toLowerCase())) {
+        _picnicLog.add({'player': 'partner', 'item': partnerItem, 'valid': false});
+        await _picnicPlaySound('wrong_answer.mp3');
+        _picnicShowWrongAnswer(partnerItem, 'That item has already been used.');
+        return;
+      }
+
+      final isAnchorTurn = _picnicAnchorItem == null &&
+          _kDefaultPicnicOptions.contains(_picnicSelectedOption) &&
+          _picnicSelectedOption != 'Alphabet Next Letter';
+      if (isAnchorTurn) {
+        _picnicLog.add({'player': 'partner', 'item': partnerItem, 'valid': true});
+        await _picnicPlaySound('right_answer.mp3');
+        await _picnicAfterValidTurn(partnerItem);
+        return;
+      }
+
+      final checkRes = await http.post(
+        Uri.parse('${EnvironmentConfig.apiBaseUrl}/api/games/picnic/check-item'),
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ${widget.idToken}',
+          'X-User-ID': widget.aacUserId,
+        },
+        body: jsonEncode({
+          'option': _picnicSelectedOption,
+          'item': partnerItem,
+          'anchor_item': _picnicAnchorItem,
+          'current_letter': _picnicCurrentLetter,
+        }),
+      );
+
+      if (!mounted) return;
+      bool fits = true;
+      String explanation = '';
+      if (checkRes.statusCode == 200) {
+        final data = jsonDecode(checkRes.body);
+        fits = data['fits'] ?? true;
+        explanation = data['explanation'] ?? '';
+      }
+
+      if (fits) {
+        _picnicLog.add({'player': 'partner', 'item': partnerItem, 'valid': true});
+        await _picnicPlaySound('right_answer.mp3');
+        await _picnicAfterValidTurn(partnerItem);
+      } else {
+        _picnicLog.add({'player': 'partner', 'item': partnerItem, 'valid': false});
+        await _picnicPlaySound('wrong_answer.mp3');
+        _picnicShowWrongAnswer(partnerItem, explanation);
+      }
+    } catch (e) {
+      debugPrint('[Picnic] Error processing partner speech: $e');
+      if (mounted) {
+        setState(() { _isLoading = false; });
+        _picnicShowPartnerTurn();
+      }
+    }
+  }
+
+  void _picnicShowWrongAnswer(String item, String explanation) {
+    _picnicWrongExplanation = explanation;
+    _deferSelectionScanning = true;
+    setState(() {
+      _currentOptions = ['Try Again', 'Skip Turn', 'Exit Game'];
+      _currentOptionType = 'picnic_wrong_answer';
+      _currentView = 'picnic_wrong_answer';
+      _statusText = '"$item" doesn\'t fit!\n${explanation.isNotEmpty ? explanation : ""}';
+      _isLoading = false;
+    });
+    if (_enableScanning && mounted) {
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (mounted) {
+          _deferSelectionScanning = false;
+          _restartScanningForSelectionStep(announceWaitPrompt: false);
+        }
+      });
+    } else {
+      _deferSelectionScanning = false;
+    }
+  }
+
+  void _picnicHandleWrongAnswer(String option) async {
+    if (option == 'Try Again') {
+      _picnicUsedItemsThisTurn = [];
+      if (_picnicCurrentPlayer == 'me') {
+        await _speak('Give me a moment to make another choice.');
+        _picnicStartTurn();
+      } else {
+        await _speak("Let's try again.");
+        _picnicStartTurn();
+      }
+    } else if (option == 'Skip Turn') {
+      _picnicCurrentPlayer = _picnicCurrentPlayer == 'me' ? 'partner' : 'me';
+      final msg = _picnicCurrentPlayer == 'me'
+          ? "Skipping your turn. Give me a moment to choose an item."
+          : "Skipping my turn. Say \"$_wakeWord\" when you are ready.";
+      await _speak(msg);
+      _picnicStartTurn();
+    } else {
+      _picnicShowGameOver();
+    }
+  }
+
+  Future<void> _picnicShowGameOver() async {
+    _stopListening();
+    _stopScanning();
+    final total = _picnicLog.length;
+    final correct = _picnicLog.where((e) => e['valid'] == true).length;
+    final msg = total > 0
+        ? '$correct of $total items fit the pattern. Great playing!'
+        : 'Thanks for playing!';
+
+    _deferSelectionScanning = true;
+    setState(() {
+      _currentOptions = ['Play Again', 'Exit Game'];
+      _currentOptionType = 'picnic_finished';
+      _currentView = 'picnic_game_over';
+      _statusText = msg;
+      _isLoading = false;
+    });
+    await _speak('Great game! Thanks for playing.');
+    if (_enableScanning && mounted) {
+      Future.delayed(const Duration(milliseconds: 500), () {
+        if (mounted) {
+          _deferSelectionScanning = false;
+          _restartScanningForSelectionStep(announceWaitPrompt: false);
+        }
+      });
+    } else {
+      _deferSelectionScanning = false;
+    }
+  }
+
+  void _picnicHandleFinished(String option) {
+    if (option == 'Play Again') {
+      _startPicnicGame();
+    } else {
+      _picnicExitToMenu();
+    }
+  }
+
+  void _picnicExitToMenu() {
+    _stopListening();
+    _stopScanning();
+    _picnicResetState();
+    setState(() {
+      _selectedGame = null;
+      _currentView = 'menu';
+      _currentOptions = [];
+      _currentOptionType = '';
+      _statusText = '';
+      _isLoading = false;
+    });
   }
 
   // ===== GUESS GAME METHODS (Guess Who / Guess Where / Guess What) =====
@@ -5890,7 +6711,7 @@ class _GamesPageState extends State<GamesPage> {
 
     await _startListeningWithGuard(
       'wake_word',
-      preListenDelay: const Duration(milliseconds: 1800),
+      preListenDelay: const Duration(milliseconds: 100),
       ignoreWindow: const Duration(milliseconds: 4000),
     );
   }
@@ -5917,7 +6738,7 @@ class _GamesPageState extends State<GamesPage> {
       _startGuessNoInputTimeoutWindow();
       await _startListeningWithGuard(
         'player_guess',
-        preListenDelay: const Duration(milliseconds: 1200),
+        preListenDelay: const Duration(milliseconds: 150),
         ignoreWindow: const Duration(milliseconds: 3000),
       );
     }
@@ -6069,7 +6890,7 @@ class _GamesPageState extends State<GamesPage> {
     );
     await _startListeningWithGuard(
       'ready',
-      preListenDelay: const Duration(milliseconds: 1200),
+      preListenDelay: const Duration(milliseconds: 150),
       ignoreWindow: const Duration(milliseconds: 3000),
     );
   }
@@ -6085,7 +6906,7 @@ class _GamesPageState extends State<GamesPage> {
     await _speak('Great! Say $_wakeWord when you have thought of a clue.');
     await _startListeningWithGuard(
       'wake_word',
-      preListenDelay: const Duration(milliseconds: 1800),
+      preListenDelay: const Duration(milliseconds: 100),
       ignoreWindow: const Duration(milliseconds: 4000),
     );
     _isReadyTransitionInProgress = false;
@@ -6102,7 +6923,7 @@ class _GamesPageState extends State<GamesPage> {
     _guessModeBListeningForClue = true;
     await _startListeningWithGuard(
       'player_guess',
-      preListenDelay: const Duration(milliseconds: 900),
+      preListenDelay: const Duration(milliseconds: 150),
       ignoreWindow: const Duration(milliseconds: 1500),
     );
   }
@@ -6289,7 +7110,7 @@ class _GamesPageState extends State<GamesPage> {
     await _speak('Is it $guess? Please say yes or no.');
     await _startListeningWithGuard(
       'yes_no_guess',
-      preListenDelay: const Duration(milliseconds: 1200),
+      preListenDelay: const Duration(milliseconds: 150),
       ignoreWindow: const Duration(milliseconds: 3000),
     );
   }
@@ -6347,7 +7168,7 @@ class _GamesPageState extends State<GamesPage> {
         _isGuessConfirmationInProgress = false;
         await _startListeningWithGuard(
           'wake_word',
-          preListenDelay: const Duration(milliseconds: 900),
+          preListenDelay: const Duration(milliseconds: 150),
           ignoreWindow: const Duration(milliseconds: 1500),
         );
       }
@@ -6484,7 +7305,7 @@ class _GamesPageState extends State<GamesPage> {
       );
       await _startListeningWithGuard(
         'ready',
-        preListenDelay: const Duration(milliseconds: 1200),
+        preListenDelay: const Duration(milliseconds: 150),
         ignoreWindow: const Duration(milliseconds: 3000),
       );
     } else {
@@ -7937,6 +8758,51 @@ class _GamesPageState extends State<GamesPage> {
       );
     } else if (_currentView == 'hm_game_over') {
       return _buildFinishedScreen(darkColor, lightColor);
+    } else if (_currentView == 'picnic_option_selection' ||
+        _currentView == 'picnic_who_first' ||
+        _currentView == 'picnic_letter_selection' ||
+        _currentView == 'picnic_user_turn' ||
+        _currentView == 'picnic_wrong_answer') {
+      return _buildOptionsGrid(darkColor, lightColor);
+    } else if (_currentView == 'picnic_partner_turn') {
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.all(32),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(
+                _statusText,
+                style: const TextStyle(
+                  color: Colors.black87,
+                  fontSize: 22,
+                  fontWeight: FontWeight.w500,
+                ),
+                textAlign: TextAlign.center,
+              ),
+              if (_realtimeTranscript.isNotEmpty) ...[
+                const SizedBox(height: 16),
+                Text(
+                  'Heard: "$_realtimeTranscript"',
+                  style: TextStyle(
+                    color: Colors.black54,
+                    fontSize: 16,
+                    fontStyle: FontStyle.italic,
+                  ),
+                  textAlign: TextAlign.center,
+                ),
+              ],
+              const SizedBox(height: 24),
+              ElevatedButton(
+                onPressed: _picnicShowGameOver,
+                child: const Text('Exit Game'),
+              ),
+            ],
+          ),
+        ),
+      );
+    } else if (_currentView == 'picnic_game_over') {
+      return _buildFinishedScreen(darkColor, lightColor);
     }
 
     return Container();
@@ -8013,6 +8879,7 @@ class _GamesPageState extends State<GamesPage> {
             'Tic-Tac-Toe',
             'Hangman',
             'Story Builder',
+            'Picnic Game',
           ];
           _currentOptionType = 'game';
           _statusText = 'Select a game';
@@ -8124,6 +8991,7 @@ class _GamesPageState extends State<GamesPage> {
     required double fontSize,
     required Color lightColor,
     required VoidCallback onTap,
+    String? assignedImageUrl,
   }) {
     // Use TapInterfaceButton for Tap Interface mode (has pictogram support)
     if (widget.fromInterface == 'tap') {
@@ -8148,6 +9016,7 @@ class _GamesPageState extends State<GamesPage> {
             true, // Always enable pictograms in Tap Interface mode
         sightWordGradeLevel: settingsProvider.settings?.sightWordGradeLevel,
         enableSightWords: settingsProvider.settings?.enableSightWords ?? true,
+        assignedImageUrl: assignedImageUrl,
       );
     }
 
@@ -8397,6 +9266,9 @@ class _GamesPageState extends State<GamesPage> {
                       fontSize: fontSize,
                       lightColor: lightColor,
                       onTap: () => _handleOptionSelection(option),
+                      assignedImageUrl: _currentOptionType == 'picnic_option'
+                          ? _picnicOptionImages[option]
+                          : null,
                     ),
                   ),
                 );
@@ -9156,20 +10028,19 @@ class _GamesPageState extends State<GamesPage> {
                     itemCount: _currentOptions.length,
                     itemBuilder: (context, index) {
                       final option = _currentOptions[index];
-                      final isScanned =
-                          (_enableScanning && _currentScanIndex == index);
+                      final isHighlighted =
+                          _enableScanning && _currentScanIndex == index;
 
                       return Padding(
                         padding: const EdgeInsets.all(2.0),
                         child: SizedBox(
                           width: effectiveButtonSize,
                           height: effectiveButtonSize,
-                          child: GameOptionButton(
-                            option: option,
-                            isScanned: isScanned,
-                            darkColor: darkColor,
-                            lightColor: lightColor,
+                          child: _buildGameMenuButton(
+                            label: option,
+                            isHighlighted: isHighlighted,
                             fontSize: fontSize,
+                            lightColor: lightColor,
                             onTap: () => _handleOptionSelection(option),
                           ),
                         ),

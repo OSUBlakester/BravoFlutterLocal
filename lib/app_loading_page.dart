@@ -1,6 +1,9 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'services/tap_interface_service.dart';
 import 'services/user_settings_provider.dart';
 import 'services/pictogram_service.dart';
@@ -40,6 +43,7 @@ class _AppLoadingPageState extends State<AppLoadingPage>
 
   // Preloaded data for tap interface (if needed)
   dynamic _tapConfig;
+  TapBoardsResponse? _tapBoards;
   List<String> _wordOptions = [];
   List<Map<String, String>> _phraseOptions = [];
 
@@ -172,7 +176,7 @@ class _AppLoadingPageState extends State<AppLoadingPage>
         mascot: userSettings.settings?.mascot,
       );
 
-      // Step 2: Initialize pictogram cache (global shared library)
+      // Step 2: Load in-memory cache from persistent storage
       setState(() {
         _currentTask = 'Loading image cache...';
         _progress = 0.1;
@@ -180,50 +184,46 @@ class _AppLoadingPageState extends State<AppLoadingPage>
 
       await PictogramService().loadCacheFromPrefs();
 
-      // Step 2: Preload common images for mood selection and interface
+      // Step 2b: Download the symbol library (mirrors what the web app does at login
+      // in auth.html before the tap interface opens). This populates the local library
+      // index so word options can be resolved zero-network on first render.
+      // Timeout 120s — the library JSON is large (~15k images).
       setState(() {
-        _currentTask = 'Preloading interface images...';
-        _progress = 0.3;
+        _currentTask = 'Downloading image library...';
+        _progress = 0.2;
       });
 
-      // SKIP image preloading during splash screen to prevent unwanted API calls and missing_images logging
-      // Images will be loaded naturally/lazily when the user navigates to different pages
-      // This prevents the "preload logging bug" where image searches during splash trigger false missing_images entries
+      try {
+        await PictogramService().ensureLibraryLoaded()
+            .timeout(const Duration(seconds: 120));
+        debugPrint('📚 AppLoadingPage: Symbol library ready');
+      } catch (e) {
+        debugPrint('⚠️ AppLoadingPage: Symbol library download timed out or failed: $e (continuing without it)');
+      }
+
+      // Step 3: Always fetch the tap config so it can be passed through mood
+      // selection to TapInterfacePage without a redundant API call.
       setState(() {
-        _currentTask = 'Finalizing initialization...';
-        _progress = 0.68;
+        _currentTask = 'Preparing communication interface...';
+        _progress = 0.6;
       });
 
-      // Brief delay to allow UI to update
-      await Future.delayed(const Duration(milliseconds: 100));
+      final tapService = TapInterfaceService(userSettingsProvider: userSettings);
 
-      debugPrint('⏭️ Skipping image preload during splash screen (images will load on demand)');
-
-      // Step 3: Load tap interface data if needed
       if (widget.useTapInterface) {
-        setState(() {
-          _currentTask = 'Preparing communication interface...';
-          _progress = 0.7;
-        });
+        // Direct-to-tap path: also generate LLM word/phrase options in parallel.
+        final tapConfigFuture = tapService.fetchTapInterfaceConfig();
 
-        final tapService = TapInterfaceService(userSettingsProvider: userSettings);
-
-        // Load config
-        _tapConfig = await tapService.fetchTapInterfaceConfig();
-
-        // Load initial options based on current mood
         final currentMood = userSettings.settings?.currentMood ?? 'No Mood Selected';
-
         String wordContext = 'general communication topics';
         String phraseContext = 'general conversation starters and common phrases';
-
         if (currentMood != 'No Mood Selected' && currentMood.isNotEmpty) {
           wordContext = 'general communication topics appropriate for someone feeling $currentMood';
           phraseContext = 'general conversation starters and common phrases appropriate for someone feeling $currentMood';
         }
 
-        // Load word and phrase options in parallel
-        final futures = await Future.wait([
+        final results = await Future.wait([
+          tapConfigFuture,
           tapService.generateFreestyleOptions(
             context: wordContext,
             buildSpaceText: '',
@@ -236,8 +236,104 @@ class _AppLoadingPageState extends State<AppLoadingPage>
           ),
         ]);
 
-        _wordOptions = futures[0] as List<String>;
-        _phraseOptions = futures[1] as List<Map<String, String>>;
+        _tapConfig = results[0];
+        _wordOptions = results[1] as List<String>;
+        _phraseOptions = results[2] as List<Map<String, String>>;
+      } else {
+        // Mood-selection path: read from the offline cache first (instant disk
+        // read — no network wait). Then kick off an API refresh in the
+        // background so the cache stays fresh for the next session.
+        // Only falls back to a blocking API call on first install (empty cache).
+        final configJson = await OfflineCacheService.loadTapConfigJson();
+
+        TapInterfaceConfig? cachedConfig;
+        if (configJson != null && configJson.length > 2) {
+          try {
+            cachedConfig = TapInterfaceConfig.fromJson(
+              jsonDecode(configJson) as Map<String, dynamic>,
+            );
+          } catch (_) {}
+        }
+
+        if (cachedConfig != null && cachedConfig.buttons.isNotEmpty) {
+          _tapConfig = cachedConfig;
+          // Load cached boards from disk so TapInterfacePage starts with
+          // the most-recently-saved board data rather than re-reading disk itself.
+          try {
+            final boardsJson = await OfflineCacheService.loadTapBoardsJson();
+            if (boardsJson != null && boardsJson.length > 2) {
+              _tapBoards = TapBoardsResponse.fromJson(
+                jsonDecode(boardsJson) as Map<String, dynamic>,
+              );
+            }
+          } catch (_) {}
+          // Background refresh — updates cache silently, no blocking.
+          unawaited(() async {
+            try {
+              final r = await Future.wait([
+                tapService.fetchTapInterfaceConfig(),
+                tapService.fetchTapBoards(),
+              ]);
+              final fresh = r[0] as TapInterfaceConfig?;
+              final freshBoards = r[1] as TapBoardsResponse?;
+              if (fresh != null) {
+                OfflineCacheService.saveTapConfig(jsonEncode(fresh.toJson()))
+                    .catchError((_) {});
+              }
+              if (freshBoards != null) {
+                OfflineCacheService.saveTapBoards(jsonEncode(freshBoards.toJson()))
+                    .catchError((_) {});
+              }
+            } catch (_) {}
+          }());
+        } else {
+          // No cache yet (first install) — must wait for API.
+          try {
+            final r = await Future.wait([
+              tapService.fetchTapInterfaceConfig(),
+              tapService.fetchTapBoards(),
+            ]);
+            _tapConfig = r[0] as TapInterfaceConfig?;
+            final freshBoards = r[1] as TapBoardsResponse?;
+            if (freshBoards != null) {
+              _tapBoards = freshBoards;
+              OfflineCacheService.saveTapBoards(jsonEncode(freshBoards.toJson()))
+                  .catchError((_) {});
+            }
+            if (_tapConfig != null) {
+              OfflineCacheService.saveTapConfig(jsonEncode(_tapConfig!.toJson()))
+                  .catchError((_) {});
+            }
+          } catch (_) {}
+        }
+      }
+
+      // Prefetch images for word options (only runs when useTapInterface=true
+      // since _wordOptions is empty in the mood-selection path).
+      if (_wordOptions.isNotEmpty) {
+        setState(() {
+          _currentTask = 'Loading word images...';
+          _progress = 0.78;
+        });
+        final kwMap = <String, List<String>>{};
+        for (final w in _wordOptions) {
+          kwMap[w] = [w];
+        }
+        try {
+          await PictogramService().prefetchButtonPictograms(
+            words: _wordOptions,
+            keywordMap: kwMap,
+            locale: userSettings.settings?.userLanguage ?? 'en-US',
+            maxItems: _wordOptions.length,
+          ).timeout(const Duration(seconds: 30));
+        } catch (e) {
+          debugPrint('⚠️ AppLoadingPage: Image prefetch timed out: $e (images will load lazily)');
+        }
+
+        unawaited(_logConfirmedMissingWordOptions(
+          _wordOptions,
+          locale: userSettings.settings?.userLanguage ?? 'en-US',
+        ));
       }
 
       // Step 4: Final preparation and verification
@@ -271,19 +367,23 @@ class _AppLoadingPageState extends State<AppLoadingPage>
                 aacUserId: widget.aacUserId,
                 displayName: widget.displayName,
                 preloadedConfig: _tapConfig,
+                preloadedBoards: _tapBoards,
                 preloadedWordOptions: _wordOptions,
                 preloadedPhraseOptions: _phraseOptions,
               ),
             ),
           );
         } else {
-          // Go to mood selection page with preloaded images
+          // Go to mood selection page, carrying the already-fetched config so
+          // TapInterfacePage doesn't need to re-fetch it after mood selection.
           Navigator.of(context).pushReplacement(
             MaterialPageRoute(
               builder: (_) => MoodSelectionPage(
                 idToken: widget.idToken,
                 aacUserId: widget.aacUserId,
                 displayName: widget.displayName,
+                preloadedConfig: _tapConfig,
+                preloadedWordOptions: _wordOptions,
               ),
             ),
           );
@@ -299,20 +399,73 @@ class _AppLoadingPageState extends State<AppLoadingPage>
     }
   }
 
+  /// After prefetch completes, check every word option for a cached image.
+  /// Any word with no image at this point is a confirmed miss (the full
+  /// library → batch-search → button-search chain ran and found nothing).
+  /// Writes to Firestore missing_images — fire-and-forget, non-blocking.
+  Future<void> _logConfirmedMissingWordOptions(
+    List<String> words, {
+    required String locale,
+  }) async {
+    try {
+      final user = FirebaseAuth.instance.currentUser;
+      if (user == null) return;
+      final firestore = FirebaseFirestore.instance;
+      final pictogramService = PictogramService();
+
+      for (final word in words) {
+        final cachedUrl = pictogramService.getCachedImageUrl(word, locale: locale);
+        if (cachedUrl != null) continue; // image found — not missing
+
+        final textTrimmed = word.trim();
+        if (textTrimmed.isEmpty) continue;
+
+        // Deduplicate against existing records for this user.
+        final existing = await firestore
+            .collection('missing_images')
+            .where('text', isEqualTo: textTrimmed)
+            .where('uid', isEqualTo: user.uid)
+            .limit(1)
+            .get();
+        if (existing.docs.isNotEmpty) continue;
+
+        await firestore.collection('missing_images').add({
+          'text': textTrimmed,
+          'timestamp': FieldValue.serverTimestamp(),
+          'source': 'word_option_prefetch_confirmed_miss',
+          'uid': user.uid,
+        });
+        debugPrint('📋 Confirmed-missing word option logged: "$textTrimmed"');
+      }
+    } catch (e) {
+      debugPrint('⚠️ AppLoadingPage: Error logging confirmed-missing word options: $e');
+    }
+  }
+
   /// Saves current loaded data to offline cache (best-effort, non-blocking).
+  /// Boards are saved separately when fetched — we never write '{}' here so
+  /// we don't overwrite valid boards data that was saved on a previous launch.
   void _saveOfflineCache(UserSettingsProvider userSettings) {
     final audioUrls = _collectTapAudioUrls();
-    OfflineCacheService.saveAll(
-      userId: widget.aacUserId,
-      displayName: widget.displayName,
-      settingsJson: jsonEncode(userSettings.settings?.toJson() ?? {}),
-      tapConfigJson: jsonEncode(_tapConfig?.toJson() ?? {}),
-      tapBoardsJson: '{}', // tap boards not fetched in this version
-      audioUrls: audioUrls,
-      idToken: widget.idToken,
-    ).catchError((e) {
+    Future.wait([
+      OfflineCacheService.saveProfile(
+        userId: widget.aacUserId,
+        displayName: widget.displayName,
+      ),
+      OfflineCacheService.saveUserSettings(
+        jsonEncode(userSettings.settings?.toJson() ?? {}),
+      ),
+      OfflineCacheService.saveTapConfig(
+        jsonEncode(_tapConfig?.toJson() ?? {}),
+      ),
+    ]).catchError((e) {
       debugPrint('AppLoadingPage: Offline cache save failed: $e');
+      return <void>[];
     });
+    if (audioUrls.isNotEmpty) {
+      OfflineCacheService.cacheAudioFiles(audioUrls, widget.idToken)
+          .catchError((_) {});
+    }
   }
 
   /// Collects all custom audio file URLs from the tap config.

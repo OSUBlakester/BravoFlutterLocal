@@ -167,6 +167,69 @@ class PictogramService {
     },
   };
 
+  // Leading stop words stripped by _keyTerm() — mirrors web app _LEAD_STOPS.
+  // Articles, pronouns, auxiliary verbs, prepositions, conjunctions, intensifiers.
+  static const Set<String> _leadStops = {
+    // Articles
+    'a', 'an', 'the',
+    // Subject pronouns & possessives
+    'i', 'me', 'my', 'we', 'us', 'our', 'you', 'your',
+    'he', 'him', 'his', 'she', 'her', 'it', 'its',
+    'they', 'them', 'their',
+    // Demonstratives
+    'this', 'that', 'these', 'those',
+    // Forms of "to be"
+    'am', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+    // Common auxiliaries
+    'have', 'has', 'had', 'do', 'does', 'did',
+    // Modals (except "can" — handled specially for "can't")
+    'will', 'would', 'shall', 'should', 'may', 'might', 'must', 'could',
+    // Prepositions
+    'in', 'on', 'at', 'by', 'for', 'with', 'from', 'to', 'of', 'about',
+    'up', 'out', 'into', 'onto', 'over', 'under', 'through', 'between',
+    // Conjunctions
+    'and', 'or', 'but', 'so', 'yet', 'nor',
+    // Intensifiers / fillers
+    'very', 'really', 'quite', 'just', 'too', 'also', 'even', 'still',
+    // Common conversational lead words
+    'please', 'let', 'lets', 'going', 'gonna',
+    'feel', 'feeling', 'want', 'need', 'like', 'get', 'got', 'go',
+    'come', 'now', 'here', 'there', 'then', 'not', 'no', 'more',
+    'how', 'what', 'when', 'where', 'why', 'who', 'which',
+    'some', 'any', 'all', 'both', 'each', 'every', 'such',
+    // Vague locative / manner words that rarely narrow an image search
+    'somewhere',
+  };
+
+  // Trailing stop words stripped by _keyTerm() — mirrors web app _TRAIL_STOPS.
+  static const Set<String> _trailStops = {
+    'a', 'an', 'the',
+    'in', 'on', 'at', 'by', 'for', 'to', 'of', 'up',
+    'this', 'that', 'these', 'those',
+    'is', 'are', 'am', 'was', 'were', 'be',
+    'now', 'then', 'here', 'there', 'today',
+    'it', 'me', 'us', 'him', 'her', 'them', 'you',
+  };
+
+  // Multi-word lead phrases stripped as a unit before single-word stop stripping.
+  static const List<List<String>> _leadPhrases = [
+    ['it', 'easy'],
+  ];
+
+  // Mirrors web app TAP_PHRASE_STOP_WORDS — words excluded from image keyword extraction.
+  // Note: "feel", "want", etc. are NOT here (they're low-priority, not excluded).
+  static const Set<String> _tapPhraseStopWords = {
+    'a', 'an', 'the', 'to', 'of', 'in', 'on', 'at', 'by', 'for', 'with', 'from',
+    'into', 'onto', 'over', 'under', 'about',
+    'my', 'your', 'his', 'her', 'its', 'our', 'their', 'this', 'that', 'these', 'those',
+    'i', 'you', 'he', 'she', 'it', 'we', 'they', 'me', 'us', 'them',
+    'am', 'is', 'are', 'was', 'were', 'be', 'been', 'being',
+    'have', 'has', 'had', 'do', 'does', 'did',
+    'will', 'would', 'should', 'could', 'can', 'may', 'might', 'must',
+    'and', 'or', 'but', 'not', 'so', 'than', 'as', 'if', 'when', 'where', 'why', 'how',
+    'please', 'just', 'really', 'very',
+  };
+
   // Cache for storing image URLs to avoid repeated API calls (global shared library)
   final Map<String, String?> _imageCache = {};
   final Map<String, String> _fallbackTermUrlCache = {};
@@ -181,7 +244,7 @@ class PictogramService {
   static const String _pictogramEnvPrefsKey = 'pictogram_cache_environment';
   static const String _pictogramCacheVersionPrefsKey =
       'pictogram_cache_matching_version';
-  static const String _currentPictogramCacheVersion = '6';
+  static const String _currentPictogramCacheVersion = '7';
   static const String _fallbackUrlCachePrefsKey = 'pictogram_fallback_url_cache_v2';
   static const String _canonicalSearchCachePrefsKey = 'pictogram_canonical_search_cache_v2';
   static const String _remoteFilePathCachePrefsKey =
@@ -207,6 +270,7 @@ class PictogramService {
   // Canonical field index: imageUrl -> normalized subconcept/subcategory.
   final Map<String, String> _localLibraryUrlSubconcept = {};
   bool _libraryLoaded = false;
+  bool _libraryDownloadInProgress = false;
   Future<void>? _libraryLoadFuture;
   static const String _libraryFilename = 'bravo_symbol_library.json';
   static const String _libraryTimestampPrefsKey = 'symbol_library_download_time';
@@ -706,6 +770,143 @@ class PictogramService {
     return null;
   }
 
+  /// Extracts the most meaningful key term from a phrase by stripping leading
+  /// and trailing stop words, mirroring the web app's _key_term() function.
+  ///
+  /// "I want to play" → "play"
+  /// "please help me" → "help"
+  /// "can't sleep" (normalized: "can t sleep") → "can t sleep" (negation preserved)
+  String _keyTerm(String text) {
+    final normalized = text.toLowerCase()
+        .replaceAll(RegExp(r"[''']"), ' ')
+        .replaceAll(RegExp(r'[^a-z0-9\s]'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    if (normalized.isEmpty) return text.trim().toLowerCase();
+
+    var words = normalized.split(' ');
+
+    // Strip multi-word lead phrases first (e.g. "it easy")
+    for (final phrase in _leadPhrases) {
+      if (words.length >= phrase.length) {
+        bool match = true;
+        for (int i = 0; i < phrase.length; i++) {
+          if (words[i] != phrase[i]) { match = false; break; }
+        }
+        if (match) { words = words.sublist(phrase.length); break; }
+      }
+    }
+
+    // Strip leading stops. Preserve "can t" — the negation residual from "can't".
+    while (words.length > 1 && _leadStops.contains(words[0])) {
+      // "can" is not in _leadStops to avoid accidentally stripping it in other
+      // contexts, but we do strip it unless the next word is "t" (negation).
+      if (words[0] == 'can' && words.length >= 2 && words[1] == 't') break;
+      words = words.sublist(1);
+    }
+    // Also strip a standalone "can" that is a lead stop if not followed by "t"
+    if (words.length > 1 && words[0] == 'can' && words[1] != 't') {
+      words = words.sublist(1);
+    }
+
+    // Strip trailing stops
+    while (words.length > 1 && _trailStops.contains(words.last)) {
+      words = words.sublist(0, words.length - 1);
+    }
+
+    final result = words.join(' ');
+    // Guard: if stripping left a single character or only stop/pronoun fragments
+    // (e.g. "can I" → "i", "let s" → "s"), the key term is useless — return the
+    // full normalized phrase so callers fall back to the original search text.
+    if (result.length <= 1) return normalized;
+    if (words.length == 1 && (_leadStops.contains(result) || _trailStops.contains(result))) {
+      return normalized;
+    }
+    return result;
+  }
+
+  /// Like [_keyTerm] but does NOT apply the "single remaining stop word →
+  /// return full phrase" guard. Used for image lookup when the remaining word
+  /// after stripping is itself a stop word but still has an AAC image
+  /// (pronouns, etc.). E.g. "about them" → "them" rather than "about them".
+  String _aggressiveKeyTerm(String normalized) {
+    var words = normalized.split(' ');
+    for (final phrase in _leadPhrases) {
+      if (words.length >= phrase.length) {
+        bool match = true;
+        for (int i = 0; i < phrase.length; i++) {
+          if (words[i] != phrase[i]) { match = false; break; }
+        }
+        if (match) { words = words.sublist(phrase.length); break; }
+      }
+    }
+    while (words.length > 1 && _leadStops.contains(words[0])) {
+      if (words[0] == 'can' && words.length >= 2 && words[1] == 't') break;
+      words = words.sublist(1);
+    }
+    if (words.length > 1 && words[0] == 'can' && words[1] != 't') {
+      words = words.sublist(1);
+    }
+    while (words.length > 1 && _trailStops.contains(words.last)) {
+      words = words.sublist(0, words.length - 1);
+    }
+    final result = words.join(' ');
+    if (result.length <= 1) return normalized;
+    return result;
+  }
+
+  /// Mirrors web app `extractKeywordForImage`: returns the last content word of
+  /// a phrase after filtering pronouns/articles (TAP_PHRASE_STOP_WORDS).
+  /// "I feel" → "feel", "I want" → "want", "Can I" → "can", "play" → "play".
+  String? _extractImageKeyword(String text) {
+    final words = text
+        .toLowerCase()
+        .replaceAll(RegExp(r"[''']"), ' ')
+        .replaceAll(RegExp(r'[^a-z0-9\s]'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim()
+        .split(' ')
+        .where((w) => w.length >= 2 && !_tapPhraseStopWords.contains(w))
+        .toList();
+    if (words.isEmpty) return null;
+    return words.last; // Last content word scores highest (mirrors web app +65 for lastContentIndex)
+  }
+
+  /// Mirrors web app `buildPhraseImageKeywords`: builds an ordered keyword list
+  /// for a phrase, starting with the best content word.
+  /// "I feel" → ["feel"], "I want to play" → ["play", "want"].
+  List<String> _buildImageKeywords(String text, List<String>? existingKeywords) {
+    final result = <String>[];
+    final seen = <String>{};
+
+    void push(String kw) {
+      final n = kw.trim().toLowerCase();
+      if (n.length < 2 || seen.contains(n)) return;
+      seen.add(n);
+      result.add(n);
+    }
+
+    final topKw = _extractImageKeyword(text);
+    if (topKw != null) push(topKw);
+
+    // All remaining content words
+    for (final w in text
+        .toLowerCase()
+        .replaceAll(RegExp(r'[^a-z0-9\s]'), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim()
+        .split(' ')
+        .where((w) => w.length >= 2 && !_tapPhraseStopWords.contains(w))) {
+      push(w);
+    }
+
+    if (existingKeywords != null) {
+      for (final kw in existingKeywords) { push(kw); }
+    }
+
+    return result;
+  }
+
   String _stripDiacritics(String input) {
     const replacements = {
       'á': 'a', 'à': 'a', 'ä': 'a', 'â': 'a', 'ã': 'a', 'å': 'a',
@@ -1006,18 +1207,62 @@ class PictogramService {
   /// preferred over pre-assigned generic image URLs.
   bool get hasMascot => _currentMascot != null && _currentMascot!.isNotEmpty;
 
+  /// Returns the in-memory cached image URL for [text], or null if not cached.
+  /// Checks both the mascot-prefixed key (when active) and the plain key.
+  ///
+  /// [exactOnly] — when true, skips the extracted-keyword fallback so that
+  /// multi-word phrases like "for the demo" are not considered resolved just
+  /// because a cached entry exists for their extracted keyword ("demo").
+  /// Use exactOnly=true when checking whether a word truly has a direct image
+  /// (e.g. prefetch resolution for missing-image logging).
+  String? getCachedImageUrl(String text, {String? locale, bool exactOnly = false}) {
+    final primaryKey = _buildPrimaryCacheKey(text, locale: locale);
+    final primaryCached = _imageCache[primaryKey];
+    if (primaryCached != null && primaryCached.isNotEmpty) return primaryCached;
+    // If mascot is active, also check the no-mascot key in case preload ran
+    // before setUserContext established _currentMascot.
+    if (_currentMascot != null) {
+      final noMascotKey = _normalizeLookupKey(text);
+      final fallback = _imageCache[noMascotKey];
+      if (fallback != null && fallback.isNotEmpty) return fallback;
+    }
+    if (exactOnly) return null;
+    // Extracted-keyword fallback: "I feel" → "feel", "I want" → "want".
+    // If a board button for the content word has already cached its result
+    // (e.g. "bobby::feel"), use that while the word-option batch search runs.
+    final extractedKw = _extractImageKeyword(text);
+    final normalizedText = _normalizeLookupKey(text);
+    if (extractedKw != null && extractedKw != normalizedText) {
+      final kwPrimary = _currentMascot != null ? '$_currentMascot::$extractedKw' : extractedKw;
+      final kwCached = _imageCache[kwPrimary];
+      if (kwCached != null && kwCached.isNotEmpty) return kwCached;
+      if (_currentMascot != null) {
+        final kwNoMascot = _imageCache[extractedKw];
+        if (kwNoMascot != null && kwNoMascot.isNotEmpty) return kwNoMascot;
+      }
+    }
+    return null;
+  }
+
+  /// Returns true when [url] is clearly for a mascot that is NOT [_currentMascot].
+  /// Used to reject wrong-mascot images from the local symbol library, which
+  /// may contain mascot-specific entries (e.g. buddy_buddy_feel.png) indexed
+  /// under generic word tags.
+  bool _isWrongMascotUrl(String url) {
+    if (_currentMascot == null) return false;
+    const knownMascots = ['bobby', 'bonnie', 'buddy'];
+    final urlLower = url.toLowerCase();
+    final currentLower = _currentMascot!.toLowerCase();
+    return knownMascots.any((m) => m != currentLower && urlLower.contains(m));
+  }
+
   bool _isPersonalPronounLookup(String text, List<String>? keywords) {
     const pronouns = {
       'i',
       'me',
-      'my',
-      'mine',
       'myself',
       // Common Spanish first-person forms for bilingual boards.
       'yo',
-      'mi',
-      'mio',
-      'mia',
       'conmigo',
     };
 
@@ -1219,10 +1464,31 @@ class PictogramService {
   /// Fetch image via /api/symbols/button-search (locale-aware, mirrors web app).
   /// Passes the display word + locale so the server can query localized_tags in
   /// Firestore (e.g. searching "agua" with locale "es-US" finds the water image).
-  Future<String?> _fetchViaButtonSearch(String text, List<String>? keywords, String? locale) async {
+  Future<String?> _fetchViaButtonSearch(String text, List<String>? keywords, String? locale, {bool shouldLogMissing = true}) async {
     final baseUrl = EnvironmentConfig.apiBaseUrl;
-    final encodedText = Uri.encodeComponent(text.trim());
-    String url = '$baseUrl/api/symbols/button-search?q=$encodedText&limit=25';
+    final originalText = text.trim();
+    // Mirror the web app's normalizeTermForLocale: lowercase + strip apostrophes/curly-quotes
+    // to spaces. Web app sends "can i" not "can I", "let s" not "let%27s".
+    final normalizedText = originalText
+        .toLowerCase()
+        .replaceAll(RegExp(r"[''']"), ' ')
+        .replaceAll(RegExp(r'\s+'), ' ')
+        .trim();
+    final searchText = normalizedText.isNotEmpty ? normalizedText : originalText.toLowerCase();
+    // Strip leading/trailing stop words before sending to the server.
+    // Use _aggressiveKeyTerm so that phrases where all remaining words are also
+    // stop words still get properly stripped. E.g. "about them" → "them"
+    // (not "about them" which would match the "about" image on the server).
+    final strippedTerm = _aggressiveKeyTerm(searchText);
+    final effectiveSearch = (strippedTerm.isNotEmpty && strippedTerm != searchText) ? strippedTerm : searchText;
+    final encodedText = Uri.encodeComponent(effectiveSearch);
+    // Mirror the web app: use limit=1 for ephemeral content (shouldLogMissing=false).
+    // The server has a fast-return path when limit≤1 that exits before the
+    // log_missing_image call, preventing false missing_images entries even when the
+    // image is found only via the legacy tags fallback (e.g. "let's").
+    // Mascot mode uses limit=5; static board buttons use limit=25 for bucketing.
+    final searchLimit = _currentMascot != null ? 5 : (shouldLogMissing ? 25 : 1);
+    String url = '$baseUrl/api/symbols/button-search?q=$encodedText&limit=$searchLimit';
     if (locale != null && locale.isNotEmpty) {
       url += '&locale=${Uri.encodeComponent(locale)}';
     }
@@ -1230,7 +1496,9 @@ class PictogramService {
       url += '&keywords=${Uri.encodeComponent(jsonEncode(keywords))}';
     }
     if (_currentMascot != null) {
-      url += '&mascot=${Uri.encodeComponent(_currentMascot!)}';
+      // Lowercase so the backend's case-sensitive index matches regardless of
+      // how the profile stores the mascot name ("Bonnie" vs "bonnie").
+      url += '&mascot=${Uri.encodeComponent(_currentMascot!.toLowerCase())}';
     }
 
     final headers = <String, String>{'Content-Type': 'application/json'};
@@ -1242,7 +1510,7 @@ class PictogramService {
     }
 
     try {
-      debugPrint('🌐 PictogramService: button-search "$text" locale=$locale keywords=$keywords mascot=$_currentMascot url=$url');
+      debugPrint('🌐 PictogramService: button-search "$text" → query="$effectiveSearch" locale=$locale keywords=$keywords mascot=$_currentMascot url=$url');
       final response = await http.get(Uri.parse(url), headers: headers)
           .timeout(const Duration(seconds: 5));
 
@@ -1254,19 +1522,120 @@ class PictogramService {
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
+        // Log first symbol fields to diagnose field naming in API response.
+        if (data is Map && data['symbols'] is List) {
+          final rawSymbols = data['symbols'] as List;
+          if (rawSymbols.isNotEmpty && rawSymbols[0] is Map) {
+            debugPrint('🔍 button-search "$text" fields: ${(rawSymbols[0] as Map).keys.toList()} | url=${rawSymbols[0]['url']} | image_url=${rawSymbols[0]['image_url']} | source=${rawSymbols[0]['source']} | mascot=${rawSymbols[0]['mascot']}');
+          }
+        }
         if (data is Map && data['symbols'] is List) {
           final symbols = data['symbols'] as List;
-          final queryNorm = _normalizeLookupKey(text);
+
+          // Mascot-active path: prefer mascot-specific images, but accept generic
+          // (no-mascot) images when no mascot-specific result is available.
+          // Generic images have mascot=null and no mascot name in the URL
+          // (e.g. no_mascot_more_options.png). Only reject images that belong to
+          // a DIFFERENT mascot (buddy/bonnie when active is bobby).
+          if (_currentMascot != null) {
+            final activeMascotLower = _currentMascot!.toLowerCase();
+            String? mascotSpecificUrl;
+            String? genericUrl;
+            for (final raw in symbols) {
+              if (raw is! Map) continue;
+              final returnedMascot = raw['mascot']?.toString().toLowerCase().trim();
+              final symbolUrl =
+                  raw['image_url']?.toString() ??
+                  raw['imageUrl']?.toString() ??
+                  raw['url']?.toString() ??
+                  '';
+              if (symbolUrl.isEmpty) continue;
+              // Skip images belonging to a different mascot.
+              if (_isWrongMascotUrl(symbolUrl)) {
+                debugPrint('⚠️ button-search "$text" wrong mascot URL: $symbolUrl — skipping');
+                continue;
+              }
+              if (returnedMascot != null && returnedMascot != activeMascotLower) {
+                debugPrint('⚠️ button-search "$text" wrong mascot field: returned=$returnedMascot — skipping');
+                continue;
+              }
+              // Semantic validation: reject server prefix-matches like "demolition"
+              // for query "demo". The server returns results ranked by prefix/keyword
+              // overlap; we only accept a symbol if its subconcept or tags match the
+              // effective query exactly (or as a singular/plural equivalent).
+              final symbolSubconcept = (raw['subconcept'] as String? ?? '').toLowerCase().trim();
+              if (symbolSubconcept.isNotEmpty) {
+                final rawTagsField = raw['tags'];
+                final List<String> symbolTags = rawTagsField is List
+                    ? rawTagsField.map((t) => t.toString().toLowerCase().trim()).where((t) => t.isNotEmpty).toList()
+                    : const [];
+                final q = effectiveSearch;
+                final isSemanticMatch =
+                    symbolSubconcept == q ||
+                    symbolTags.contains(q) ||
+                    _areSingularPluralEquivalent(q, symbolSubconcept) ||
+                    symbolTags.any((tag) => _areSingularPluralEquivalent(q, tag));
+                if (!isSemanticMatch) {
+                  debugPrint('⚠️ button-search "$text" semantic reject "$symbolUrl": subconcept="$symbolSubconcept" for query "$q"');
+                  continue;
+                }
+              }
+              final urlContainsMascot = symbolUrl.toLowerCase().contains(activeMascotLower);
+              if (urlContainsMascot || returnedMascot == activeMascotLower) {
+                mascotSpecificUrl ??= symbolUrl;
+              } else {
+                genericUrl ??= symbolUrl; // generic/no-mascot fallback
+              }
+            }
+            final result = mascotSpecificUrl ?? genericUrl;
+            if (result != null) {
+              debugPrint('🌐 PictogramService: ✅ mascot button-search "$text" → $result');
+              return result;
+            }
+            // All button-search results were wrong-mascot or failed semantic check.
+            debugPrint('⚠️ button-search "$text" no valid mascot result — falling through to Firestore');
+            return null;
+          }
+
+          // Ephemeral buttons (shouldLogMissing=false): mirror the web app exactly —
+          // accept the first valid URL the server returns without client-side validation.
+          // The web app does: symbols[0].image_url || symbols[0].url — no bucketing.
+          // Client-side validation rejects multi-word queries (e.g. "can I", "I feel")
+          // whose key-term strips to empty, causing false missing_images writes via fallback.
+          if (!shouldLogMissing) {
+            for (final raw in symbols) {
+              if (raw is! Map) continue;
+              final symbolUrl =
+                  raw['url']?.toString() ??
+                  raw['image_url']?.toString() ??
+                  raw['imageUrl']?.toString();
+              if (symbolUrl != null && symbolUrl.isNotEmpty) {
+                debugPrint('🌐 PictogramService: ✅ ephemeral button-search "$text" → $symbolUrl (no client validation)');
+                return symbolUrl;
+              }
+            }
+            return null;
+          }
+
+          // No-mascot path: use subconcept/tag bucketing for best match.
+          final queryNorm = _normalizeLookupKey(searchText);
+          // Key term strips leading/trailing stops: "I want to play" → "play".
+          final queryKeyTerm = _keyTerm(queryNorm);
+          final keyTermDiffers = queryKeyTerm.isNotEmpty && queryKeyTerm != queryNorm;
           String? bestSubconceptUrl;
           String? bestTagUrl;
+          // Fallback for images that pass isMatch only via key-term
+          // (e.g. image subconcept="want", query="i want" key-term="want").
+          String? bestKeyTermUrl;
 
-          // Three buckets for mascot-aware selection:
-          //   mascotMatch  — symbol.mascot == _currentMascot (best)
-          //   noMascot     — symbol.mascot is null/empty     (neutral fallback)
-          //   (wrong mascot symbols are skipped entirely)
-          // Without a mascot, use the original subconcept-preference logic.
-          String? mascotMatchUrl;
-          String? noMascotUrl;
+          // Normalize a symbol term the same way the query was normalized:
+          // apostrophes/curly-quotes → space so "let's" == "let s".
+          String normSymbolTerm(String t) => t
+              .toLowerCase().trim()
+              .replaceAll('_', ' ')
+              .replaceAll(RegExp(r"[''']"), ' ')
+              .replaceAll(RegExp(r'\s+'), ' ')
+              .trim();
 
           for (final raw in symbols) {
             if (raw is! Map) continue;
@@ -1277,22 +1646,21 @@ class PictogramService {
                 symbol['imageUrl']?.toString();
             if (symbolUrl == null || symbolUrl.isEmpty) continue;
 
-            // Validate the symbol's tags/subconcept safely match the query
-            // to prevent suffix-wildcard false positives (e.g. ears -> bears).
+            // Normalize symbol terms with the same apostrophe-to-space rule
+            // applied to the query so "let's" matches "let s" and vice-versa.
             final symbolTags = (symbol['tags'] as List? ?? [])
-                .map((t) => t.toString().toLowerCase().trim())
+                .map((t) => normSymbolTerm(t.toString()))
                 .toList();
-            final symbolSubconcept =
-                (symbol['subconcept'] as String? ??
-                        symbol['subcategory'] as String? ??
-                        '')
-                .toLowerCase()
-                .trim()
-                .replaceAll('_', ' ');
+            final symbolSubconcept = normSymbolTerm(
+                symbol['subconcept'] as String? ??
+                symbol['subcategory'] as String? ??
+                '');
             final allTerms = [...symbolTags, if (symbolSubconcept.isNotEmpty) symbolSubconcept];
 
             final isMatch = allTerms.isEmpty ||
-                allTerms.any((t) => _areSingularPluralEquivalent(queryNorm, t));
+                allTerms.any((t) => _areSingularPluralEquivalent(queryNorm, t)) ||
+                (keyTermDiffers &&
+                    allTerms.any((t) => _areSingularPluralEquivalent(queryKeyTerm, t)));
 
             if (!isMatch) {
               debugPrint(
@@ -1301,45 +1669,46 @@ class PictogramService {
               continue;
             }
 
-            if (_currentMascot != null) {
-              // Mascot-aware selection: bucket by mascot field, skip wrong mascots.
-              final symbolMascot = (symbol['mascot'] as String? ?? '').toLowerCase().trim();
-              if (symbolMascot == _currentMascot) {
-                mascotMatchUrl ??= symbolUrl;
-                debugPrint('🌐 PictogramService: ✅ mascot match "$_currentMascot" for "$text": $symbolUrl');
-              } else if (symbolMascot.isEmpty) {
-                noMascotUrl ??= symbolUrl;
-                debugPrint('🌐 PictogramService: 📎 no-mascot fallback for "$text": $symbolUrl');
-              } else {
-                debugPrint('🌐 PictogramService: ⛔ wrong mascot "$symbolMascot" skipped for "$text"');
-              }
-              // Stop as soon as we have an exact mascot match.
-              if (mascotMatchUrl != null) break;
-            } else {
-              final subconceptIsBest =
-                  symbolSubconcept.isNotEmpty &&
-                  _areSingularPluralEquivalent(queryNorm, symbolSubconcept);
-              final tagsContainMatch = symbolTags.any(
-                (tag) => _areSingularPluralEquivalent(queryNorm, tag),
+            // Negation guard: reject images whose negation status differs from
+            // the query.  "now" must not match a "not now" image and vice-versa.
+            final queryIsNegative = _isNegativePhrase(queryNorm);
+            final imageIsNegative = _isNegativePhrase(symbolSubconcept) ||
+                symbolTags.any((tag) => _isNegativePhrase(tag));
+            if (queryIsNegative != imageIsNegative) {
+              debugPrint(
+                '🌐 PictogramService: ⚠️ button-search rejected "${symbol['name']}" for "$text" — negation mismatch (query=$queryIsNegative, image=$imageIsNegative)',
               );
-
-              if (subconceptIsBest && bestSubconceptUrl == null) {
-                bestSubconceptUrl = symbolUrl;
-                debugPrint(
-                  '🌐 PictogramService: ✅ button-search prioritized subconcept match for "$text": $symbolUrl (subconcept="$symbolSubconcept")',
-                );
-              } else if (tagsContainMatch && bestTagUrl == null) {
-                bestTagUrl = symbolUrl;
-                debugPrint(
-                  '🌐 PictogramService: ✅ button-search fallback tag match for "$text": $symbolUrl',
-                );
-              }
+              continue;
             }
-          }
 
-          // For mascot mode, prefer exact mascot match, then no-mascot generic.
-          if (_currentMascot != null) {
-            bestSubconceptUrl = mascotMatchUrl ?? noMascotUrl;
+            final subconceptIsBest =
+                symbolSubconcept.isNotEmpty &&
+                _areSingularPluralEquivalent(queryNorm, symbolSubconcept);
+            final tagsContainMatch = symbolTags.any(
+              (tag) => _areSingularPluralEquivalent(queryNorm, tag),
+            );
+            final keyTermSubconceptMatch = keyTermDiffers &&
+                symbolSubconcept.isNotEmpty &&
+                _areSingularPluralEquivalent(queryKeyTerm, symbolSubconcept);
+            final keyTermTagMatch = keyTermDiffers &&
+                symbolTags.any((tag) => _areSingularPluralEquivalent(queryKeyTerm, tag));
+
+            if (subconceptIsBest && bestSubconceptUrl == null) {
+              bestSubconceptUrl = symbolUrl;
+              debugPrint(
+                '🌐 PictogramService: ✅ button-search prioritized subconcept match for "$text": $symbolUrl (subconcept="$symbolSubconcept")',
+              );
+            } else if (tagsContainMatch && bestTagUrl == null) {
+              bestTagUrl = symbolUrl;
+              debugPrint(
+                '🌐 PictogramService: ✅ button-search fallback tag match for "$text": $symbolUrl',
+              );
+            } else if ((keyTermSubconceptMatch || keyTermTagMatch) && bestKeyTermUrl == null) {
+              bestKeyTermUrl = symbolUrl;
+              debugPrint(
+                '🌐 PictogramService: ✅ button-search key-term match for "$text" (key="$queryKeyTerm"): $symbolUrl',
+              );
+            }
           }
 
           if (bestSubconceptUrl != null && bestSubconceptUrl.isNotEmpty) {
@@ -1347,6 +1716,9 @@ class PictogramService {
           }
           if (bestTagUrl != null && bestTagUrl.isNotEmpty) {
             return bestTagUrl;
+          }
+          if (bestKeyTermUrl != null && bestKeyTermUrl.isNotEmpty) {
+            return bestKeyTermUrl;
           }
         }
       }
@@ -1377,10 +1749,12 @@ class PictogramService {
           continue;
         }
         if (cached != null && cached.isNotEmpty) {
-          // Evict URLs whose local library source tags do NOT safely match
-          // the query — this catches stale wrong matches (e.g. ears->bears)
-          // that were stored before matching rules were tightened.
-          if (_libraryLoaded && !_libraryUrlMatchesQuery(cached, text)) {
+          // Evict stale wrong-match entries (e.g. "ears"→"bears" from before
+          // matching rules were tightened). Skip eviction in cacheOnly mode —
+          // cacheOnly buttons trust the prefetch to have stored the right image,
+          // and evicting a phrase-key match (e.g. "can" URL evicted for "can I")
+          // would leave the button with no image at all.
+          if (!cacheOnly && _libraryLoaded && !_libraryUrlMatchesQuery(cached, text)) {
             debugPrint(
               '🗑️ PictogramService: Evicting stale wrong cache entry for "$text": $cached',
             );
@@ -1404,6 +1778,23 @@ class PictogramService {
 
     if (removedStaleNull) {
       await _saveCacheToPrefs();
+    }
+
+    // Mascot fallback: if a mascot is active and the mascot-prefixed key missed,
+    // also check the no-mascot version. This catches batch-search preload results
+    // that were stored before setUserContext established _currentMascot (microtask
+    // timing: preload ran before any button called setUserContext).
+    if (_currentMascot != null && !isNonEnglish) {
+      final noMascotKey = _normalizeLookupKey(text);
+      if (_imageCache.containsKey(noMascotKey)) {
+        final cached = _imageCache[noMascotKey];
+        if (cached != null && cached.isNotEmpty) {
+          // Back-fill the mascot-prefixed key so future lookups are instant.
+          for (final key in cacheKeyVariants) { _imageCache[key] = cached; }
+          debugPrint('🔄 PictogramService: mascot-fallback cache hit for "$text" via no-mascot key');
+          return cached;
+        }
+      }
     }
 
     final inFlightLookup = _inFlightImageLookups[cacheKey];
@@ -1457,21 +1848,35 @@ class PictogramService {
         unawaited(preloadCustomImages(const <String>[]));
       }
 
-      // PRIORITY 1.5: Check local library index cache (instant lookup).
-      // Skip when mascot is active — the local library index has no mascot field,
-      // so it returns whichever image was indexed first (which may be the wrong
-      // mascot). Defer to button-search which does proper mascot-aware selection.
-      if (_currentMascot == null) {
-        if (!_libraryLoaded) {
-          await _initLocalLibrary();
-        }
+      // PRIORITY 1.5: Local library index lookup — runs for ALL button types.
+      //
+      // The library is downloaded from the same Firestore database the server queries,
+      // so a library hit proves the image exists. Returning the library result early
+      // avoids server calls that can write false missing_images entries — the deployed
+      // server ignores log_missing=false when a search returns 0 results.
+      //
+      // Caching rules:
+      //   • Non-mascot users OR mascot-specific result: cache + return.
+      //   • Generic (no-mascot) result for mascot users: return WITHOUT caching.
+      //     For cacheOnly=true (word-option first paint) the prefetch will overwrite
+      //     with the real mascot image and the assignedImageUrl setState will update.
+      //     For cacheOnly=false (board buttons) the library is bobby-aware — if only a
+      //     generic image exists here, the server almost certainly has no mascot-specific
+      //     version either, so returning generic is correct and prevents false logging.
+      if (!_libraryLoaded) unawaited(_initLocalLibrary());
+      if (_libraryLoaded) {
         final localLibraryUrl = _searchLocalLibraryIndex(text, keywords: keywords);
-        if (localLibraryUrl != null && localLibraryUrl.isNotEmpty) {
+        if (localLibraryUrl != null && localLibraryUrl.isNotEmpty &&
+            !_isWrongMascotUrl(localLibraryUrl)) {
           debugPrint('📚 PictogramService: Found local library match for "$text": $localLibraryUrl');
-          for (final key in cacheKeyVariants) {
-            _imageCache[key] = localLibraryUrl;
+          final isMascotSpecific = _currentMascot != null &&
+              localLibraryUrl.toLowerCase().contains(_currentMascot!.toLowerCase());
+          if (_currentMascot == null || isMascotSpecific) {
+            for (final key in cacheKeyVariants) {
+              _imageCache[key] = localLibraryUrl;
+            }
+            await _saveCacheToPrefs();
           }
-          await _saveCacheToPrefs();
           return localLibraryUrl;
         }
       }
@@ -1481,9 +1886,54 @@ class PictogramService {
         return null;
       }
 
-      // PRIORITY 2: Web parity fast path.
-      // The web app calls unified button-search first for tap words. Do the same
-      // here so first-load matching is fast and consistent.
+      // PRIORITY 1.5: When a mascot is active, try subconcept exact lookup first.
+      // Button-search (PRIORITY 2) can return semantically-expanded results
+      // (e.g., "good work" for query "good") that pass mascot validation but are
+      // not the best match. An exact subconcept+mascot hit scores 1500 (1000+500)
+      // and must always win. This check is a single fast HTTP call.
+      if (_currentMascot != null && !isNonEnglish) {
+        try {
+          final baseUrl = EnvironmentConfig.apiBaseUrl;
+          final encodedText = Uri.encodeComponent(text.toLowerCase().trim());
+          final subconceptExactUrl =
+              '$baseUrl/api/imagecreator/search?subconcept=$encodedText&limit=20&log_missing=false';
+          debugPrint('🔍 PRIORITY 1.5 mascot subconcept exact: "$text" → $subconceptExactUrl');
+          final subResp = await http.get(
+            Uri.parse(subconceptExactUrl),
+            headers: {'Content-Type': 'application/json'},
+          ).timeout(const Duration(seconds: 5));
+          if (subResp.statusCode == 200) {
+            final subData = jsonDecode(subResp.body);
+            if (subData is Map<String, dynamic> && subData['images'] is List) {
+              final subImages = subData['images'] as List;
+              if (subImages.isNotEmpty) {
+                final bestSub = _selectBestImageMatch(subImages, text);
+                final subScore = bestSub['priorityScore'] as int? ?? 0;
+                final subUrl = bestSub['image_url'] as String? ?? bestSub['url'] as String?;
+                // Only accept if it's a genuine exact subconcept+mascot hit (≥1500).
+                if (subUrl != null && subScore >= 1500) {
+                  debugPrint('🔍 ✅ PRIORITY 1.5 exact subconcept+mascot hit for "$text": $subUrl (score=$subScore)');
+                  for (final key in cacheKeyVariants) {
+                    _imageCache[key] = subUrl;
+                  }
+                  await _saveCacheToPrefs();
+                  return subUrl;
+                }
+                debugPrint('🔍 PRIORITY 1.5: best score=$subScore < 1500, falling through to button-search');
+              }
+            }
+          }
+        } catch (e) {
+          debugPrint('🔍 PRIORITY 1.5 subconcept exact error for "$text": $e');
+        }
+      }
+
+      // PRIORITY 2: button-search.
+      // For ephemeral buttons (shouldLogMissing=false) the initial render is guarded
+      // by cacheOnly=true (_wordOptionCacheOnly), so button-search is only reached on
+      // the post-preload rebuild pass. Fast-return (limit=1) means the server does not
+      // log when it finds a match; the guard AFTER button-search prevents falling
+      // through to imagecreator endpoints that log even with log_missing=false.
       var didTryButtonSearch = false;
       final buttonSearchCooldownExpiry = _getButtonSearchCooldownExpiry(
         text,
@@ -1496,7 +1946,7 @@ class PictogramService {
         );
       } else {
         didTryButtonSearch = true;
-        final buttonSearchUrl = await _fetchViaButtonSearch(text, keywords, locale);
+        final buttonSearchUrl = await _fetchViaButtonSearch(text, keywords, locale, shouldLogMissing: shouldLogMissing);
         if (buttonSearchUrl != null && buttonSearchUrl.isNotEmpty) {
           for (final key in cacheKeyVariants) {
             _imageCache[key] = buttonSearchUrl;
@@ -1510,6 +1960,12 @@ class PictogramService {
       // Web app behavior for Tap grids is effectively cache/custom + button-search.
       // Skip deeper fallback chains to avoid phased, long-tail matching rounds.
       if (webFastPath) {
+        return null;
+      }
+
+      // Ephemeral buttons: stop after button-search — never reach imagecreator.
+      // Deployed server logs missing_images in imagecreator even with log_missing=false.
+      if (!shouldLogMissing) {
         return null;
       }
 
@@ -1657,7 +2113,7 @@ class PictogramService {
             '🌐 PictogramService: Skipping button-search for "$text" due to timeout cooldown for this term (until $buttonSearchCooldownExpiry)',
           );
         } else {
-          final buttonSearchUrl = await _fetchViaButtonSearch(text, keywords, locale);
+          final buttonSearchUrl = await _fetchViaButtonSearch(text, keywords, locale, shouldLogMissing: shouldLogMissing);
           if (buttonSearchUrl != null && buttonSearchUrl.isNotEmpty) {
             for (final key in cacheKeyVariants) {
               _imageCache[key] = buttonSearchUrl;
@@ -1797,19 +2253,24 @@ class PictogramService {
     bool warmDiskCache = false,
   }) async {
     if (words.isEmpty) return;
+    debugPrint('🖼️ prefetchButtonPictograms: ${words.length} words, mascot=$_currentMascot uid=$_currentUserId');
 
-    // Ensure local library index is initialized
+    // Kick off local library download in the background if not loaded yet.
+    // DO NOT await — the 30-second network timeout would block the batch search
+    // which is the primary source of mascot-specific images. Local library is
+    // skipped for mascot users anyway (PRIORITY 2 guard). Non-mascot users will
+    // benefit from local library once it loads, but shouldn't wait for it here.
     if (!_libraryLoaded) {
-      await _initLocalLibrary();
+      unawaited(_initLocalLibrary());
     }
 
-    // Ensure custom images are preloaded before prefetching buttons, to prioritize custom images
+    // Kick off custom image preload in background — do NOT await.
+    // Awaiting this would delay the batch search (the primary image source for
+    // word options) whenever the custom-image API is slow. Custom images are rare
+    // for word options and _updateCacheWithCustomImageMatches() will apply them
+    // once the async load completes.
     if (!_customImagesPreloaded && _currentUserId != null && _currentIdToken != null) {
-      try {
-        await preloadCustomImages(words);
-      } catch (e) {
-        debugPrint('❌ PictogramService: Error preloading custom images in prefetch: $e');
-      }
+      unawaited(preloadCustomImages(words));
     }
 
     final isNonEnglish = locale != null && !locale.startsWith('en');
@@ -1866,15 +2327,22 @@ class PictogramService {
       if (foundCustom) continue;
 
       // PRIORITY 2: Check local library index lookup.
-      // Skip when mascot is active — local library has no mascot metadata, so it
-      // may return a wrong-mascot image. Button-search handles mascot selection.
-      if (_currentMascot == null) {
+      // The library contains mascot-specific images (e.g. bobby_feel.png tagged
+      // "feel"). For mascot users, only accept library images whose URL contains
+      // the current mascot name — generic/shared images are passed through to
+      // batch-search so the mascot-specific version wins.
+      // For non-mascot users, accept any non-wrong-mascot library image.
+      if (_libraryLoaded) {
         final localUrl = _searchLocalLibraryIndex(word, keywords: keywordMap[word]);
-        if (localUrl != null && localUrl.isNotEmpty) {
-          for (final key in cacheKeyVariants) {
-            _imageCache[key] = localUrl;
+        if (localUrl != null && localUrl.isNotEmpty && !_isWrongMascotUrl(localUrl)) {
+          final isMascotSpecific = _currentMascot != null &&
+              localUrl.toLowerCase().contains(_currentMascot!.toLowerCase());
+          if (_currentMascot == null || isMascotSpecific) {
+            for (final key in cacheKeyVariants) {
+              _imageCache[key] = localUrl;
+            }
+            continue;
           }
-          continue;
         }
       }
 
@@ -1884,19 +2352,111 @@ class PictogramService {
 
     // Now batch-search any remaining unresolved words remotely
     if (unresolvedWords.isNotEmpty) {
+      // Build mapping: original word → aggressive key term for batch-search.
+      // Sending "today" instead of "about today" prevents the server from returning
+      // the "about" image and caching it under "about today".
+      final Map<String, String> wordToSearchTerm = {};
+      for (final word in unresolvedWords) {
+        final normalized = _normalizeLookupKey(word);
+        final aggTerm = _aggressiveKeyTerm(normalized);
+        wordToSearchTerm[word] = (aggTerm.isNotEmpty && aggTerm != normalized) ? aggTerm : word;
+      }
+      final batchSearchTerms = wordToSearchTerm.values.toSet().toList();
+
+      debugPrint('🔍 prefetchButtonPictograms: ${unresolvedWords.length} unresolved words → batch-search: $batchSearchTerms');
+      final stillMissingAfterBatch = <String>[];
       try {
-        final batchResults = await batchSearchRemoteSymbols(unresolvedWords);
+        final batchResults = await batchSearchRemoteSymbols(
+          batchSearchTerms,
+          locale: locale,
+          keywordMap: keywordMap,
+        );
+        // Build a normalized map so lookup succeeds regardless of case.
+        // The server normalizes keys to lowercase ("can i") but our word list
+        // may contain mixed case ("can I") from the LLM — a direct batchResults[word]
+        // would miss every result.
+        final normalizedBatchResults = <String, String>{};
+        for (final entry in batchResults.entries) {
+          final v = entry.value;
+          if (v != null && v.isNotEmpty) {
+            normalizedBatchResults[_normalizeLookupKey(entry.key)] = v;
+          }
+        }
+
         for (final word in unresolvedWords) {
-          final imageUrl = batchResults[word];
-          final cacheKeyVariants = _buildCacheKeyVariants(word, locale: locale);
-          
-          for (final key in cacheKeyVariants) {
-            _imageCache[key] = imageUrl; // Can be null if not found, to cache misses
+          final normalizedWord = _normalizeLookupKey(word);
+          // Look up by aggressive search term first (e.g. "today" for "about today"),
+          // then fall back to the original word and extracted keyword.
+          final searchTerm = wordToSearchTerm[word] ?? word;
+          final normalizedSearchTerm = _normalizeLookupKey(searchTerm);
+          // extractedKw: "feel" for "I feel", "want" for "I want", etc.
+          // The server may return results keyed by the matched keyword
+          // rather than the full input phrase ("i feel").
+          final extractedKw = _extractImageKeyword(word);
+          final imageUrl =
+              batchResults[searchTerm] ??
+              normalizedBatchResults[normalizedSearchTerm] ??
+              batchResults[word] ??
+              normalizedBatchResults[normalizedWord] ??
+              (extractedKw != null && extractedKw != normalizedWord
+                  ? normalizedBatchResults[extractedKw]
+                  : null);
+          if (imageUrl != null && imageUrl.isNotEmpty) {
+            final keyUsed = normalizedBatchResults.containsKey(normalizedSearchTerm) ? normalizedSearchTerm : (normalizedBatchResults.containsKey(normalizedWord) ? normalizedWord : (extractedKw ?? normalizedWord));
+            debugPrint('🌐 batchSearch hit for "$word" (searchTerm: "$searchTerm", key: "$keyUsed"): ${imageUrl.length > 60 ? imageUrl.substring(imageUrl.length - 60) : imageUrl}');
+            final cacheKeyVariants = _buildCacheKeyVariants(word, locale: locale);
+            for (final key in cacheKeyVariants) {
+              _imageCache[key] = imageUrl;
+            }
+          } else {
+            // Batch-search miss → fall back to local library if already loaded.
+            // Skip library images that belong to a different mascot
+            // (e.g. buddy_buddy_feel.png when mascot is "bobby").
+            // Do NOT await _initLocalLibrary() here — it can block 30s on first launch.
+            final localUrl = _libraryLoaded ? _searchLocalLibraryIndex(word, keywords: keywordMap[word]) : null;
+            if (localUrl != null && localUrl.isNotEmpty && !_isWrongMascotUrl(localUrl)) {
+              final cacheKeyVariants = _buildCacheKeyVariants(word, locale: locale);
+              for (final key in cacheKeyVariants) {
+                _imageCache[key] = localUrl;
+              }
+            } else {
+              stillMissingAfterBatch.add(word);
+            }
           }
         }
         await _saveCacheToPrefs();
       } catch (e) {
         debugPrint('❌ PictogramService: Error in batch prefetching: $e');
+        stillMissingAfterBatch.addAll(unresolvedWords);
+      }
+
+      // Fallback: for words that batch-search couldn't resolve, use the proven
+      // button-search endpoint (same one board buttons use). This endpoint
+      // includes the mascot parameter and returns mascot-specific images.
+      if (stillMissingAfterBatch.isNotEmpty) {
+        debugPrint('🔄 prefetchButtonPictograms: ${stillMissingAfterBatch.length} words falling back to button-search: $stillMissingAfterBatch');
+        final buttonSearchFutures = stillMissingAfterBatch.map((word) async {
+          try {
+            final keywords = _buildImageKeywords(word, keywordMap[word]);
+            final imageUrl = await _fetchViaButtonSearch(
+              word, keywords.isNotEmpty ? keywords : keywordMap[word],
+              locale, shouldLogMissing: false,
+            );
+            if (imageUrl != null && imageUrl.isNotEmpty) {
+              debugPrint('🔄 button-search fallback hit for "$word": ${imageUrl.length > 60 ? imageUrl.substring(imageUrl.length - 60) : imageUrl}');
+              final cacheKeyVariants = _buildCacheKeyVariants(word, locale: locale);
+              for (final key in cacheKeyVariants) {
+                _imageCache[key] = imageUrl;
+              }
+            } else {
+              debugPrint('🔄 button-search fallback miss for "$word"');
+            }
+          } catch (e) {
+            debugPrint('🔄 button-search fallback error for "$word": $e');
+          }
+        }).toList();
+        await Future.wait(buttonSearchFutures);
+        await _saveCacheToPrefs();
       }
     }
 
@@ -2478,6 +3038,15 @@ class PictogramService {
 
   /// Select the best image match using frontend prioritization
   /// Prioritizes: 1) Subconcept exact match, 2) Tag 0 match, 3) Tag 1 match, 4) Other tag matches
+  /// Returns true when a phrase is a negation — i.e. it starts with "not "
+  /// (or is literally "not"), or contains a contraction like "don't"/"won't".
+  bool _isNegativePhrase(String text) {
+    final t = text.toLowerCase().trim();
+    return t == 'not' ||
+        t.startsWith('not ') ||
+        t.contains("n't");
+  }
+
   bool _areSingularPluralEquivalent(String a, String b) {
     final first = a.toLowerCase().trim();
     final second = b.toLowerCase().trim();
@@ -2505,7 +3074,31 @@ class PictogramService {
       return word;
     }
 
-    return singularize(first) == singularize(second);
+    if (singularize(first) == singularize(second)) return true;
+
+    // Verb stem equivalence: playing/played/plays → play, resting → rest.
+    // Mirrors the web app's _verb_base() suffix rules for regular verbs.
+    String verbStem(String word) {
+      // -ing: playing → play; doubled consonant: running → runn → run
+      if (word.endsWith('ing') && word.length > 4) {
+        final base = word.substring(0, word.length - 3);
+        if (base.length > 1 && base[base.length - 1] == base[base.length - 2]) {
+          return base.substring(0, base.length - 1);
+        }
+        return base;
+      }
+      // -ed: played → play; doubled consonant: jogged → jogg → jog
+      if (word.endsWith('ed') && word.length > 3) {
+        final base = word.substring(0, word.length - 2);
+        if (base.length > 1 && base[base.length - 1] == base[base.length - 2]) {
+          return base.substring(0, base.length - 1);
+        }
+        return base;
+      }
+      return singularize(word);
+    }
+
+    return verbStem(first) == verbStem(second);
   }
 
   bool _isSafePrefixOrPluralMatch(String searchTerm, String candidate) {
@@ -2522,11 +3115,26 @@ class PictogramService {
     return term.startsWith(search) || search.startsWith(term);
   }
 
-  Map<String, dynamic> _selectBestImageMatch(List<dynamic> images, String searchTerm) {
+  Map<String, dynamic> _selectBestImageMatch(List<dynamic> images, String searchTerm, {String? mascotHint}) {
     final searchTermLower = searchTerm.toLowerCase().trim();
+    final mascotLower = (mascotHint ?? _currentMascot)?.toLowerCase().trim();
     final isNumericLedPhrase = RegExp(r'^\d+\s+').hasMatch(searchTermLower);
     debugPrint('🔍 Frontend prioritization: Evaluating ${images.length} images for "$searchTerm"');
-    
+
+    // Negation guard: filter to images whose negation polarity matches the query
+    // so "now" never picks a "not now" image and vice-versa.
+    final searchIsNegative = _isNegativePhrase(searchTermLower);
+    final negationFiltered = images.where((img) {
+      if (img is! Map) return true;
+      final sub = ((img['subconcept'] as String? ?? '').toLowerCase().trim())
+          .replaceAll('_', ' ');
+      final tags = (img['tags'] as List? ?? []);
+      final imgIsNegative = _isNegativePhrase(sub) ||
+          tags.any((tag) => _isNegativePhrase(tag.toString().toLowerCase().trim()));
+      return imgIsNegative == searchIsNegative;
+    }).toList();
+    // Only apply the filter when it leaves at least one candidate; otherwise
+    // fall back to the full set so we never return an empty match.
     // Identify head noun (last word) for compound terms
     String? headNoun;
     final genericEndings = {
@@ -2548,10 +3156,37 @@ class PictogramService {
       }
     }
     
+    // When a mascot is active, pre-filter to exclude wrong-mascot images so
+    // a bonnie "exact match" doesn't beat a bobby "partial match" when there
+    // is no bobby exact match in Firestore.
+    // Mascot names appear in tags and in the image URL path.
+    List<dynamic> candidateImages = negationFiltered.isNotEmpty ? negationFiltered : images;
+    if (mascotLower != null) {
+      const knownMascots = ['bobby', 'bonnie', 'buddy'];
+      candidateImages = candidateImages.where((img) {
+        if (img is! Map) return false;
+        final tags = (img['tags'] as List? ?? [])
+            .map((t) => t.toString().toLowerCase().trim())
+            .toList();
+        final url = (img['url'] as String? ?? img['image_url'] as String? ?? '').toLowerCase();
+        final hasWrongMascot = knownMascots.any(
+          (m) => m != mascotLower && (tags.contains(m) || url.contains(m)),
+        );
+        return !hasWrongMascot;
+      }).toList();
+
+      if (candidateImages.isEmpty) {
+        debugPrint('⚠️ _selectBestImageMatch: No $mascotLower images for "$searchTerm", using all candidates');
+        candidateImages = images;
+      } else {
+        debugPrint('🔍 Mascot filter: ${images.length} → ${candidateImages.length} images for "$mascotLower"');
+      }
+    }
+
     // Score each image based on match quality
     final scoredImages = <Map<String, dynamic>>[];
-    
-    for (final image in images) {
+
+    for (final image in candidateImages) {
       final subconcept = (image['subconcept'] as String? ?? '').toLowerCase().trim();
       final subconceptNormalized = subconcept.replaceAll('_', ' ');
       final tags = image['tags'] as List? ?? [];
@@ -2676,12 +3311,26 @@ class PictogramService {
         }
       }
       
+      // Mascot tiebreaker: when multiple images tie (e.g., bobby, bonnie, buddy
+      // all have the same subconcept), boost the active mascot's image so it wins.
+      // The mascot name appears in tags[0] (e.g., [bonnie, thank, thank you]).
+      // Also check the image URL which contains the mascot name in its path.
+      if (mascotLower != null && score > 0) {
+        final hasMascotTag = tags.any((t) => t.toString().toLowerCase().trim() == mascotLower);
+        final imageUrl = (image['url'] as String? ?? image['image_url'] as String? ?? '').toLowerCase();
+        final hasMascotInUrl = imageUrl.contains(mascotLower);
+        if (hasMascotTag || hasMascotInUrl) {
+          score += 500;
+          matchReason = '$matchReason + mascot($mascotLower)';
+        }
+      }
+
       scoredImages.add({
         ...image,
         'priorityScore': score,
         'matchReason': matchReason,
       });
-      
+
       debugPrint('🔍 Image "$imageName": score=$score, reason="$matchReason", subconcept="$subconcept", tags=${tags.take(3).toList()}');
     }
     
@@ -2709,12 +3358,47 @@ class PictogramService {
     final encodedTerm = Uri.encodeComponent(searchTerm);
     debugPrint('🔧 DEBUG API: term="$searchTerm", encoded="$encodedTerm"');
     
+    // When a mascot is active, try a subconcept-exact query first so we surface
+    // all mascot variants (bobby, bonnie, buddy) for the search term. The tag
+    // search (?tag=you) can return 20 results with the wrong mascot ranked first,
+    // cutting off the correct mascot. ?subconcept=you returns ONLY images whose
+    // subconcept exactly matches, giving the mascot filter a clean set to pick from.
+    if (_currentMascot != null) {
+      final subconceptUrl = '$baseUrl/api/imagecreator/search?subconcept=$encodedTerm&limit=20&log_missing=false';
+      debugPrint('🔍 MASCOT SUBCONCEPT SEARCH: "$searchTerm" → $subconceptUrl');
+      try {
+        final subResp = await http.get(
+          Uri.parse(subconceptUrl),
+          headers: {'Content-Type': 'application/json'},
+        ).timeout(const Duration(seconds: 8));
+        if (subResp.statusCode == 200) {
+          final subData = jsonDecode(subResp.body);
+          if (subData is Map<String, dynamic> && subData['images'] is List) {
+            final subImages = subData['images'] as List;
+            if (subImages.isNotEmpty) {
+              debugPrint('🔍 Subconcept search found ${subImages.length} exact-subconcept candidates for "$searchTerm"');
+              final bestSub = _selectBestImageMatch(subImages, searchTerm);
+              final subScore = bestSub['priorityScore'] as int? ?? 0;
+              final subUrl = bestSub['image_url'] as String?;
+              if (subUrl != null && subScore > 0) {
+                debugPrint('🔍 ✅ Mascot subconcept search hit for "$searchTerm": $subUrl (score=$subScore)');
+                return subUrl;
+              }
+              debugPrint('🔍 Subconcept search found no valid mascot match (score=$subScore) — falling through to tag search');
+            }
+          }
+        }
+      } catch (e) {
+        debugPrint('🔍 Subconcept search error for "$searchTerm": $e');
+      }
+    }
+
     // Use tag-only search as the primary search strategy
     // PREVIOUSLY: We sent tag, concept, AND subconcept, but the backend ANDs them together,
     // causing matches to fail unless the image had the term in ALL fields.
     // Now we prioritize the tag search which is the most comprehensive.
     final comprehensiveUrl = '$baseUrl/api/imagecreator/search?tag=$encodedTerm&limit=20&log_missing=false';
-    
+
     try {
       // debugPrint('PictogramService: Comprehensive search for "$searchTerm"');
       debugPrint('🔍 MAKING HTTP GET REQUEST TO: $comprehensiveUrl');
@@ -3388,7 +4072,12 @@ class PictogramService {
   Future<void> _persistCacheToPrefsNow() async {
     try {
       final prefs = await SharedPreferences.getInstance();
-      final cacheJson = jsonEncode(_imageCache);
+      // Exclude null entries — they are intentionally in-memory-only so they
+      // are retried on the next app launch (stale negatives block fresh lookups).
+      final cacheToSave = Map<String, dynamic>.fromEntries(
+        _imageCache.entries.where((e) => e.value != null),
+      );
+      final cacheJson = jsonEncode(cacheToSave);
       await prefs.setString(_pictogramCachePrefsKey, cacheJson);
       await prefs.setString(
         _fallbackUrlCachePrefsKey,
@@ -3618,6 +4307,9 @@ class PictogramService {
     }
   }
 
+  /// Public entry point for loading screen to await the library download.
+  Future<void> ensureLibraryLoaded() => _initLocalLibrary();
+
   Future<void> _initLocalLibrary() async {
     if (_libraryLoaded) return;
     final existingFuture = _libraryLoadFuture;
@@ -3645,14 +4337,21 @@ class PictogramService {
 
         // Either file doesn't exist or is older than 24 hours. Download a fresh copy.
         debugPrint('📚 PictogramService: Symbol library missing or older than 24h. Fetching fresh copy...');
-        unawaited(_downloadAndSaveLibrary(file, prefs));
-        
-        // If the file does exist (even if old), load it as a fallback until the new download completes
+
         if (file.existsSync()) {
+          // Stale file exists — load it immediately as a fallback, then refresh in background.
           debugPrint('📚 PictogramService: Loading stale local symbol library as temporary fallback');
           final jsonString = await file.readAsString();
           _parseLibraryJson(jsonString);
           _libraryLoaded = true;
+          if (!_libraryDownloadInProgress) {
+            unawaited(_downloadAndSaveLibrary(file, prefs));
+          }
+        } else {
+          // No file at all — must await the download so callers like the loading
+          // screen (ensureLibraryLoaded) get a fully loaded library before proceeding.
+          debugPrint('📚 PictogramService: No cached library — awaiting fresh download...');
+          await _downloadAndSaveLibrary(file, prefs);
         }
       } catch (e) {
         debugPrint('❌ PictogramService: Error initializing local library: $e');
@@ -3682,22 +4381,49 @@ class PictogramService {
             final url = img['image_url']?.toString();
             if (url == null || url.isEmpty) continue;
             final normalizedTags = <String>[];
+            final seen = <String>{};
 
-            final tags = img['tags'];
-            if (tags is List) {
-              for (final tag in tags) {
-                if (tag is String) {
-                  final normalizedTag = tag.toLowerCase().trim();
-                  if (normalizedTag.isNotEmpty) {
-                    // We map the tag to the first image URL that has it (replicates web app priority)
-                    _localLibraryTagIndex.putIfAbsent(normalizedTag, () => url);
-                    normalizedTags.add(normalizedTag);
+            void addTerm(dynamic value) {
+              if (value is String) {
+                final t = value.toLowerCase().trim();
+                if (t.isNotEmpty && seen.add(t)) {
+                  // Build a mascot-prioritised index: prefer the current mascot's
+                  // image, then generic (no mascot in URL), then wrong-mascot last.
+                  // This prevents a buddy image from blocking the bobby image for
+                  // tags like "feel" or "eat" that exist for multiple mascots.
+                  final existing = _localLibraryTagIndex[t];
+                  if (existing == null) {
+                    _localLibraryTagIndex[t] = url;
+                  } else {
+                    final existingHasMascot = _currentMascot != null &&
+                        existing.toLowerCase().contains(_currentMascot!.toLowerCase());
+                    final newHasMascot = _currentMascot != null &&
+                        url.toLowerCase().contains(_currentMascot!.toLowerCase());
+                    final existingIsWrongMascot = _isWrongMascotUrl(existing);
+                    // Upgrade: wrong-mascot → generic → correct-mascot
+                    if (!existingHasMascot && newHasMascot) {
+                      _localLibraryTagIndex[t] = url;
+                    } else if (existingIsWrongMascot && !_isWrongMascotUrl(url)) {
+                      _localLibraryTagIndex[t] = url;
+                    }
                   }
+                  normalizedTags.add(t);
                 }
+              } else if (value is List) {
+                for (final item in value) { addTerm(item); }
+              } else if (value is Map) {
+                for (final item in value.values) { addTerm(item); }
               }
             }
 
-            // Always index canonical fields even if no tags are present.
+            // Mirror auth.html: index tags, aliases, localized_tags,
+            // localized_labels, concept, subconcept — all fields the web app uses.
+            addTerm(img['tags']);
+            addTerm(img['aliases']);
+            addTerm(img['localized_tags']);
+            addTerm(img['localized_labels']);
+            if (img['concept'] != null) addTerm(img['concept']);
+
             final subconceptRaw =
                 img['subconcept']?.toString() ??
                 img['subcategory']?.toString() ??
@@ -3706,8 +4432,8 @@ class PictogramService {
             if (subconcept.isNotEmpty) {
               final normalizedSubconcept = subconcept.replaceAll('_', ' ');
               _localLibraryUrlSubconcept[url] = normalizedSubconcept;
-              normalizedTags.add(subconcept);
-              normalizedTags.add(normalizedSubconcept);
+              addTerm(subconcept);
+              addTerm(normalizedSubconcept);
             }
 
             if (normalizedTags.isNotEmpty) {
@@ -3723,6 +4449,8 @@ class PictogramService {
   }
 
   Future<void> _downloadAndSaveLibrary(File file, SharedPreferences prefs) async {
+    if (_libraryDownloadInProgress) return;
+    _libraryDownloadInProgress = true;
     try {
       final refreshedToken = await AuthenticatedHttpClient.getRefreshedIdToken();
       final tokenToUse = (refreshedToken != null && refreshedToken.isNotEmpty)
@@ -3740,7 +4468,7 @@ class PictogramService {
           'Authorization': 'Bearer $tokenToUse',
           'X-User-ID': _currentUserId ?? '',
         },
-      ).timeout(const Duration(seconds: 30));
+      ).timeout(const Duration(seconds: 120));
 
       if (response.statusCode == 200) {
         await file.writeAsString(response.body);
@@ -3753,6 +4481,8 @@ class PictogramService {
       }
     } catch (e) {
       debugPrint('❌ PictogramService: Error downloading symbol library: $e');
+    } finally {
+      _libraryDownloadInProgress = false;
     }
   }
 
@@ -3761,7 +4491,47 @@ class PictogramService {
     final tags = _localLibraryUrlTags[url];
     if (tags == null || tags.isEmpty) return true; // no info to reject
     final queryNorm = _normalizeLookupKey(query);
+
+    // Negation guard: "now" must not match a "not now" image and vice-versa.
+    final queryIsNegative = _isNegativePhrase(queryNorm);
+    final subconcept = (_localLibraryUrlSubconcept[url] ?? '').toLowerCase().trim();
+    final imgIsNegative = _isNegativePhrase(subconcept) ||
+        tags.any((tag) => _isNegativePhrase(tag));
+    if (queryIsNegative != imgIsNegative) return false;
+
+    // Word-count guard: reject images whose concept is significantly more
+    // complex than the query (e.g. "see you later" for query "later").
+    if (subconcept.isNotEmpty) {
+      final queryWords = queryNorm.split(' ').where((w) => w.isNotEmpty).length;
+      final subWords = subconcept.split(' ').where((w) => w.isNotEmpty).length;
+      if (subWords > queryWords + 1) return false;
+    }
+
     return tags.any((tag) => _areSingularPluralEquivalent(queryNorm, tag));
+  }
+
+  /// Returns the best URL from the subconcept map for [term].
+  /// Only exact subconcept matches are accepted — stem/plural variations are
+  /// paused because they produce false matches (e.g. "demo" → "demolition").
+  /// Priority: exact+correct-mascot > exact+generic > exact+wrong-mascot.
+  String? _bestSubconceptUrlFor(String term) {
+    String? exactCorrect, exactGeneric, exactFallback;
+
+    for (final entry in _localLibraryUrlSubconcept.entries) {
+      final subVal = entry.value;
+      if (term != subVal) continue;
+
+      final u = entry.key;
+      final isCurrent = _currentMascot != null &&
+          u.toLowerCase().contains(_currentMascot!.toLowerCase());
+      final isWrong = _isWrongMascotUrl(u);
+
+      if (isCurrent) { exactCorrect ??= u; }
+      else if (!isWrong) { exactGeneric ??= u; }
+      else { exactFallback ??= u; }
+    }
+
+    return exactCorrect ?? exactGeneric ?? exactFallback;
   }
 
   String? _searchLocalLibraryIndex(String text, {List<String>? keywords}) {
@@ -3785,21 +4555,63 @@ class PictogramService {
       normalizedPhrase.replaceAll(' ', '_').trim(),
     }.where((value) => value.isNotEmpty).toList(growable: false);
 
+    // Compute both key terms up front.
+    // _keyTerm returns the full phrase when stripping would leave a single stop
+    // word (e.g. "about them" → "about them"). _aggressiveKeyTerm strips
+    // regardless, so "about them" → "them". The aggressive term drives the
+    // first-pass guard and the second-pass lookup.
+    final aggressiveTerm = _aggressiveKeyTerm(normalizedPhrase);
+    final normalKeyTerm  = _keyTerm(normalizedPhrase);
+
     // First pass: prefer full-phrase matches for static labels like song names.
     for (final phrase in phraseCandidates) {
-      for (final entry in _localLibraryUrlSubconcept.entries) {
-        if (_areSingularPluralEquivalent(phrase, entry.value)) {
-          return entry.key;
-        }
-      }
+      final subMatch = _bestSubconceptUrlFor(phrase);
+      if (subMatch != null) return subMatch;
 
       if (_localLibraryTagIndex.containsKey(phrase)) {
         final url = _localLibraryTagIndex[phrase]!;
         if (_libraryUrlMatchesQuery(url, phrase)) {
+          // Stop-word subconcept guard: if lead/trail stops were stripped to
+          // produce aggressiveTerm, reject a tag-index hit whose image subconcept
+          // is itself one of those stop words. "about family" must not match the
+          // "about" image even when "about family" is a tag of that image.
+          if (aggressiveTerm != phrase && aggressiveTerm.isNotEmpty) {
+            final subVal = (_localLibraryUrlSubconcept[url] ?? '').toLowerCase().trim();
+            if (subVal.isNotEmpty &&
+                (_leadStops.contains(subVal) || _trailStops.contains(subVal)) &&
+                subVal != aggressiveTerm) {
+              debugPrint('📚 Library first-pass stop-word reject: "$phrase" → subconcept="$subVal" is a stop word, key term="$aggressiveTerm"');
+              continue;
+            }
+          }
           return url;
         }
       }
     }
+
+    // Second pass: try aggressive key term first (strips stops even when
+    // the result is itself a stop word, e.g. "about them" → "them"), then
+    // fall back to the conservative key term.
+    for (final kt in {aggressiveTerm, normalKeyTerm}) {
+      if (kt.isEmpty || kt == normalizedPhrase) continue;
+      final subMatch = _bestSubconceptUrlFor(kt);
+      if (subMatch != null) return subMatch;
+      if (_localLibraryTagIndex.containsKey(kt)) {
+        final url = _localLibraryTagIndex[kt]!;
+        if (_libraryUrlMatchesQuery(url, kt)) {
+          return url;
+        }
+      }
+    }
+
+    // Third pass: individual-keyword fallback.
+    // For multi-word phrases where first/second passes found no match, a single
+    // extracted keyword (e.g. "color" from "same color") is too imprecise —
+    // it would return a wrong partial image. Compound labels like "Same Color"
+    // or "First Letter" have exact images on the server (subconcept="same color").
+    // Return null so the server call uses the full phrase and finds the precise match.
+    final queryWordCount = normalizedPhrase.split(' ').where((w) => w.isNotEmpty).length;
+    if (queryWordCount > 1) return null;
 
     final words = normalizedPhrase.split(RegExp(r'\s+'));
     final extracted = _extractKeywords(rawText);
@@ -3812,11 +4624,8 @@ class PictogramService {
 
       // Priority: exact canonical field match (subconcept/subcategory)
       // should win over generic tag collisions.
-      for (final entry in _localLibraryUrlSubconcept.entries) {
-        if (_areSingularPluralEquivalent(termLower, entry.value)) {
-          return entry.key;
-        }
-      }
+      final subMatch = _bestSubconceptUrlFor(termLower);
+      if (subMatch != null) return subMatch;
 
       if (_localLibraryTagIndex.containsKey(termLower)) {
         final url = _localLibraryTagIndex[termLower]!;
@@ -3833,16 +4642,13 @@ class PictogramService {
         }
       }
     }
-    
+
     if (keywords != null) {
       for (final keyword in keywords) {
         final kwLower = keyword.toLowerCase().trim();
 
-        for (final entry in _localLibraryUrlSubconcept.entries) {
-          if (_areSingularPluralEquivalent(kwLower, entry.value)) {
-            return entry.key;
-          }
-        }
+        final subMatch = _bestSubconceptUrlFor(kwLower);
+        if (subMatch != null) return subMatch;
 
         if (_localLibraryTagIndex.containsKey(kwLower)) {
           final url = _localLibraryTagIndex[kwLower]!;
@@ -3863,7 +4669,14 @@ class PictogramService {
     return null;
   }
 
-  Future<Map<String, String?>> batchSearchRemoteSymbols(List<String> terms) async {
+  /// Mirrors the web app's `batchLoadImages`: POST /api/symbols/batch-search
+  /// with `{ terms, locale }`. Terms are sent as `{text, keywords}` objects when
+  /// keywords are available so the server can use them for better symbol matching.
+  Future<Map<String, String?>> batchSearchRemoteSymbols(
+    List<String> terms, {
+    String? locale,
+    Map<String, List<String>>? keywordMap,
+  }) async {
     if (terms.isEmpty) return const {};
 
     final baseUrl = EnvironmentConfig.apiBaseUrl;
@@ -3877,18 +4690,36 @@ class PictogramService {
       headers['X-User-ID'] = _currentUserId!;
     }
 
+    // Build term list using web-app-equivalent keyword extraction.
+    // _buildImageKeywords("I feel", ...) → ["feel"] so the server can find
+    // bobby_feel.png even though the input phrase is "I feel".
+    final termPayload = terms.map((t) {
+      final keywords = _buildImageKeywords(t, keywordMap?[t]);
+      if (keywords.isNotEmpty) {
+        return <String, dynamic>{'text': t, 'keywords': keywords};
+      }
+      return t as dynamic;
+    }).toList();
+
     try {
-      debugPrint('🌐 PictogramService: Batch searching ${terms.length} symbols remotely...');
+      debugPrint('🌐 PictogramService: Batch searching ${terms.length} symbols remotely (locale=${locale ?? 'en-US'}, terms=$terms)...');
       final response = await http.post(
         Uri.parse('$baseUrl/api/symbols/batch-search'),
         headers: headers,
-        body: jsonEncode({'terms': terms}),
-      ).timeout(const Duration(seconds: 10));
+        body: jsonEncode({
+        'terms': termPayload,
+        'locale': locale ?? 'en-US',
+        if (_currentMascot != null) 'mascot': _currentMascot!.toLowerCase(),
+      }),
+      ).timeout(const Duration(seconds: 25));
 
+      debugPrint('🌐 batchSearch HTTP ${response.statusCode} body-prefix="${response.body.substring(0, response.body.length.clamp(0, 300))}..."');
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
+        debugPrint('🌐 batchSearch data type=${data.runtimeType} hasResults=${data is Map ? data.containsKey("results") : false}');
         if (data is Map && data['results'] is Map) {
           final results = Map<String, dynamic>.from(data['results'] as Map);
+          debugPrint('🌐 batchSearch results keys=${results.keys.toList()}');
           final parsedResults = <String, String?>{};
           for (final entry in results.entries) {
             final key = entry.key;
@@ -3898,7 +4729,7 @@ class PictogramService {
           return parsedResults;
         }
       } else {
-        debugPrint('🌐 PictogramService: Batch search remote failed with HTTP ${response.statusCode}');
+        debugPrint('🌐 batchSearch HTTP error ${response.statusCode}: ${response.body.substring(0, response.body.length.clamp(0, 200))}');
       }
     } catch (e) {
       debugPrint('❌ PictogramService: Batch search remote error: $e');
@@ -4252,7 +5083,10 @@ class PictogramService {
       'those', 'am', 'been', 'being', 'have', 'had', 'do', 'does', 'did',
       'can', 'could', 'should', 'would', 'may', 'might', 'must', 'shall',
       'feeling', 'today', 'now', 'bit', 'little', 'very', 'really', 'so',
-      'just', 'quite', 'too', 'much', 'many', 'some', 'any', 'all'
+      'just', 'quite', 'too', 'much', 'many', 'some', 'any', 'all',
+      // Generic modifiers that prefix compound concepts (e.g. "Same Color", "Same Shape").
+      // As a standalone word the raw-word fallback still covers it.
+      'same',
     };
     
     // Emotion/feeling words that are meaningful

@@ -1,6 +1,7 @@
 import Flutter
 import UIKit
 import AVFoundation
+import MediaPlayer
 
 @main
 @objc class AppDelegate: FlutterAppDelegate {
@@ -40,6 +41,25 @@ import AVFoundation
         self?.checkMicrophonePermission(result: result)
       case "requestMicrophonePermission":
         self?.requestMicrophonePermission(result: result)
+      case "appleMusic_getAuthStatus":
+        self?.appleMusicGetAuthStatus(result: result)
+      case "appleMusic_requestPermission":
+        self?.appleMusicRequestPermission(result: result)
+      case "appleMusic_getPlaylists":
+        self?.appleMusicGetPlaylists(result: result)
+      case "appleMusic_playPlaylist":
+        self?.appleMusicPlayPlaylist(call: call, result: result)
+      case "appleMusic_pause":
+        MPMusicPlayerController.systemMusicPlayer.pause()
+        result(true)
+      case "appleMusic_resume":
+        MPMusicPlayerController.systemMusicPlayer.play()
+        result(true)
+      case "appleMusic_skipNext":
+        MPMusicPlayerController.systemMusicPlayer.skipToNextItem()
+        result(true)
+      case "appleMusic_getPlayerState":
+        self?.appleMusicGetPlayerState(result: result)
       default:
         result(FlutterMethodNotImplemented)
       }
@@ -57,6 +77,11 @@ import AVFoundation
     print("✅ AppDelegate: Audio route change observer registered")
     
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  override func applicationWillTerminate(_ application: UIApplication) {
+    MPMusicPlayerController.systemMusicPlayer.pause()
+    super.applicationWillTerminate(application)
   }
 
   override func application(_ application: UIApplication, supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
@@ -275,6 +300,74 @@ import AVFoundation
     }
   }
   
+  // MARK: - Apple Music Methods
+
+  private func appleMusicGetAuthStatus(result: @escaping FlutterResult) {
+    let status = MPMediaLibrary.authorizationStatus()
+    result(status.rawValue)
+  }
+
+  private func appleMusicRequestPermission(result: @escaping FlutterResult) {
+    MPMediaLibrary.requestAuthorization { status in
+      DispatchQueue.main.async {
+        result(status == .authorized)
+      }
+    }
+  }
+
+  private func appleMusicGetPlaylists(result: @escaping FlutterResult) {
+    guard MPMediaLibrary.authorizationStatus() == .authorized else {
+      result([])
+      return
+    }
+    let query = MPMediaQuery.playlists()
+    var playlists: [[String: Any]] = []
+    if let collections = query.collections {
+      for collection in collections {
+        guard let playlist = collection as? MPMediaPlaylist,
+              let name = playlist.value(forProperty: MPMediaPlaylistPropertyName) as? String,
+              !name.isEmpty else { continue }
+        playlists.append([
+          "id": String(playlist.persistentID),
+          "name": name,
+          "trackCount": playlist.count,
+        ])
+      }
+    }
+    result(playlists)
+  }
+
+  private func appleMusicPlayPlaylist(call: FlutterMethodCall, result: @escaping FlutterResult) {
+    guard let args = call.arguments as? [String: Any],
+          let idString = args["id"] as? String,
+          let persistentID = UInt64(idString) else {
+      result(FlutterError(code: "INVALID_ARGS", message: "Missing or invalid playlist ID", details: nil))
+      return
+    }
+    let predicate = MPMediaPropertyPredicate(
+      value: NSNumber(value: persistentID),
+      forProperty: MPMediaPlaylistPropertyPersistentID
+    )
+    let query = MPMediaQuery.playlists()
+    query.addFilterPredicate(predicate)
+    let player = MPMusicPlayerController.systemMusicPlayer
+    player.setQueue(with: query)
+    player.play()
+    result(true)
+  }
+
+  private func appleMusicGetPlayerState(result: @escaping FlutterResult) {
+    let player = MPMusicPlayerController.systemMusicPlayer
+    let item = player.nowPlayingItem
+    result([
+      "isPlaying": player.playbackState == .playing,
+      "trackName": item?.title ?? "",
+      "artistName": item?.artist ?? "",
+    ] as [String: Any])
+  }
+
+  // MARK: - Volume / Microphone
+
   /// Capture the current device output volume (0-10 scale).
   /// Uses AVAudioSession.outputVolume (0.0-1.0) and scales to 0-10 for the app.
   private func captureCurrentVolume(call: FlutterMethodCall, result: @escaping FlutterResult) {

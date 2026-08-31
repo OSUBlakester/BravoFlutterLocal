@@ -191,96 +191,92 @@ class _SpellingDialogState extends State<SpellingDialog> {
   Widget build(BuildContext context) {
     return Dialog(
       backgroundColor: Colors.white,
-      insetPadding: const EdgeInsets.all(16),
-      child: Container(
-        width: double.infinity,
-        height: double.infinity,
-        padding: const EdgeInsets.all(16),
+      insetPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 24),
+      child: SafeArea(
+        child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
         child: Column(
           children: [
-            // Header
+            // Header + word display in one compact row
             Row(
               children: [
-                const Text('Spell Word', style: TextStyle(fontSize: 24, fontWeight: FontWeight.bold)),
-                const Spacer(),
+                const Text('Spell Word', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[100],
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.grey[300]!),
+                    ),
+                    child: Text(
+                      _currentSpellingWord.isEmpty ? 'Start typing...' : _currentSpellingWord,
+                      style: TextStyle(
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                        color: _currentSpellingWord.isEmpty ? Colors.grey : Colors.black,
+                      ),
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
+                if (_currentSpellingWord.isNotEmpty) ...[
+                  IconButton(
+                    icon: const Icon(Icons.backspace, size: 20),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                    onPressed: _backspaceCurrentWord,
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.check_circle, color: Colors.green, size: 20),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
+                    onPressed: _addCurrentWordToBuildSpace,
+                  ),
+                ],
                 IconButton(
-                  icon: const Icon(Icons.close),
+                  icon: const Icon(Icons.close, size: 20),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(minWidth: 36, minHeight: 36),
                   onPressed: () => Navigator.pop(context),
                 ),
               ],
             ),
-            const SizedBox(height: 16),
-            
-            // Word Display
-            Container(
-              padding: const EdgeInsets.all(16),
-              decoration: BoxDecoration(
-                color: Colors.grey[100],
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.grey[300]!),
-              ),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      _currentSpellingWord.isEmpty ? 'Start typing...' : _currentSpellingWord,
-                      style: TextStyle(
-                        fontSize: 32,
-                        fontWeight: FontWeight.bold,
-                        color: _currentSpellingWord.isEmpty ? Colors.grey : Colors.black,
-                      ),
-                    ),
-                  ),
-                  if (_currentSpellingWord.isNotEmpty) ...[
-                    IconButton(
-                      icon: const Icon(Icons.backspace),
-                      onPressed: _backspaceCurrentWord,
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.check_circle, color: Colors.green),
-                      onPressed: _addCurrentWordToBuildSpace,
-                    ),
-                  ],
-                ],
-              ),
-            ),
-            const SizedBox(height: 16),
-            
+            const SizedBox(height: 6),
+
             // Predictions Row
-            Container(
-              height: 60,
+            SizedBox(
+              height: 40,
               width: double.infinity,
-              decoration: BoxDecoration(
-                color: Colors.grey[50],
-                borderRadius: BorderRadius.circular(8),
-                border: Border.all(color: Colors.grey[200]!),
-              ),
-              child: _isLoading 
-                ? const Center(child: SizedBox(width: 24, height: 24, child: CircularProgressIndicator(strokeWidth: 2)))
+              child: _isLoading
+                ? const Center(child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2)))
                 : _currentPredictions.isEmpty
                   ? Center(
                       child: Text(
-                        _currentSpellingWord.isEmpty ? 'Start typing for predictions' : 'No predictions found', 
-                        style: TextStyle(color: Colors.grey[500], fontStyle: FontStyle.italic)
-                      )
+                        _currentSpellingWord.isEmpty ? 'Start typing for predictions' : 'No predictions found',
+                        style: TextStyle(color: Colors.grey[500], fontStyle: FontStyle.italic, fontSize: 13),
+                      ),
                     )
                   : ListView.separated(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 8),
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
                       scrollDirection: Axis.horizontal,
                       itemCount: _currentPredictions.length,
-                      separatorBuilder: (context, index) => const SizedBox(width: 8),
+                      separatorBuilder: (context, index) => const SizedBox(width: 6),
                       itemBuilder: (context, index) {
                         return ActionChip(
-                          label: Text(_currentPredictions[index], style: const TextStyle(fontSize: 18)),
+                          label: Text(_currentPredictions[index], style: const TextStyle(fontSize: 14)),
                           onPressed: () => widget.onWordSelected(_currentPredictions[index]),
                           backgroundColor: Colors.blue[50],
                           side: BorderSide(color: Colors.blue[200]!),
-                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          materialTapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                          visualDensity: VisualDensity.compact,
                         );
                       },
                     ),
             ),
-            const SizedBox(height: 16),
+            const SizedBox(height: 6),
             
             // Keyboard
             Expanded(
@@ -339,6 +335,7 @@ class _SpellingDialogState extends State<SpellingDialog> {
             ),
           ],
         ),
+      ),
       ),
     );
   }

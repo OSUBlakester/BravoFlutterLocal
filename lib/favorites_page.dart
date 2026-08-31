@@ -42,6 +42,10 @@ class FavoritesPageState extends State<FavoritesPage> with RouteAware, TickerPro
   List<Map<String, dynamic>> _articleOptions = [];
   bool _showingArticles = false;
   String? _currentTopic;
+
+  // --- Follow-up conversation state ---
+  String _originalTopic = '';
+  List<String> _selectedResponses = [];
   String _speechHistory = '';
   String _questionDisplay = '';
   String _voiceStatusMessage = '';
@@ -341,6 +345,8 @@ class FavoritesPageState extends State<FavoritesPage> with RouteAware, TickerPro
         _isLoading = true;
         _statusMessage = 'Loading ${button['text']} articles...';
         _currentTopic = button['text'];
+        _originalTopic = button['text'] ?? '';
+        _selectedResponses = [];
       });
       
       // Fetch articles for this topic
@@ -413,43 +419,184 @@ class FavoritesPageState extends State<FavoritesPage> with RouteAware, TickerPro
     }
   }
 
+  String _buildFollowUpPrompt(List<String> excluded) {
+    const summaryInstruction =
+        'If the generated option is more than 5 words, the "summary" key should be a 3-5 word abbreviation of each option, including the exact key words from the option. If the option is 5 words or less, the "summary" key should contain the exact same FULL text as the "option" key.';
+
+    final baseQuestion = _originalTopic;
+    final historyText = _selectedResponses.isNotEmpty
+        ? _selectedResponses
+            .asMap()
+            .entries
+            .map((e) => '${e.key + 1}. ${e.value}')
+            .join('\n')
+        : 'None yet';
+    final conversationContext =
+        'Original question: "$baseQuestion"\nSelected follow-ups so far:\n$historyText';
+
+    final latestSelected =
+        _selectedResponses.isNotEmpty ? _selectedResponses.last : '';
+
+    final exclusionLine = excluded.isNotEmpty
+        ? 'Avoid repeating these existing options: "${excluded.join('; ')}".'
+        : '';
+
+    final latestFocusLine = latestSelected.isNotEmpty
+        ? 'Latest selected response (PRIMARY FOCUS): "$latestSelected".'
+        : '';
+
+    return '''
+AAC COMMUNICATION SYSTEM - GENERATING USER'S NEXT SPEECH OPTIONS
+
+SCENARIO:
+An AAC user is having a conversation. They select pre-written options to speak.
+The user has ALREADY SPOKEN the following words out loud to their communication partner:
+$conversationContext
+Most recently, the user JUST SAID OUT LOUD: "$latestSelected"
+
+YOUR TASK:
+Generate 10 MORE things the SAME user can SAY, ASK, BUILD, or EXPOUND next to continue THEIR speaking turn.
+These are OPTIONS FOR THE USER TO SELECT AND SPEAK (including statements and partner-engagement questions), not responses TO the user.
+
+$latestFocusLine
+$exclusionLine
+
+RULES FOR GENERATION:
+1. The user is SPEAKING, not being interviewed
+2. The user is continuing THEIR turn (partner hasn't responded yet)
+3. Generate things the user would SAY or ASK to engage the partner, not questions someone would ASK the user
+4. Options should BUILD/EXPOUND on their point OR invite partner engagement
+5. Keep options short, conversational, and natural
+6. Include at least 4 partner-engagement QUESTIONS that end with "?" and invite the partner to respond
+
+RESPONSE FORMAT:
+Return ONLY valid JSON array. No markdown, no explanation. Example:
+[{"option": "full option text here", "summary": "short label", "keywords": ["key", "words"]}]
+
+$summaryInstruction
+Each "keywords" array should contain 2-4 key topic words from the option.
+''';
+  }
+
   Future<void> _handleArticleButtonPress(Map<String, dynamic> article) async {
     try {
       _stopScanning();
-      
+
       final optionText = article['option'] ?? article['text'] ?? '';
-      
-      // Update speech history with the full option text
+
+      // Update speech history
       setState(() {
         if (_questionDisplay.isNotEmpty) {
           final qPrefix = 'Q: $_questionDisplay';
           final lines = _speechHistory.split('\n');
           final matchIndex = lines.indexWhere((l) => l.startsWith(qPrefix));
-
           if (matchIndex >= 0) {
             lines[matchIndex] = 'Q: $_questionDisplay | A: $optionText';
             _speechHistory = lines.join('\n');
           } else {
-            _speechHistory = 'Q: $_questionDisplay | A: $optionText${_speechHistory.isNotEmpty ? '\n' : ''}$_speechHistory';
+            _speechHistory =
+                'Q: $_questionDisplay | A: $optionText${_speechHistory.isNotEmpty ? '\n' : ''}$_speechHistory';
           }
-
-          _questionDisplay = ''; // Clear questionDisplay after using it
+          _questionDisplay = '';
           _voiceStatusMessage = '';
         } else {
-          _speechHistory = '$optionText${_speechHistory.isNotEmpty ? '\n' : ''}$_speechHistory';
+          _speechHistory =
+              '$optionText${_speechHistory.isNotEmpty ? '\n' : ''}$_speechHistory';
         }
       });
-      
-      // Announce the full option text using built-in speaker
+
+      // Announce the selection
       debugPrint('FavoritesPage: Announcing article selection: "$optionText"');
       await _announceViaBuiltinSpeaker(optionText);
-      
-      // Navigate back to main grid page
-      if (mounted) {
-        Navigator.of(context).pop();
+
+      if (!mounted) return;
+
+      // Track selection in follow-up conversation history
+      _selectedResponses.add(optionText);
+
+      // Show loading while fetching follow-up options
+      setState(() {
+        _isLoading = true;
+        _statusMessage = 'Getting more options...';
+      });
+
+      // Build excluded list from current options so we don't repeat them
+      final excluded = _articleOptions
+          .map((a) => (a['option'] ?? a['text'] ?? '') as String)
+          .where((t) => t.trim().isNotEmpty)
+          .toList();
+
+      final followUpPrompt = _buildFollowUpPrompt(excluded);
+
+      // Refresh auth token
+      String idToken = widget.idToken;
+      try {
+        final user = FirebaseAuth.instance.currentUser;
+        if (user != null) {
+          final refreshed = await user.getIdToken(true).timeout(const Duration(seconds: 6));
+          if (refreshed != null && refreshed.isNotEmpty) idToken = refreshed;
+        }
+      } catch (_) {}
+
+      final response = await http.post(
+        Uri.parse('${EnvironmentConfig.apiBaseUrl}/llm'),
+        headers: {
+          'Authorization': 'Bearer $idToken',
+          'X-User-ID': widget.aacUserId,
+          'Content-Type': 'application/json',
+        },
+        body: jsonEncode({'prompt': followUpPrompt}),
+      );
+
+      if (!mounted) return;
+
+      if (response.statusCode == 200) {
+        final raw = response.body.trim();
+        // Strip markdown fences if present
+        final cleaned = raw
+            .replaceFirst(RegExp(r'^```json\s*', multiLine: false), '')
+            .replaceFirst(RegExp(r'\s*```$', multiLine: false), '')
+            .trim();
+        final parsed = jsonDecode(cleaned) as List<dynamic>;
+        final newOptions = parsed.map((item) {
+          if (item is Map<String, dynamic>) {
+            final fullText = item['option'] ?? item['text'] ?? '';
+            final summary = item['summary'] ?? fullText;
+            return <String, dynamic>{
+              'option': fullText,
+              'text': fullText,
+              'summary': summary,
+            };
+          }
+          final text = item.toString();
+          return <String, dynamic>{'option': text, 'text': text, 'summary': text};
+        }).toList();
+
+        setState(() {
+          _articleOptions = newOptions;
+          _isLoading = false;
+          _statusMessage = null;
+        });
+
+        _startScanningAfterDelay();
+        debugPrint('FavoritesPage: Loaded ${newOptions.length} follow-up options');
+      } else {
+        debugPrint('FavoritesPage: /llm returned ${response.statusCode}');
+        setState(() {
+          _isLoading = false;
+          _statusMessage = null;
+        });
+        // Fall back to navigating back to the main grid
+        if (mounted) Navigator.of(context).pop();
       }
     } catch (e) {
       debugPrint('Error handling article button press: $e');
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _statusMessage = null;
+        });
+      }
     }
   }
 

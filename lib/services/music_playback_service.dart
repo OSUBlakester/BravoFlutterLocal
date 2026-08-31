@@ -84,7 +84,6 @@ class MusicPlaybackService extends ChangeNotifier with WidgetsBindingObserver {
   String? _lastError;
   bool _playbackRequested = false;
   bool _isStartingPlayback = false;
-  AppLifecycleState _lifecycleState = AppLifecycleState.resumed;
 
   final List<SpotifyPlaylist> _playlists = <SpotifyPlaylist>[];
 
@@ -99,13 +98,16 @@ class MusicPlaybackService extends ChangeNotifier with WidgetsBindingObserver {
 
   bool get _isTransitioningToPlay {
     if (_lastPlayCommandTime == null) return false;
-    return DateTime.now().difference(_lastPlayCommandTime!) < const Duration(seconds: 6);
+    return DateTime.now().difference(_lastPlayCommandTime!) < const Duration(seconds: 20);
   }
   String? get currentTrack => _currentTrack;
   String? get currentArtist => _currentArtist;
   String? get currentPlaylistName => _currentPlaylistName;
   String? get lastError => _lastError;
   bool get webApiForbidden => _webApiForbidden;
+  // True while a playback start or reconnect chain is in progress — used by the
+  // UI to show a spinner-style status banner instead of an orange warning icon.
+  bool get isReconnecting => _isStartingPlayback;
   List<SpotifyPlaylist> get playlists => List<SpotifyPlaylist>.unmodifiable(_playlists);
   List<SpotifyPlaylist> get fallbackPlaylists =>
       List<SpotifyPlaylist>.unmodifiable(_fallbackPlaylists);
@@ -316,10 +318,26 @@ class MusicPlaybackService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  /// Called when the music page opens (or re-opens after navigation).
+  /// Resets flags that can be left in an inconsistent state when the page is
+  /// disposed mid-flight (e.g. navigating away while playPlaylistUri is running).
+  /// Does NOT call any Spotify SDK methods — those can hang on a stale iOS
+  /// App Remote session and should only be triggered by actual user actions.
+  void prepareForNewSession() {
+    _isStartingPlayback = false;
+    _isConnected = false;   // treat any prior App Remote session as stale
+    _lastError = null;
+    _lastPlayCommandTime = null;
+    // Leave _playbackRequested, _isPlaying, playlists, and track info intact
+    // so the UI can show current state without re-fetching unnecessarily.
+    notifyListeners();
+  }
+
   Future<void> disconnect() async {
     await ensureInitialized();
     _isConnected = false;
     _isPlaying = false;
+    _lastError = null;
     _currentTrack = null;
     _currentArtist = null;
     _currentPlaylistName = null;
@@ -388,6 +406,9 @@ class MusicPlaybackService extends ChangeNotifier with WidgetsBindingObserver {
         _setLoading(false);
         return;
       }
+      // With the Swift singleton guard, _getFreshAccessToken() returns the stored
+      // token from the existing connected App Remote without creating a new instance.
+      // _isConnected remains accurate — do NOT reset it here.
     }
 
     try {
@@ -404,17 +425,19 @@ class MusicPlaybackService extends ChangeNotifier with WidgetsBindingObserver {
           },
         );
 
-        if (response.statusCode == 401 || response.statusCode == 403) {
-          // Token expired (401) or forbidden (403). If we haven't already forced a new token, try to re-authorize once automatically.
+        if (response.statusCode == 401) {
+          // Token expired. If we haven't already forced a new token, try to re-authorize once automatically.
           if (!forceNewToken) {
             needsReauth = true;
             break;
-          } else if (response.statusCode == 401) {
+          } else {
             _webApiForbidden = false;
             _lastError = 'Spotify authorization expired (401). Tap Connect Spotify again.';
             break;
           }
         }
+        // 403: dev-mode quota restriction — do NOT needsReauth (token is valid, re-auth would
+        // needlessly replace the SPTAppRemote instance). Fall through to Content API fallback.
 
         if (response.statusCode != 200) {
           String spotifyApiMessage = '';
@@ -431,7 +454,48 @@ class MusicPlaybackService extends ChangeNotifier with WidgetsBindingObserver {
           } catch (_) {}
 
           if (response.statusCode == 403) {
-            _webApiForbidden = true; // Set to true to show fallback banner in UI
+            // Web API is quota-restricted (dev mode). Try the App Remote Content API,
+            // which bypasses Web API entirely and works on the existing connected session.
+            debugPrint('Spotify 403: trying Content API (step 1 — direct)');
+            var contentPlaylists = await _fetchPlaylistsViaContentAPI();
+            debugPrint('Spotify 403: step 1 result: ${contentPlaylists.length} playlists [$_contentApiDiagnostic]');
+            if (contentPlaylists.isEmpty) {
+              // App Remote not connected (page loaded before user tapped Connect,
+              // or auth-only App Remote from a previous attempt already disconnected).
+              // Use the combined native method: OAuth + Content API in one round-trip.
+              // The playlist fetch runs inside appRemoteDidEstablishConnection —
+              // while the connection is guaranteed live — so the auth-only App Remote
+              // cannot disconnect between the token callback and the Content API call.
+              debugPrint('Spotify 403: calling combined getTokenAndContentPlaylists (step 2)');
+              final combined = await _getTokenAndContentPlaylists();
+              debugPrint('Spotify 403: step 2 result: combined=${combined != null} [$_contentApiDiagnostic]');
+              if (combined != null) {
+                final (newToken, fetchedPlaylists) = combined;
+                _accessToken = newToken;
+                unawaited(_storage.write(key: _accessTokenKey, value: _accessToken));
+                // App Remote is live after getTokenAndContentPlaylists — mark it
+                // connected so playPlaylistUri() uses the direct path without an
+                // unnecessary disconnect/reconnect cycle.
+                _isConnected = true;
+                debugPrint('Spotify 403: step 2 playlists: ${fetchedPlaylists.length}');
+                if (fetchedPlaylists.isNotEmpty) {
+                  contentPlaylists = fetchedPlaylists;
+                } else {
+                  // Token obtained; App Remote may still be live — try direct Content API.
+                  debugPrint('Spotify 403: step 2 empty playlists, retrying Content API (step 3)');
+                  contentPlaylists = await _fetchPlaylistsViaContentAPI();
+                  debugPrint('Spotify 403: step 3 result: ${contentPlaylists.length} playlists [$_contentApiDiagnostic]');
+                }
+              }
+            }
+            if (contentPlaylists.isNotEmpty) {
+              loaded.addAll(contentPlaylists);
+              _webApiForbidden = false;
+              break; // Success via Content API — skip error handling
+            }
+
+            // Both Web API (403) and Content API failed.
+            _webApiForbidden = true;
             final accountDetails = await _fetchSpotifyAccountDetails();
             final product = (accountDetails['product'] ?? '').toString();
             final email = (accountDetails['email'] ?? '').toString();
@@ -444,7 +508,7 @@ class MusicPlaybackService extends ChangeNotifier with WidgetsBindingObserver {
                 : '';
 
             _lastError = 'Access denied (403) for Client ID: $_clientId. Make sure your account is registered as a Sandbox User in the Spotify Developer Dashboard.'
-                '$accountText$apiText';
+                '$accountText$apiText [$_contentApiDiagnostic]';
 
             assert(() {
               debugPrint('Spotify Web API restricted (403).$accountText$apiText');
@@ -496,8 +560,168 @@ class MusicPlaybackService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  // Diagnostic string from the most recent Content API attempt — included in
+  // the 403 error banner so failures are visible without console access.
+  String _contentApiDiagnostic = '';
+
+  /// Combined native call: establishes an OAuth connection (if App Remote is not
+  /// already connected) and fetches Content API playlists inside the connection
+  /// callback — before the auth-only App Remote can disconnect.
+  ///
+  /// Returns (token, playlists) on success, or null on failure.
+  Future<(String, List<SpotifyPlaylist>)?> _getTokenAndContentPlaylists() async {
+    try {
+      final rawResult = await const MethodChannel('spotify_sdk')
+          .invokeMethod<Map>('getTokenAndContentPlaylists', <String, dynamic>{
+            'clientId': _clientId,
+            'redirectUrl': _redirectUri,
+            'scope': _scope,
+          })
+          .timeout(const Duration(seconds: 30));
+
+      if (rawResult == null) {
+        _contentApiDiagnostic = 'CombinedAPI: null response';
+        return null;
+      }
+
+      final token = rawResult['token']?.toString() ?? '';
+      if (token.isEmpty) {
+        _contentApiDiagnostic = 'CombinedAPI: empty token';
+        return null;
+      }
+
+      final rawPlaylists = rawResult['playlists'];
+      final List<SpotifyPlaylist> playlists;
+      if (rawPlaylists is List) {
+        playlists = rawPlaylists
+            .whereType<Map>()
+            .map((m) {
+              final uri = (m['uri'] ?? '').toString();
+              final name = (m['name'] ?? 'Playlist').toString();
+              final subtitle = (m['subtitle'] ?? '').toString();
+              int trackCount = 0;
+              final match = RegExp(r'(\d+)\s+song').firstMatch(subtitle);
+              if (match != null) {
+                trackCount = int.tryParse(match.group(1) ?? '0') ?? 0;
+              }
+              return SpotifyPlaylist(
+                id: uri,
+                name: name,
+                uri: uri,
+                ownerName: null,
+                trackCount: trackCount,
+              );
+            })
+            .where((p) => p.uri.trim().isNotEmpty)
+            .toList();
+      } else {
+        playlists = [];
+      }
+
+      _contentApiDiagnostic = playlists.isNotEmpty
+          ? 'CombinedAPI: ${playlists.length} playlists'
+          : 'CombinedAPI: token obtained, 0 playlists';
+      debugPrint('Spotify CombinedAPI: token obtained, ${playlists.length} playlists');
+      return (token, playlists);
+    } on TimeoutException {
+      _contentApiDiagnostic = 'CombinedAPI: timed out (30s)';
+      debugPrint('Spotify getTokenAndContentPlaylists: timed out');
+      return null;
+    } catch (e) {
+      _contentApiDiagnostic = 'CombinedAPI error: $e';
+      debugPrint('Spotify getTokenAndContentPlaylists: failed: $e');
+      return null;
+    }
+  }
+
+  /// Uses the Spotify App Remote Content API (via native platform channel) to fetch
+  /// the user's recommended/recent playlists. This bypasses the Web API quota
+  /// restriction that causes 403s in Spotify Developer development mode.
+  Future<List<SpotifyPlaylist>> _fetchPlaylistsViaContentAPI() async {
+    try {
+      final rawList = await const MethodChannel('spotify_sdk')
+          .invokeMethod<List<dynamic>>('getContentPlaylists')
+          .timeout(const Duration(seconds: 10));
+
+      if (rawList == null) {
+        _contentApiDiagnostic = 'ContentAPI: null response';
+        return [];
+      }
+      if (rawList.isEmpty) {
+        _contentApiDiagnostic = 'ContentAPI: empty list (0 items)';
+        return [];
+      }
+
+      // Log every URI before filtering so we can see what Spotify returned.
+      final allUris = rawList.whereType<Map>().map((m) => (m['uri'] ?? '').toString()).toList();
+      debugPrint('Spotify ContentAPI raw URIs (${allUris.length}): $allUris');
+
+      final result = rawList
+          .whereType<Map>()
+          .map((m) {
+            final uri = (m['uri'] ?? '').toString();
+            final name = (m['name'] ?? 'Playlist').toString();
+            final subtitle = (m['subtitle'] ?? '').toString();
+            int trackCount = 0;
+            final match = RegExp(r'(\d+)\s+song').firstMatch(subtitle);
+            if (match != null) {
+              trackCount = int.tryParse(match.group(1) ?? '0') ?? 0;
+            }
+            return SpotifyPlaylist(
+              id: uri,
+              name: name,
+              uri: uri,
+              ownerName: null,
+              trackCount: trackCount,
+            );
+          })
+          .where((p) => p.uri.trim().isNotEmpty)
+          .toList();
+
+      final filtered = result.length;
+      final total = allUris.length;
+      // Sample the first URI type to diagnose filter misses.
+      final firstUri = allUris.isNotEmpty ? allUris.first : 'none';
+      _contentApiDiagnostic = filtered > 0
+          ? 'ContentAPI: $filtered/$total items passed filter'
+          : 'ContentAPI: 0/$total passed filter — first URI: $firstUri';
+
+      return result;
+    } on TimeoutException {
+      _contentApiDiagnostic = 'ContentAPI: timed out (App Remote likely disconnected)';
+      debugPrint('Spotify Content API timed out');
+      return [];
+    } catch (e) {
+      _contentApiDiagnostic = 'ContentAPI error: $e';
+      debugPrint('Spotify Content API fallback failed: $e');
+      return [];
+    }
+  }
+
   Future<void> playPlaylist(SpotifyPlaylist playlist) async {
     await playPlaylistUri(uri: playlist.uri, playlistName: playlist.name);
+  }
+
+  /// Ensures the App Remote is in a clean play-ready state after refreshPlaylists().
+  ///
+  /// getTokenAndContentPlaylists() establishes OAuth + content-fetch connection
+  /// but the player API pipeline may not be fully configured for play commands.
+  /// A silent token-based reconnect resets the player session cleanly so that
+  /// the first playPlaylistUri() call goes through the fast direct path.
+  Future<void> ensureAppRemoteConnected() async {
+    if (_accessToken.isEmpty) return;
+    debugPrint('Spotify ensureAppRemoteConnected: silent reconnect for play-ready state');
+    try {
+      final connected = await SpotifySdk.connectToSpotifyRemote(
+        clientId: _clientId,
+        redirectUrl: _redirectUri,
+        accessToken: _accessToken,
+      ).timeout(const Duration(seconds: 5));
+      _isConnected = connected;
+      debugPrint('Spotify ensureAppRemoteConnected: connected=$connected');
+    } catch (e) {
+      debugPrint('Spotify ensureAppRemoteConnected: failed ($e) — will reconnect on first play');
+    }
   }
 
   Future<void> playPlaylistUri({
@@ -508,132 +732,221 @@ class MusicPlaybackService extends ChangeNotifier with WidgetsBindingObserver {
     _playbackRequested = true;
     _isStartingPlayback = true;
     _lastPlayCommandTime = DateTime.now();
-    _lastError = null;
-    bool connected = false;
+    // Show an early status so the banner has text + spinner while connecting.
+    // Individual reconnect tiers overwrite this with more specific messages.
+    _lastError = 'Starting ${playlistName ?? 'playlist'}...';
+    notifyListeners();
     bool playSucceeded = false;
 
     try {
-      const maxRetries = 3;
-      for (int attempt = 1; attempt <= maxRetries; attempt++) {
-        // If the app has gone to the background, it means Spotify was opened successfully.
-        // We must abort the retry loop immediately to prevent calling disconnect/reconnect
-        // while Spotify is booting and starting playback.
-        if (attempt > 1 && (_lifecycleState == AppLifecycleState.paused || _lifecycleState == AppLifecycleState.inactive)) {
-          assert(() {
-            debugPrint('Spotify playPlaylistUri: App went to background (Spotify launched), stopping retry loop.');
-            return true;
-          }());
-          playSucceeded = true;
-          connected = true;
-          break;
-        }
+      // ── Connected path: direct App Remote play ────────────────────────────────
+      // When the App Remote session is live, issue play() directly.
+      // If the App Remote has silently disconnected (session expired while music
+      // played in background), play() throws a PlatformException — catch it and
+      // mark the session dead so the reconnect path uses the silent token approach.
+      if (_isConnected) {
+        debugPrint('Spotify playPlaylistUri: direct App Remote play');
         try {
-          assert(() {
-            debugPrint('Spotify playPlaylistUri: Playback attempt $attempt of $maxRetries');
-            return true;
-          }());
+          await SpotifySdk.play(spotifyUri: uri).timeout(const Duration(seconds: 8));
+          playSucceeded = true;
+        } on TimeoutException {
+          // Direct play timed out — the playerAPI callback never fired, which means
+          // the App Remote connection is dead (the SDK's isConnected flag was stale).
+          // getPlayerState() would also hang on a dead connection, so skip it and go
+          // straight to the reconnect path.
+          _isConnected = false;
+        } catch (_) {
+          _isConnected = false; // PlatformException: App Remote session is dead
+        }
+        debugPrint('Spotify playPlaylistUri: direct App Remote → $playSucceeded, connected=$_isConnected');
+      }
 
-          // If it's a retry attempt, force a clean disconnect first to clear any stale state.
-          // Add a timeout: SpotifySdk.disconnect() with no callback (stuck write queue) would
-          // otherwise hang indefinitely, making all retries silently block.
-          // Set _isConnected=false after so _ensureAppRemoteConnected skips a redundant
-          // second disconnect, which would otherwise double-disconnect on every retry.
-          if (attempt > 1) {
-            assert(() {
-              debugPrint('Attempt $attempt: Disconnecting before reconnecting to clear stale session');
-              return true;
-            }());
-            try {
-              await SpotifySdk.disconnect().timeout(const Duration(seconds: 3));
-            } catch (_) {}
-            _isConnected = false;
-            await Future.delayed(const Duration(milliseconds: 1000));
-          }
+      // ── Web API fast path (no live App Remote) ────────────────────────────────
+      if (!playSucceeded && _accessToken.isNotEmpty) {
+        debugPrint('Spotify playPlaylistUri: fast-path Web API play');
+        playSucceeded = await _webApiPlay(uri);
+        debugPrint('Spotify playPlaylistUri: Web API → $playSucceeded');
+      }
 
-          // Use 30s outer timeout: _ensureAppRemoteConnected internally runs
-          // connectToSpotifyRemote (≤20s) + pause (≤3s) + 1.5s delay = ≤24.5s max.
-          // A 20s outer timeout would race with the inner connect on slow starts.
-          connected = await _ensureAppRemoteConnected(spotifyUri: uri).timeout(
-            const Duration(seconds: 30),
-            onTimeout: () => false,
-          );
+      // ── Reconnect path ─────────────────────────────────────────────────────────
+      // Reached when no live App Remote session and Web API is unavailable (dev mode).
+      if (!playSucceeded) {
+        // No explicit disconnect needed — connectToSpotifyRemote(accessToken:) in
+        // Swift tears down any stale App Remote session before reconnecting cleanly.
+        _isConnected = false;
+        await Future.delayed(const Duration(milliseconds: 200));
 
-          if (connected) {
-            bool playStarted = false;
-            try {
-              await SpotifySdk.play(spotifyUri: uri).timeout(const Duration(seconds: 15));
-              playStarted = true; // callback confirmed — definitive success
-            } on TimeoutException {
-              // The native play command was sent but the iOS callback never fired.
-              // This happens when the App Remote write queue delivers the command
-              // but drops the completion callback (iOS background/resume timing).
-              // Verify actual Spotify state: if it's playing, accept as success
-              // rather than waiting for a retry that would restart the track.
+        // ── Silent reconnect: use stored access token — no Spotify UI ─────────
+        // Common case: Spotify is already running in background, token still valid.
+        // connectToSpotifyRemote(accessToken:) calls appRemote.connect() directly
+        // instead of authorizeAndPlayURI(), so Spotify never comes to the foreground.
+        bool connected = false;
+        if (_accessToken.isNotEmpty) {
+          try {
+            debugPrint('Spotify playPlaylistUri: silent reconnect (stored token, no UI)');
+            connected = await SpotifySdk.connectToSpotifyRemote(
+              clientId: _clientId,
+              redirectUrl: _redirectUri,
+              accessToken: _accessToken,
+            ).timeout(const Duration(seconds: 5));
+          } catch (_) {}
+          _isConnected = connected;
+          debugPrint('Spotify playPlaylistUri: silent reconnect → $connected');
+        }
+
+        if (connected) {
+          await Future.delayed(const Duration(milliseconds: 300));
+          try {
+            await SpotifySdk.play(spotifyUri: uri).timeout(const Duration(seconds: 8));
+            playSucceeded = true;
+          } on TimeoutException {
+            // Play timed out after silent reconnect — callback hung, connection may be dead.
+            // Skip getPlayerState (would also hang) and let the OAuth path try next.
+            debugPrint('Spotify playPlaylistUri: silent reconnect play timed out — falling to OAuth');
+          } catch (_) {}
+          debugPrint('Spotify playPlaylistUri: silent reconnect play → $playSucceeded');
+        }
+
+        // ── OAuth reconnect — two-step: pure auth then explicit play ────────────
+        // authorizeAndPlayURI(specificUri) skips the OAuth redirect when Spotify
+        // already has a cached authorization for this app, leaving Spotify in the
+        // foreground with no way back. An empty URI forces a full OAuth handshake
+        // that always redirects, then we issue play() once the App Remote is live.
+        if (!playSucceeded) {
+          // No explicit disconnect — Swift connectToSpotify(spotifyUri:'') handles
+          // session teardown before the new OAuth handshake.
+          _isConnected = false;
+          await Future.delayed(const Duration(milliseconds: 200));
+          connected = false;
+
+          _lastError = 'Opening Spotify to authorize...';
+          notifyListeners();
+
+          try {
+            debugPrint('Spotify playPlaylistUri: OAuth — empty URI auth then play($uri)');
+            // Step 1: pure auth with empty URI — Spotify always redirects back here.
+            connected = await SpotifySdk.connectToSpotifyRemote(
+              clientId: _clientId,
+              redirectUrl: _redirectUri,
+              spotifyUri: '', // empty = guaranteed OAuth redirect even when already authorized
+            ).timeout(const Duration(seconds: 15));
+            _isConnected = connected;
+            debugPrint('Spotify playPlaylistUri: OAuth connected=$connected');
+
+            if (connected) {
+              // Step 2: App Remote is live — explicitly start the target playlist.
+              _lastError = 'Starting playlist...';
+              notifyListeners();
+              await Future.delayed(const Duration(milliseconds: 300));
               try {
-                final state = await SpotifySdk.getPlayerState().timeout(const Duration(seconds: 3));
-                if (state != null && !state.isPaused) {
-                  assert(() {
-                    debugPrint('Spotify: play() timed out but Spotify is playing — accepting');
-                    return true;
-                  }());
-                  playStarted = true;
+                await SpotifySdk.play(spotifyUri: uri).timeout(const Duration(seconds: 8));
+                debugPrint('Spotify playPlaylistUri: OAuth post-auth play sent');
+              } catch (playErr) {
+                debugPrint('Spotify playPlaylistUri: OAuth post-auth play error: $playErr');
+              }
+              playSucceeded = true;
+            }
+          } on PlatformException catch (e) {
+            final combined = '${e.code} ${e.message ?? ''}'.toLowerCase();
+            if (combined.contains('not installed') ||
+                combined.contains('couldnotfind') ||
+                combined.contains('spotifynotinstalled')) {
+              debugPrint('Spotify playPlaylistUri: Spotify not installed (${e.code})');
+            } else {
+              // App Remote dropped after redirect — optimistic success, Spotify is warm.
+              // Try to reconnect silently and play.
+              debugPrint('Spotify playPlaylistUri: App Remote dropped post-OAuth — silent reconnect (${e.code})');
+              try {
+                final rc = await SpotifySdk.connectToSpotifyRemote(
+                  clientId: _clientId, redirectUrl: _redirectUri,
+                  accessToken: _accessToken,
+                ).timeout(const Duration(seconds: 5));
+                if (rc) {
+                  _isConnected = true;
+                  await SpotifySdk.play(spotifyUri: uri).timeout(const Duration(seconds: 8));
                 }
               } catch (_) {}
-            }
-
-            if (playStarted) {
-              _lastPlayCommandTime = DateTime.now();
-              _isPlaying = true;
-              _currentPlaylistName = playlistName;
-              _lastPlayedUri = uri;
               playSucceeded = true;
-              break; // Succeeded! Break out of the retry loop.
-            } else {
-              throw Exception('Play command sent but Spotify remains paused — retrying.');
             }
-          } else {
-            throw Exception('Failed to connect to Spotify App Remote.');
+          } on TimeoutException {
+            // 15 s timeout — Spotify never redirected. Try a silent reconnect now
+            // that Spotify is warm and might accept App Remote connections.
+            debugPrint('Spotify playPlaylistUri: OAuth timed out — attempting warm silent reconnect');
+            _lastError = 'Reconnecting to Spotify...';
+            notifyListeners();
+            try {
+              final rc = await SpotifySdk.connectToSpotifyRemote(
+                clientId: _clientId, redirectUrl: _redirectUri,
+                accessToken: _accessToken,
+              ).timeout(const Duration(seconds: 5));
+              if (rc) {
+                _isConnected = true;
+                connected = true;
+                await SpotifySdk.play(spotifyUri: uri).timeout(const Duration(seconds: 6));
+                playSucceeded = true;
+                debugPrint('Spotify playPlaylistUri: warm silent reconnect succeeded');
+              }
+            } catch (_) {}
+          } catch (e) {
+            debugPrint('Spotify playPlaylistUri: OAuth error: $e');
           }
-        } catch (e) {
-          assert(() {
-            debugPrint('Spotify App Remote playback failed (attempt $attempt): $e');
-            return true;
-          }());
-          playSucceeded = false;
-        }
 
-        if (!playSucceeded && attempt < maxRetries) {
-          await Future.delayed(const Duration(milliseconds: 1500));
+          // Refresh access token from the newly established OAuth session.
+          if (connected) {
+            try {
+              final freshToken = await SpotifySdk.getAccessToken(
+                clientId: _clientId, redirectUrl: _redirectUri, scope: _scope,
+              ).timeout(const Duration(seconds: 5));
+              _accessToken = freshToken;
+              unawaited(_storage.write(key: _accessTokenKey, value: _accessToken));
+            } catch (_) {}
+          }
         }
       }
 
       if (playSucceeded) {
-        // Update current track state synchronously to ensure isPlaying is updated before returning
+        _lastPlayCommandTime = DateTime.now();
+        _isPlaying = true;
+        _currentPlaylistName = playlistName;
+        _lastPlayedUri = uri;
+        // Clear any _lastTrackUri captured during the reconnect window (e.g. the
+        // wake-track URI from _ensureAppRemoteConnected).  A stale value here
+        // would cause resume() tier-2 to replay the wake track instead of the
+        // user's playlist song.  pauseForScanning() will re-capture the correct
+        // URI from the live player state when the user next pauses.
+        _lastTrackUri = null;
+        // play(playlistUri) via App Remote switches Spotify's context (loads the
+        // playlist, shows the track) but often leaves the player in a paused state
+        // while buffering. An explicit resume() kicks audio regardless of whether
+        // play() auto-started it — safe no-op when already playing.
+        await Future.delayed(const Duration(milliseconds: 800));
+        // Guard: skip the deferred resume() if pauseForScanning() already set
+        // _isPlaying = false during the 800 ms window (user pressed switch).
+        // Firing resume() here would restart music mid-TTS announcement.
+        if (_isConnected && _isPlaying) {
+          try {
+            await SpotifySdk.resume().timeout(const Duration(seconds: 3));
+            debugPrint('Spotify playPlaylistUri: post-play resume sent');
+          } catch (_) {}
+        }
+        // Settle for Spotify to start audio before querying state.
+        await Future.delayed(const Duration(milliseconds: 700));
         try {
           await refreshPlayerState().timeout(const Duration(seconds: 3));
         } catch (_) {}
       }
 
-      // Fallback: Only open Spotify app if we were unable to connect or if play failed.
-      if (!connected || !playSucceeded) {
+      if (!playSucceeded) {
         try {
-          final opened = await launchUrl(
-            Uri.parse(uri),
-            mode: LaunchMode.externalApplication,
-          );
-          if (opened) {
-            _lastError =
-                'Opened Spotify for playback. If music did not start automatically, tap Play in Spotify.';
-          } else {
-            _lastError =
-                'Spotify did not start playback. Open Spotify, start any song once, then try again.';
-          }
+          final opened = await launchUrl(Uri.parse(uri), mode: LaunchMode.externalApplication);
+          _lastError = opened
+              ? 'Opened Spotify for playback. If music did not start automatically, tap Play in Spotify.'
+              : 'Spotify did not start playback. Open Spotify, start any song once, then try again.';
         } catch (e) {
           _lastError = 'Unable to launch Spotify: $e';
         }
       } else {
-        _lastError =
-            'Playback started in Spotify. If not audible, check device volume and Spotify output target.';
+        _lastError = null; // Clear the in-progress status; SnackBar handles the success message.
       }
     } finally {
       _isStartingPlayback = false;
@@ -648,6 +961,10 @@ class MusicPlaybackService extends ChangeNotifier with WidgetsBindingObserver {
     // When _isConnected=true a prior write (pause/play) may have stuck the native
     // write queue — disconnecting resets it completely before reconnecting.
     if (_isConnected) {
+      // Clear the flag before awaiting so any concurrent refreshPlayerState(),
+      // lifecycle callback, or user action does not fire SDK commands against
+      // the session while it is being torn down.
+      _isConnected = false;
       try {
         await SpotifySdk.disconnect().timeout(const Duration(seconds: 3));
       } catch (_) {}
@@ -697,28 +1014,80 @@ class MusicPlaybackService extends ChangeNotifier with WidgetsBindingObserver {
     _lastError = null;
     _lastPlayCommandTime = DateTime.now();
     try {
-      // Skip via Web API first — advances the track in Spotify's cloud and app
-      // without touching the App Remote write queue (which may be stuck).
-      bool skipped = _accessToken.isNotEmpty && await _webApiSkipNext();
-      debugPrint('MusicPlaybackService: skipNext() — Web API skip result: $skipped');
+      // ── Fast path: App Remote skip (live session) ─────────────────────────────
+      // skipNext() on the App Remote auto-advances AND auto-plays — no resume() call
+      // needed. This is the common case when music is playing.
+      if (_isConnected) {
+        bool skipSucceeded = false;
+        try {
+          await SpotifySdk.skipNext().timeout(const Duration(seconds: 5));
+          skipSucceeded = true;
+        } on TimeoutException {
+          debugPrint('MusicPlaybackService: skipNext() — App Remote skipNext timed out, will try Web API');
+        } on PlatformException {
+          debugPrint('MusicPlaybackService: skipNext() — App Remote skipNext failed, will try Web API');
+        }
 
-      // Reconnect the App Remote with a fresh session. The Web API skip advances
-      // the track in Spotify's cloud; a fresh App Remote connection then sees the
-      // next track and can resume it reliably via SpotifySdk.resume().
+        if (skipSucceeded) {
+          _isPlaying = true;
+          notifyListeners();
+          await Future.delayed(const Duration(milliseconds: 1500));
+          try { await refreshPlayerState(); } catch (_) {}
+          return;
+        }
+      }
+
+      // ── Web API path (no live App Remote, or App Remote skip failed) ──────────
+      // POST /me/player/next advances the track when this device is the active device.
+      if (_accessToken.isNotEmpty) {
+        final skipped = await _webApiSkipNext();
+        debugPrint('MusicPlaybackService: skipNext() — Web API: $skipped');
+        if (skipped) {
+          _isPlaying = true;
+          notifyListeners();
+          await Future.delayed(const Duration(milliseconds: 1500));
+          try { await refreshPlayerState(); } catch (_) {}
+          return;
+        }
+      }
+
+      // ── Reconnect path: connect App Remote fresh, then skip ───────────────────
       final connected = await _ensureAppRemoteConnected();
       _isConnected = connected;
-      debugPrint('MusicPlaybackService: skipNext() — App Remote reconnect: $connected');
-
       if (connected) {
-        if (!skipped) {
-          // Web API skip failed — use App Remote skip on the fresh session.
+        try {
           await SpotifySdk.skipNext().timeout(const Duration(seconds: 5));
+        } on TimeoutException {
+          debugPrint('MusicPlaybackService: skipNext() — reconnect App Remote skipNext timed out');
         }
-        await SpotifySdk.resume().timeout(const Duration(seconds: 5));
+
+        // Verify the skip auto-started playback.
+        // _ensureAppRemoteConnected() disconnects/reconnects, which pauses Spotify.
+        // skipNext() advances the track but the freshly reconnected session may
+        // leave the player paused — issue an explicit resume() to cover that case.
+        bool isNowPlaying = false;
+        try {
+          final state = await SpotifySdk.getPlayerState().timeout(const Duration(seconds: 3));
+          isNowPlaying = state != null && !state.isPaused;
+        } catch (_) {
+          isNowPlaying = true; // assume success on state read failure
+        }
+
+        if (!isNowPlaying) {
+          debugPrint('MusicPlaybackService: skipNext() — track paused after reconnect, sending resume()');
+          try {
+            await SpotifySdk.resume().timeout(const Duration(seconds: 3));
+          } catch (e) {
+            debugPrint('MusicPlaybackService: skipNext() — post-reconnect resume failed: $e');
+          }
+        }
+
         _isPlaying = true;
-        await refreshPlayerState();
+        notifyListeners();
+        await Future.delayed(const Duration(milliseconds: 1500));
+        try { await refreshPlayerState(); } catch (_) {}
       } else {
-        throw Exception('Skip failed: App Remote reconnect failed and Web API skip may not have worked.');
+        throw Exception('Skip failed: App Remote reconnect failed.');
       }
     } on PlatformException catch (e) {
       _lastError = e.message ?? 'Unable to skip track.';
@@ -745,8 +1114,10 @@ class MusicPlaybackService extends ChangeNotifier with WidgetsBindingObserver {
 
     // Capture current track URI and position before issuing any pause command.
     // getPlayerState() is a read and works even with a stuck write queue.
+    // 1 s timeout: if App Remote is responsive the state arrives in < 200 ms;
+    // if the queue is stuck we skip track capture and fall through to pause anyway.
     try {
-      final state = await SpotifySdk.getPlayerState().timeout(const Duration(seconds: 2));
+      final state = await SpotifySdk.getPlayerState().timeout(const Duration(seconds: 1));
       _lastTrackUri = state?.track?.uri;
       _lastPlaybackPosition = state?.playbackPosition;
       debugPrint('MusicPlaybackService: pauseForScanning() — captured track URI: $_lastTrackUri, position: ${_lastPlaybackPosition}ms');
@@ -757,25 +1128,29 @@ class MusicPlaybackService extends ChangeNotifier with WidgetsBindingObserver {
     _isPlaying = false;
     notifyListeners();
 
-    // Primary: App Remote pause. The connection is live right after playPlaylistUri()
-    // so the write queue is clean and the callback should fire promptly.
-    if (_isConnected) {
-      try {
-        await SpotifySdk.pause().timeout(const Duration(seconds: 5));
-        debugPrint('MusicPlaybackService: pauseForScanning() — App Remote pause succeeded');
-        return;
-      } catch (e) {
-        debugPrint('MusicPlaybackService: pauseForScanning() — App Remote pause failed: $e');
-      }
-    }
-
-    // Fallback: Web API pause (may fail with 404/403 for App Remote sessions).
+    // Primary: Web API pause — HTTP is always clean (no write-queue stall risk).
+    // A healthy Web API call completes in < 500 ms, well within the 700 ms gap
+    // before TTS begins in _handleSpacebarPress, so scanning announcements start
+    // after the music has actually stopped.
     if (_accessToken.isNotEmpty) {
       try {
         final ok = await _webApiPause();
         debugPrint('MusicPlaybackService: pauseForScanning() — Web API pause result: $ok');
+        if (ok) return;
       } catch (e) {
         debugPrint('MusicPlaybackService: pauseForScanning() — Web API pause exception: $e');
+      }
+    }
+
+    // Fallback: App Remote pause — used when Web API token is absent or call fails.
+    // 3 s timeout: a healthy App Remote responds in < 500 ms; if the write queue
+    // is stuck the callback never arrives anyway so we fail fast.
+    if (_isConnected) {
+      try {
+        await SpotifySdk.pause().timeout(const Duration(seconds: 3));
+        debugPrint('MusicPlaybackService: pauseForScanning() — App Remote pause succeeded');
+      } catch (e) {
+        debugPrint('MusicPlaybackService: pauseForScanning() — App Remote pause failed: $e');
       }
     }
   }
@@ -783,6 +1158,19 @@ class MusicPlaybackService extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> pause() async {
     _lastError = null;
     _lastPlayCommandTime = null;
+
+    // Capture current track URI and position before pausing so that resume()
+    // tier 1 can call SpotifySdk.resume() on the right context rather than
+    // falling through to tier 3, which restarts the playlist from the beginning.
+    try {
+      final state = await SpotifySdk.getPlayerState().timeout(const Duration(seconds: 2));
+      _lastTrackUri = state?.track?.uri;
+      _lastPlaybackPosition = state?.playbackPosition;
+      debugPrint('MusicPlaybackService: pause() — captured track URI: $_lastTrackUri, position: ${_lastPlaybackPosition}ms');
+    } catch (_) {
+      debugPrint('MusicPlaybackService: pause() — could not capture track state');
+    }
+
     try {
       // Web API first — SpotifySdk.pause() (App Remote write) can hang with a
       // stuck native write queue, while the Web API HTTP path is always clean.
@@ -810,16 +1198,37 @@ class MusicPlaybackService extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> resume() async {
+    // Guard against concurrent resume() calls — only one reconnect chain at a time.
+    if (_isStartingPlayback) {
+      debugPrint('MusicPlaybackService: resume() — already in progress, ignoring duplicate call');
+      return;
+    }
+    _isStartingPlayback = true;
     _playbackRequested = true;
     _lastPlayCommandTime = DateTime.now();
     _lastError = null;
     debugPrint('MusicPlaybackService: resume() — isConnected=$_isConnected, lastTrackUri=$_lastTrackUri, lastPlayedUri=$_lastPlayedUri');
     try {
+      // Tier 0: Web API resume — no App Remote needed, works whenever Spotify is
+      // still the active device on this phone (the common case after Web API play).
+      if (_accessToken.isNotEmpty) {
+        final resumed = await _webApiResume();
+        debugPrint('MusicPlaybackService: resume() — Web API resume: $resumed');
+        if (resumed) {
+          _isPlaying = true;
+          _lastError = null;
+          notifyListeners();
+          return;
+        }
+      }
+
       // Tier 1: Session is live — SpotifySdk.resume() restores the exact track and
       // position because pause() was called on this same session. No reconnect
       // happened, so the App Remote context is exactly where we paused.
-      // Only fall through if the callback times out (connection silently dropped).
-      if (_isConnected && _lastTrackUri != null) {
+      // _lastTrackUri is not needed here — resume() resumes Spotify's current paused
+      // context regardless of which track it is. Only fall through if the callback
+      // times out (connection silently dropped).
+      if (_isConnected) {
         try {
           debugPrint('MusicPlaybackService: resume() — tier 1: SpotifySdk.resume()');
           bool resumeStarted = false;
@@ -827,28 +1236,42 @@ class MusicPlaybackService extends ChangeNotifier with WidgetsBindingObserver {
             await SpotifySdk.resume().timeout(const Duration(seconds: 5));
             resumeStarted = true;
           } on TimeoutException {
+            // Callback timed out — check whether Spotify is actually playing already.
             try {
               final state = await SpotifySdk.getPlayerState().timeout(const Duration(seconds: 2));
               if (state != null && !state.isPaused) {
                 debugPrint('MusicPlaybackService: resume() — tier 1 timed out but Spotify is playing — accepting');
                 resumeStarted = true;
+              } else {
+                // Spotify is still paused — session write queue may be stuck.
+                _lastError = 'Reconnecting to Spotify...';
+                notifyListeners();
               }
-            } catch (_) {}
+            } catch (_) {
+              _lastError = 'Reconnecting to Spotify...';
+              notifyListeners();
+            }
           }
           if (resumeStarted) {
             _isPlaying = true;
+            _lastError = null;
             notifyListeners();
             return;
           }
           debugPrint('MusicPlaybackService: resume() — tier 1 did not start, trying reconnect');
         } catch (e) {
           debugPrint('MusicPlaybackService: resume() — tier 1 failed: $e, trying reconnect');
+          _lastError = 'Reconnecting to Spotify...';
+          notifyListeners();
         }
+      } else {
+        _lastError = 'Reconnecting to Spotify...';
+        notifyListeners();
       }
 
       // Tier 2: Connection dropped — reconnect without a URI so we attach to
-      // Spotify's current app state, then play the correct track and seek to position.
-      debugPrint('MusicPlaybackService: resume() — tier 2: reconnect then play+seek');
+      // Spotify's current app state, then play the correct track.
+      debugPrint('MusicPlaybackService: resume() — tier 2: reconnect then play');
       final connected = await _ensureAppRemoteConnected();
       _isConnected = connected;
       if (connected && _lastTrackUri != null) {
@@ -862,11 +1285,15 @@ class MusicPlaybackService extends ChangeNotifier with WidgetsBindingObserver {
               final state = await SpotifySdk.getPlayerState().timeout(const Duration(seconds: 2));
               if (state != null && !state.isPaused) {
                 playStarted = true;
+              } else {
+                _lastError = 'Still reconnecting — please wait...';
+                notifyListeners();
               }
             } catch (_) {}
           }
           if (playStarted) {
             _isPlaying = true;
+            _lastError = null;
             notifyListeners();
             return;
           }
@@ -876,15 +1303,17 @@ class MusicPlaybackService extends ChangeNotifier with WidgetsBindingObserver {
         debugPrint('MusicPlaybackService: resume() — tier 2 falling through to tier 3');
       }
 
-      // Tier 3: Direct connect with the target URI — no wake-track, no audio blip.
-      // connectToSpotifyRemote(spotifyUri: uri) starts the correct track immediately
-      // without playing an unrelated wake track first. Works reliably when Spotify
-      // is warm (already running from the initial session).
-      // Falls back to playPlaylistUri() (wake-track approach) only if direct connect fails.
+      // Tier 3: Direct connect with the target URI — most reliable path when the
+      // App Remote write queue is stuck. Opens Spotify briefly then returns.
       final resumeUri = _lastTrackUri ?? _lastPlayedUri;
       if (resumeUri == null) {
-        throw Exception('Resume failed: no active App Remote session and no stored URI.');
+        _lastError = 'Could not resume — no track URI stored. Please select the playlist again.';
+        notifyListeners();
+        return;
       }
+
+      _lastError = 'Reconnecting to Spotify — this may take a moment...';
+      notifyListeners();
 
       bool tier3Succeeded = false;
       try {
@@ -906,6 +1335,7 @@ class MusicPlaybackService extends ChangeNotifier with WidgetsBindingObserver {
           if (state != null && !state.isPaused) {
             _isPlaying = true;
             _lastPlayCommandTime = DateTime.now();
+            _lastError = null;
             await refreshPlayerState();
             tier3Succeeded = true;
             debugPrint('MusicPlaybackService: resume() — tier 3 direct succeeded');
@@ -917,13 +1347,18 @@ class MusicPlaybackService extends ChangeNotifier with WidgetsBindingObserver {
 
       if (!tier3Succeeded) {
         debugPrint('MusicPlaybackService: resume() — tier 3 wake-track fallback: $resumeUri');
+        // playPlaylistUri manages _isStartingPlayback internally (sets false in its
+        // finally block). Re-acquire the guard so resume()'s own finally clears it
+        // and a concurrent resume() call cannot sneak in between the two finallys.
         await playPlaylistUri(uri: resumeUri, playlistName: _currentPlaylistName);
+        _isStartingPlayback = true;
       }
     } on PlatformException catch (e) {
-      _lastError = e.message ?? 'Unable to resume playback.';
+      _lastError = 'Spotify connection interrupted — please try again.';
       debugPrint('MusicPlaybackService: resume() — PlatformException: ${e.message}');
     } catch (e) {
-      _lastError = e.toString();
+      // Replace raw exceptions (TimeoutException, etc.) with a friendly message.
+      _lastError = 'Spotify is taking longer than expected — please try again.';
       debugPrint('MusicPlaybackService: resume() — Exception: $e');
     } finally {
       _isStartingPlayback = false;
@@ -934,6 +1369,13 @@ class MusicPlaybackService extends ChangeNotifier with WidgetsBindingObserver {
   Future<void> stopPlayback() async {
     _playbackRequested = false;
     _lastPlayCommandTime = null;
+    if (_isStartingPlayback) {
+      // Abort in-progress playback start without issuing SDK commands that
+      // would conflict with the active connection/play sequence.
+      _isPlaying = false;
+      notifyListeners();
+      return;
+    }
     // Only issue a pause command when we believe Spotify is still playing.
     // If pause() was already called (e.g. the user started scanning by pressing
     // the switch), calling SpotifySdk.pause() a second time on an already-paused
@@ -1068,7 +1510,7 @@ class MusicPlaybackService extends ChangeNotifier with WidgetsBindingObserver {
           'Authorization': 'Bearer $_accessToken',
           'Content-Type': 'application/json',
         },
-      );
+      ).timeout(const Duration(seconds: 8));
 
       return response.statusCode == 204;
     } catch (_) {
@@ -1085,7 +1527,7 @@ class MusicPlaybackService extends ChangeNotifier with WidgetsBindingObserver {
           'Authorization': 'Bearer $_accessToken',
           'Content-Type': 'application/json',
         },
-      );
+      ).timeout(const Duration(seconds: 8));
       debugPrint('MusicPlaybackService: _webApiPause() — HTTP status=${response.statusCode}');
       return response.statusCode == 204 || response.statusCode == 200;
     } catch (e) {
@@ -1094,6 +1536,43 @@ class MusicPlaybackService extends ChangeNotifier with WidgetsBindingObserver {
     }
   }
 
+  Future<bool> _webApiResume() async {
+    if (_accessToken.isEmpty) return false;
+    try {
+      // PUT /me/player/play with no body resumes from the current paused position.
+      final response = await http.put(
+        Uri.parse('https://api.spotify.com/v1/me/player/play'),
+        headers: <String, String>{
+          'Authorization': 'Bearer $_accessToken',
+          'Content-Type': 'application/json',
+        },
+      ).timeout(const Duration(seconds: 8));
+      debugPrint('MusicPlaybackService: _webApiResume() — HTTP ${response.statusCode}');
+      return response.statusCode == 204 || response.statusCode == 200;
+    } catch (e) {
+      debugPrint('MusicPlaybackService: _webApiResume() — exception: $e');
+      return false;
+    }
+  }
+
+  Future<bool> _webApiPlay(String contextUri) async {
+    if (_accessToken.isEmpty) return false;
+    try {
+      final response = await http.put(
+        Uri.parse('https://api.spotify.com/v1/me/player/play'),
+        headers: <String, String>{
+          'Authorization': 'Bearer $_accessToken',
+          'Content-Type': 'application/json',
+        },
+        body: json.encode(<String, dynamic>{'context_uri': contextUri}),
+      ).timeout(const Duration(seconds: 8));
+      debugPrint('MusicPlaybackService: _webApiPlay() — HTTP ${response.statusCode}');
+      return response.statusCode == 204 || response.statusCode == 200;
+    } catch (e) {
+      debugPrint('MusicPlaybackService: _webApiPlay() — exception: $e');
+      return false;
+    }
+  }
 
   Future<bool> _webApiSkipNext() async {
     if (_accessToken.isEmpty) return false;
@@ -1181,7 +1660,6 @@ class MusicPlaybackService extends ChangeNotifier with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    _lifecycleState = state;
     if (state == AppLifecycleState.inactive ||
         state == AppLifecycleState.paused) {
       if (_isConnected) {

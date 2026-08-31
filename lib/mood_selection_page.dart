@@ -10,7 +10,6 @@ import 'package:http/http.dart' as http;
 import 'services/user_settings_provider.dart';
 import 'constants/mood_options.dart';
 import 'config/environment_config.dart';
-import 'services/mood_image_service.dart';
 import 'services/authenticated_http_client.dart';
 import 'main.dart'; // Import GridPage from main.dart
 import 'tap_interface_page.dart'; // Import TapInterfacePage directly
@@ -19,12 +18,16 @@ class MoodSelectionPage extends StatefulWidget {
   final String idToken;
   final String aacUserId;
   final String displayName;
+  final dynamic preloadedConfig;
+  final List<String> preloadedWordOptions;
 
   const MoodSelectionPage({
     Key? key,
     required this.idToken,
     required this.aacUserId,
     required this.displayName,
+    this.preloadedConfig,
+    this.preloadedWordOptions = const [],
   }) : super(key: key);
 
   @override
@@ -134,9 +137,6 @@ class _MoodSelectionPageState extends State<MoodSelectionPage> {
     debugPrint('🟣 MoodSelectionPage FocusNode created');
     _setupMoodOptions();
     debugPrint('🟣 MoodSelectionPage mood options setup complete');
-    _preloadMoodImages();
-    debugPrint('🟣 MoodSelectionPage preload images initiated');
-    
     // Initialize selected mood from settings
     WidgetsBinding.instance.addPostFrameCallback((_) {
       debugPrint('🟣 MoodSelectionPage postFrameCallback START');
@@ -167,15 +167,6 @@ class _MoodSelectionPageState extends State<MoodSelectionPage> {
     allOptions.add({'name': 'Skip', 'emoji': '⏭️'});
   }
 
-  void _preloadMoodImages() {
-    // Preload mood images in background for better performance
-    final moodNames = MoodOptions.moodOptions.map((mood) => mood['name']!).toList();
-    MoodImageService().preloadMoodImages(moodNames).then((_) {
-      debugPrint('MoodSelection: Mood images preloaded successfully');
-    }).catchError((error) {
-      debugPrint('MoodSelection: Error preloading mood images: $error');
-    });
-  }
 
   void _maybeStartScanning() {
     final settingsProvider = Provider.of<UserSettingsProvider>(context, listen: false);
@@ -468,10 +459,11 @@ class _MoodSelectionPageState extends State<MoodSelectionPage> {
         debugPrint('MoodSelection: Saved mood: $moodName to settings');
       }
       
-      // CRITICAL: Save mood to user info API so it's included in LLM context
-      await _saveMoodToUserInfo(moodName);
+      // Fire-and-forget: save mood to user info API for LLM context, but
+      // don't block navigation on the two HTTP round-trips.
+      _saveMoodToUserInfo(moodName);
     }
-    
+
     // Additional delay before navigation to ensure audio routing is clear
     await Future.delayed(const Duration(milliseconds: 300));
     debugPrint('MoodSelection: Pre-navigation delay completed');
@@ -495,6 +487,8 @@ class _MoodSelectionPageState extends State<MoodSelectionPage> {
                 idToken: widget.idToken,
                 aacUserId: widget.aacUserId,
                 displayName: widget.displayName,
+                preloadedConfig: widget.preloadedConfig,
+                preloadedWordOptions: widget.preloadedWordOptions,
               ),
             ),
           );
@@ -546,62 +540,15 @@ class _MoodSelectionPageState extends State<MoodSelectionPage> {
         child: Stack(
           alignment: Alignment.center,
           children: [
-            // Image Layer - shifted up to make room for text
+            // Image Layer - emoji only, no database image lookup
             Padding(
               padding: const EdgeInsets.only(bottom: 20.0, top: 4.0, left: 4.0, right: 4.0),
-              child: FutureBuilder<String?>(
-                future: MoodImageService().getMoodImageUrl(moodName),
-                builder: (context, snapshot) {
-                  if (snapshot.connectionState == ConnectionState.waiting) {
-                    // Show emoji while loading
-                    return Center(
-                      child: Text(
-                        emoji,
-                        style: const TextStyle(fontSize: 32),
-                      ),
-                    );
-                  } else if (snapshot.hasData && snapshot.data != null) {
-                    // Show mascot image
-                    return LayoutBuilder(
-                      builder: (context, constraints) {
-                        return Center(
-                          child: Image.network(
-                            snapshot.data!,
-                            fit: BoxFit.contain,
-                            errorBuilder: (context, error, stackTrace) {
-                              // Fallback to emoji on image load error
-                              debugPrint('MoodSelection: Error loading image for $moodName: $error');
-                              return Center(
-                                child: Text(
-                                  emoji,
-                                  style: const TextStyle(fontSize: 32),
-                                ),
-                              );
-                            },
-                            loadingBuilder: (context, child, loadingProgress) {
-                              if (loadingProgress == null) return child;
-                              // Show emoji while image loads
-                              return Center(
-                                child: Text(
-                                  emoji,
-                                  style: const TextStyle(fontSize: 32),
-                                ),
-                              );
-                            },
-                          ),
-                        );
-                      },
-                    );
-                  } else {
-                    // Fallback to emoji if no image found
-                    return Center(
-                      child: Text(
-                        emoji,
-                        style: const TextStyle(fontSize: 32),
-                      ),
-                    );
-                  }
-                },
+              child: FittedBox(
+                fit: BoxFit.contain,
+                child: Text(
+                  emoji,
+                  style: const TextStyle(fontSize: 128),
+                ),
               ),
             ),
             
@@ -738,55 +685,58 @@ class _MoodSelectionPageState extends State<MoodSelectionPage> {
         appBar: AppBar(
           title: Text(_t('How are you feeling?')),
           backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-          automaticallyImplyLeading: false, // Remove back button
+          automaticallyImplyLeading: false,
         ),
-        body: Padding(
-          padding: const EdgeInsets.all(16.0),
-          child: Column(
-            children: [
-              Text(
-                _t('Select your current mood:'),
-                style: const TextStyle(
-                  fontSize: 24,
-                  fontWeight: FontWeight.bold,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 20),
-              
-              // Mood grid
-              Expanded(
-                child: GridView.builder(
-                  gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                    crossAxisCount: 8, // 8 moods per row for more compact layout
-                    childAspectRatio: 1.0,
-                    crossAxisSpacing: 6,
-                    mainAxisSpacing: 6,
+        body: LayoutBuilder(
+          builder: (context, constraints) {
+            final isCompact = MediaQuery.of(context).size.shortestSide < 600;
+            final headingFont = isCompact ? 18.0 : 24.0;
+            final instrFont = isCompact ? 12.0 : 16.0;
+            final vGap = isCompact ? 8.0 : 16.0;
+            final topGap = isCompact ? 10.0 : 20.0;
+            return Padding(
+              padding: EdgeInsets.symmetric(horizontal: 16, vertical: isCompact ? 8 : 16),
+              child: Column(
+                children: [
+                  Text(
+                    _t('Select your current mood:'),
+                    style: TextStyle(fontSize: headingFont, fontWeight: FontWeight.bold),
+                    textAlign: TextAlign.center,
                   ),
-                  itemCount: allOptions.length,
-                  itemBuilder: (context, index) {
-                    return _buildMoodButton(allOptions[index], index);
-                  },
-                ),
+                  SizedBox(height: topGap),
+
+                  // Mood grid
+                  Expanded(
+                    child: GridView.builder(
+                      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
+                        crossAxisCount: 8,
+                        childAspectRatio: 1.0,
+                        crossAxisSpacing: 6,
+                        mainAxisSpacing: 6,
+                      ),
+                      itemCount: allOptions.length,
+                      itemBuilder: (context, index) {
+                        return _buildMoodButton(allOptions[index], index);
+                      },
+                    ),
+                  ),
+
+                  // Instructions
+                  SizedBox(height: vGap),
+                  Text(
+                    (useTapInterface)
+                        ? _t('Tap a mood to continue, or tap Skip to proceed without selecting a mood.')
+                        : (isScanning
+                            ? _t('Auditory scanning is active. Press spacebar or tap to select the highlighted option.')
+                            : _t('Tap a mood to continue, or tap Skip to proceed without selecting a mood.')),
+                    style: TextStyle(fontSize: instrFont, color: Colors.grey),
+                    textAlign: TextAlign.center,
+                  ),
+                  SizedBox(height: vGap),
+                ],
               ),
-              
-              // Instructions
-              const SizedBox(height: 16),
-              Text(
-                (useTapInterface)
-                    ? _t('Tap a mood to continue, or tap Skip to proceed without selecting a mood.')
-                    : (isScanning
-                    ? _t('Auditory scanning is active. Press spacebar or tap to select the highlighted option.')
-                    : _t('Tap a mood to continue, or tap Skip to proceed without selecting a mood.')),
-                style: const TextStyle(
-                  fontSize: 16,
-                  color: Colors.grey,
-                ),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 16),
-            ],
-          ),
+            );
+          },
         ),
       ),
     );

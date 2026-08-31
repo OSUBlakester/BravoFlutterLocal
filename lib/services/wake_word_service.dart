@@ -7,7 +7,7 @@ import 'package:speech_to_text/speech_recognition_result.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 class WakeWordService {
-  final List<String> wakeWords;
+  List<String> wakeWords;
 
   static String _wakeWordLocale = 'en-US';
 
@@ -21,6 +21,14 @@ class WakeWordService {
     final normalized = phrase.trim().toLowerCase();
     _groupWakeWord = normalized.isEmpty ? 'hey friends' : normalized;
     debugPrint('[WakeWordService] Group wake word set to: "$_groupWakeWord"');
+  }
+
+  /// Update the wake words on the current instance. Call this when a user
+  /// with different wake word settings reuses an already-running instance.
+  static void updateWakeWords(List<String> words) {
+    if (_currentInstance == null) return;
+    _currentInstance!.wakeWords = List<String>.from(words);
+    debugPrint('[WakeWordService] Wake words updated to: $words');
   }
 
   /// Update the locale used during wake-word listening.

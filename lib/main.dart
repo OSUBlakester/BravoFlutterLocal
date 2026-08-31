@@ -37,6 +37,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'config/environment_config.dart';
 import 'freestyle_page.dart';
 import 'threads_page.dart';
+import 'texting_page.dart';
 import 'favorites_page.dart';
 import 'games_page.dart';
 import 'tap_interface_page.dart';
@@ -48,6 +49,8 @@ import 'numbers_scan_page.dart';
 import 'services/offline_cache_service.dart';
 import 'services/offline_mode_provider.dart';
 import 'services/music_playback_service.dart';
+import 'services/apple_music_service.dart';
+import 'music_page.dart';
 
 bool hasPlayedInitialWaitForSwitchVoicePrompt = false;
 
@@ -841,25 +844,33 @@ class _UserSelectionPageState extends State<UserSelectionPage> {
 
   @override
   Widget build(BuildContext context) {
+    final isCompact = MediaQuery.of(context).size.shortestSide < 600;
+    final pad = isCompact ? 12.0 : 16.0;
+    final vGapS = isCompact ? 8.0 : 16.0;
+    final vGapM = isCompact ? 12.0 : 24.0;
+    final vGapL = isCompact ? 16.0 : 32.0;
+    final btnVPad = isCompact ? 10.0 : 16.0;
+    final titleSize = isCompact ? 15.0 : 18.0;
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Select Profile'),
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        automaticallyImplyLeading: false, // Remove back button
+        automaticallyImplyLeading: false,
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
+      body: SingleChildScrollView(
+        padding: EdgeInsets.all(pad),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text(
+            Text(
               'Please select a profile to continue:',
-              style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+              style: TextStyle(fontSize: titleSize, fontWeight: FontWeight.bold),
             ),
             if (currentDefaultProfileId != null) ...[
-              const SizedBox(height: 8),
+              SizedBox(height: isCompact ? 6 : 8),
               Container(
-                padding: const EdgeInsets.all(12),
+                padding: EdgeInsets.all(isCompact ? 8 : 12),
                 decoration: BoxDecoration(
                   color: Colors.blue[50],
                   borderRadius: BorderRadius.circular(8),
@@ -867,22 +878,19 @@ class _UserSelectionPageState extends State<UserSelectionPage> {
                 ),
                 child: Row(
                   children: [
-                    Icon(Icons.star, color: Colors.blue[600], size: 20),
-                    const SizedBox(width: 8),
+                    Icon(Icons.star, color: Colors.blue[600], size: isCompact ? 16 : 20),
+                    SizedBox(width: isCompact ? 6 : 8),
                     Expanded(
                       child: Text(
-                        'Default Profile: ${profiles.firstWhere((p) => p['aac_user_id'] == currentDefaultProfileId, orElse: () => {'display_name': 'Unknown'})['display_name']}',
-                        style: TextStyle(
-                          color: Colors.blue[700],
-                          fontWeight: FontWeight.w500,
-                        ),
+                        'Default: ${profiles.firstWhere((p) => p['aac_user_id'] == currentDefaultProfileId, orElse: () => {'display_name': 'Unknown'})['display_name']}',
+                        style: TextStyle(color: Colors.blue[700], fontWeight: FontWeight.w500, fontSize: isCompact ? 13 : 14),
                       ),
                     ),
                   ],
                 ),
               ),
             ],
-            const SizedBox(height: 20),
+            SizedBox(height: vGapS),
 
             // Profile Selection Row
             Row(
@@ -890,9 +898,11 @@ class _UserSelectionPageState extends State<UserSelectionPage> {
                 Expanded(
                   child: DropdownButtonFormField<String>(
                     value: selectedProfileId,
-                    decoration: const InputDecoration(
+                    decoration: InputDecoration(
                       labelText: 'Profile',
-                      border: OutlineInputBorder(),
+                      border: const OutlineInputBorder(),
+                      isDense: isCompact,
+                      contentPadding: isCompact ? const EdgeInsets.symmetric(horizontal: 10, vertical: 10) : null,
                     ),
                     items: profiles.map<DropdownMenuItem<String>>((profile) {
                       final displayName = profile['display_name'] ?? 'User';
@@ -904,9 +914,7 @@ class _UserSelectionPageState extends State<UserSelectionPage> {
                     onChanged: (value) {
                       setState(() {
                         selectedProfileId = value;
-                        // Update checkbox state based on whether selected profile is the default
-                        if (currentDefaultProfileId != null &&
-                            currentDefaultProfileId == value) {
+                        if (currentDefaultProfileId != null && currentDefaultProfileId == value) {
                           setAsDefault = true;
                         } else {
                           setAsDefault = false;
@@ -915,26 +923,22 @@ class _UserSelectionPageState extends State<UserSelectionPage> {
                     },
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 6),
                 ElevatedButton(
-                  onPressed: profiles.isNotEmpty && selectedProfileId != null
-                      ? _editProfile
-                      : null,
+                  onPressed: profiles.isNotEmpty && selectedProfileId != null ? _editProfile : null,
+                  style: ElevatedButton.styleFrom(padding: EdgeInsets.symmetric(horizontal: isCompact ? 10 : 16, vertical: isCompact ? 8 : 12)),
                   child: const Text('Edit'),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 6),
                 ElevatedButton(
-                  onPressed: profiles.isNotEmpty && selectedProfileId != null
-                      ? _deleteProfile
-                      : null,
-                  style: ElevatedButton.styleFrom(foregroundColor: Colors.red),
+                  onPressed: profiles.isNotEmpty && selectedProfileId != null ? _deleteProfile : null,
+                  style: ElevatedButton.styleFrom(foregroundColor: Colors.red, padding: EdgeInsets.symmetric(horizontal: isCompact ? 10 : 16, vertical: isCompact ? 8 : 12)),
                   child: const Text('Delete'),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 6),
                 ElevatedButton(
-                  onPressed: profiles.isNotEmpty && selectedProfileId != null
-                      ? _copyProfile
-                      : null,
+                  onPressed: profiles.isNotEmpty && selectedProfileId != null ? _copyProfile : null,
+                  style: ElevatedButton.styleFrom(padding: EdgeInsets.symmetric(horizontal: isCompact ? 10 : 16, vertical: isCompact ? 8 : 12)),
                   child: const Text('Copy'),
                 ),
               ],
@@ -942,45 +946,41 @@ class _UserSelectionPageState extends State<UserSelectionPage> {
 
             // Default Profile Section
             if (profiles.length > 1) ...[
-              const SizedBox(height: 16),
+              SizedBox(height: isCompact ? 6 : 16),
               Row(
                 children: [
                   Expanded(
                     child: CheckboxListTile(
-                      title: const Text('Set as default profile'),
-                      subtitle: const Text(
-                        'Skip profile selection on this device',
-                      ),
+                      title: Text('Set as default', style: TextStyle(fontSize: isCompact ? 13 : 14)),
+                      subtitle: Text('Skip selection on this device', style: TextStyle(fontSize: isCompact ? 11 : 12)),
                       value: setAsDefault,
                       onChanged: (value) {
-                        setState(() {
-                          setAsDefault = value ?? false;
-                        });
-                        print(
-                          '🔵 ProfileSelection - Checkbox changed: setAsDefault = $setAsDefault',
-                        );
+                        setState(() => setAsDefault = value ?? false);
+                        print('🔵 ProfileSelection - Checkbox changed: setAsDefault = $setAsDefault');
                       },
                       controlAffinity: ListTileControlAffinity.leading,
                       contentPadding: EdgeInsets.zero,
+                      dense: isCompact,
                     ),
                   ),
                   if (currentDefaultProfileId != null) ...[
-                    const SizedBox(width: 8),
+                    const SizedBox(width: 6),
                     ElevatedButton(
                       onPressed: _clearDefaultProfile,
                       style: ElevatedButton.styleFrom(
                         backgroundColor: Colors.orange,
                         foregroundColor: Colors.white,
+                        padding: EdgeInsets.symmetric(horizontal: isCompact ? 8 : 16, vertical: isCompact ? 6 : 12),
                       ),
-                      child: const Text('Clear Default'),
+                      child: Text('Clear', style: TextStyle(fontSize: isCompact ? 12 : 14)),
                     ),
                   ],
                 ],
               ),
               if (setAsDefault) ...[
-                const SizedBox(height: 8),
+                SizedBox(height: isCompact ? 4 : 8),
                 Container(
-                  padding: const EdgeInsets.all(12),
+                  padding: EdgeInsets.all(isCompact ? 8 : 12),
                   decoration: BoxDecoration(
                     color: Colors.green[50],
                     borderRadius: BorderRadius.circular(8),
@@ -988,15 +988,12 @@ class _UserSelectionPageState extends State<UserSelectionPage> {
                   ),
                   child: Row(
                     children: [
-                      Icon(Icons.save, color: Colors.green[600], size: 20),
-                      const SizedBox(width: 8),
+                      Icon(Icons.save, color: Colors.green[600], size: isCompact ? 16 : 20),
+                      SizedBox(width: isCompact ? 6 : 8),
                       Expanded(
                         child: Text(
-                          'This profile will be saved as default and automatically selected on app startup',
-                          style: TextStyle(
-                            color: Colors.green[700],
-                            fontWeight: FontWeight.w500,
-                          ),
+                          'Will be auto-selected on startup',
+                          style: TextStyle(color: Colors.green[700], fontWeight: FontWeight.w500, fontSize: isCompact ? 12 : 14),
                         ),
                       ),
                     ],
@@ -1005,39 +1002,76 @@ class _UserSelectionPageState extends State<UserSelectionPage> {
               ],
             ],
 
-            const SizedBox(height: 24),
+            SizedBox(height: vGapM),
 
-            // Create New Profile Section
-            const Text(
-              'Create New Profile:',
-              style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-            ),
-            const SizedBox(height: 12),
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: newProfileController,
-                    decoration: const InputDecoration(
-                      labelText: 'New Profile Name',
-                      hintText: 'Enter profile name',
-                      border: OutlineInputBorder(),
+            // Create New Profile — collapsed by default on compact to save vertical space
+            if (isCompact)
+              Theme(
+                data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
+                child: ExpansionTile(
+                  tilePadding: EdgeInsets.zero,
+                  childrenPadding: EdgeInsets.zero,
+                  title: Text('Add New Profile', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.green[700])),
+                  leading: Icon(Icons.person_add, color: Colors.green[700], size: 18),
+                  initiallyExpanded: false,
+                  children: [
+                    const SizedBox(height: 6),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: TextField(
+                            controller: newProfileController,
+                            decoration: const InputDecoration(
+                              labelText: 'New Profile Name',
+                              hintText: 'Enter profile name',
+                              border: OutlineInputBorder(),
+                              isDense: true,
+                              contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton(
+                          onPressed: _createNewProfile,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.green,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                          ),
+                          child: const Text('Add', style: TextStyle(fontSize: 13)),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                  ],
+                ),
+              )
+            else ...[
+              Text('Create New Profile:', style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+              const SizedBox(height: 12),
+              Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: newProfileController,
+                      decoration: const InputDecoration(
+                        labelText: 'New Profile Name',
+                        hintText: 'Enter profile name',
+                        border: OutlineInputBorder(),
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton(
-                  onPressed: _createNewProfile,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.green,
-                    foregroundColor: Colors.white,
+                  const SizedBox(width: 8),
+                  ElevatedButton(
+                    onPressed: _createNewProfile,
+                    style: ElevatedButton.styleFrom(backgroundColor: Colors.green, foregroundColor: Colors.white),
+                    child: const Text('Add Profile'),
                   ),
-                  child: const Text('Add Profile'),
-                ),
-              ],
-            ),
+                ],
+              ),
+            ],
 
-            const SizedBox(height: 32),
+            SizedBox(height: vGapL),
 
             // Select Profile Button
             if (profiles.isNotEmpty && selectedProfileId != null)
@@ -1046,7 +1080,7 @@ class _UserSelectionPageState extends State<UserSelectionPage> {
                 child: ElevatedButton(
                   onPressed: _selectProfile,
                   style: ElevatedButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    padding: EdgeInsets.symmetric(vertical: btnVPad),
                     backgroundColor: Theme.of(context).primaryColor,
                     foregroundColor: Colors.white,
                   ),
@@ -1054,33 +1088,27 @@ class _UserSelectionPageState extends State<UserSelectionPage> {
                     setAsDefault
                         ? 'Select "${selectedProfile?['display_name'] ?? 'Profile'}" (Set as Default)'
                         : 'Select "${selectedProfile?['display_name'] ?? 'Profile'}"',
-                    style: const TextStyle(fontSize: 16),
+                    style: TextStyle(fontSize: isCompact ? 14 : 16),
                   ),
                 ),
               ),
 
-            const Spacer(),
+            SizedBox(height: isCompact ? 8 : 16),
 
             // Sign Out Button
             SizedBox(
               width: double.infinity,
               child: ElevatedButton(
                 onPressed: () {
-                  // Sign out and return to auth page
                   AuthSessionManager.clearAuthenticatedSession();
                   FirebaseAuth.instance.signOut();
-                  Navigator.of(
-                    context,
-                  ).pushNamedAndRemoveUntil('/auth', (route) => false);
+                  Navigator.of(context).pushNamedAndRemoveUntil('/auth', (route) => false);
                 },
                 style: ElevatedButton.styleFrom(
-                  padding: const EdgeInsets.symmetric(vertical: 16),
+                  padding: EdgeInsets.symmetric(vertical: btnVPad),
                   backgroundColor: Colors.grey[600],
                 ),
-                child: const Text(
-                  'Sign Out',
-                  style: TextStyle(fontSize: 16, color: Colors.white),
-                ),
+                child: Text('Sign Out', style: TextStyle(fontSize: isCompact ? 14 : 16, color: Colors.white)),
               ),
             ),
           ],
@@ -1170,6 +1198,183 @@ class _AuthPageState extends State<AuthPage> {
   @override
   Widget build(BuildContext context) {
     print('AuthPage build method called');
+    final isCompact = MediaQuery.of(context).size.shortestSide < 600;
+
+    // Shared form fields and action widgets used by both layouts
+    final emailField = TextField(
+      controller: emailController,
+      decoration: const InputDecoration(labelText: 'Email'),
+      keyboardType: TextInputType.emailAddress,
+    );
+    final passwordField = TextField(
+      controller: passwordController,
+      decoration: const InputDecoration(labelText: 'Password'),
+      obscureText: true,
+    );
+    final rememberMeRow = Row(
+      children: [
+        Checkbox(
+          value: _rememberMe,
+          onChanged: (value) {
+            setState(() {
+              _rememberMe = value ?? false;
+              if (!_rememberMe) _clearSavedCredentials();
+            });
+          },
+        ),
+        const Text('Remember me'),
+        const Spacer(),
+        if (_rememberMe)
+          TextButton(
+            onPressed: () {
+              setState(() {
+                _rememberMe = false;
+                emailController.clear();
+                passwordController.clear();
+              });
+              _clearSavedCredentials();
+            },
+            child: const Text('Clear saved'),
+          ),
+      ],
+    );
+    final errorBox = error.isNotEmpty
+        ? Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(10),
+            decoration: BoxDecoration(
+              color: Colors.red.shade50,
+              border: Border.all(color: Colors.red.shade300),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.error, color: Colors.red, size: 18),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        'Authentication Error',
+                        style: TextStyle(color: Colors.red.shade800, fontWeight: FontWeight.bold, fontSize: 13),
+                      ),
+                    ),
+                    IconButton(
+                      onPressed: () {
+                        Clipboard.setData(ClipboardData(text: error));
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Error copied to clipboard')),
+                        );
+                      },
+                      icon: Icon(Icons.copy, size: 14, color: Colors.red.shade600),
+                      tooltip: 'Copy error to clipboard',
+                      constraints: const BoxConstraints(),
+                      padding: const EdgeInsets.all(4),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(error, style: TextStyle(color: Colors.red.shade700, fontSize: 12)),
+              ],
+            ),
+          )
+        : null;
+
+    // Dense input decoration reused across compact fields
+    const denseDecor = InputDecoration(
+      isDense: true,
+      contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      border: OutlineInputBorder(),
+    );
+
+    // ── Compact (phone) layout: no AppBar, dense inputs, flexible vertical space ──
+    if (isCompact) {
+      return Scaffold(
+        // No AppBar on compact — saves ~56px, login screens don't need one
+        body: SafeArea(
+          child: SingleChildScrollView(
+            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 0),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                const SizedBox(height: 24),
+                Text(
+                  isLogin ? 'Login' : 'Register',
+                  style: Theme.of(context).textTheme.titleLarge,
+                  textAlign: TextAlign.center,
+                ),
+                const SizedBox(height: 20),
+                TextField(
+                  controller: emailController,
+                  decoration: denseDecor.copyWith(labelText: 'Email'),
+                  keyboardType: TextInputType.emailAddress,
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: passwordController,
+                  decoration: denseDecor.copyWith(labelText: 'Password'),
+                  obscureText: true,
+                ),
+                if (isLogin) ...[
+                  const SizedBox(height: 2),
+                  rememberMeRow,
+                ],
+                if (!isLogin) ...[
+                  const SizedBox(height: 10),
+                  TextField(controller: accountNameController, decoration: denseDecor.copyWith(labelText: 'Account Name')),
+                  const SizedBox(height: 8),
+                  TextField(controller: numUsersController, decoration: denseDecor.copyWith(labelText: 'Number of Users'), keyboardType: TextInputType.number),
+                  const SizedBox(height: 8),
+                  TextField(controller: promoCodeController, decoration: denseDecor.copyWith(labelText: 'Promo Code (Optional)')),
+                  const SizedBox(height: 8),
+                  TextField(controller: addressController, decoration: denseDecor.copyWith(labelText: 'Address (Optional)')),
+                  const SizedBox(height: 8),
+                  TextField(controller: phoneController, decoration: denseDecor.copyWith(labelText: 'Phone (Optional)')),
+                  const SizedBox(height: 8),
+                  TextField(controller: therapistEmailController, decoration: denseDecor.copyWith(labelText: 'Therapist/Admin Email (Optional)')),
+                ],
+                const SizedBox(height: 16),
+                if (errorBox != null) ...[errorBox, const SizedBox(height: 10)],
+                if (isLoading)
+                  const Padding(padding: EdgeInsets.symmetric(vertical: 6), child: Center(child: CircularProgressIndicator())),
+                SizedBox(
+                  height: 44,
+                  child: ElevatedButton(
+                    onPressed: isLoading ? null : () => isLogin ? handleLogin() : handleRegister(),
+                    child: Text(isLogin ? 'Login' : 'Register'),
+                  ),
+                ),
+                if (isLogin) ...[
+                  const SizedBox(height: 8),
+                  SizedBox(
+                    height: 44,
+                    child: OutlinedButton.icon(
+                      onPressed: isLoading ? null : handleContinueOffline,
+                      icon: const Icon(Icons.wifi_off, size: 16),
+                      label: const Text('Continue Offline'),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: Colors.orange.shade700,
+                        side: BorderSide(color: Colors.orange.shade400),
+                      ),
+                    ),
+                  ),
+                ],
+                TextButton(
+                  onPressed: isLoading ? null : () => setState(() => isLogin = !isLogin),
+                  child: Text(isLogin ? "Don't have an account? Register here" : "Already have an account? Login here",
+                    style: const TextStyle(fontSize: 13),
+                  ),
+                ),
+                const SizedBox(height: 16),
+              ],
+            ),
+          ),
+        ),
+      );
+    }
+
+    // ── Non-compact (tablet/desktop) layout: card centered on screen ──
     return Scaffold(
       appBar: AppBar(title: Text(isLogin ? 'Login' : 'Register')),
       body: Center(
@@ -1180,188 +1385,54 @@ class _AuthPageState extends State<AuthPage> {
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(12),
-              boxShadow: [
-                BoxShadow(
-                  color: Colors.black12,
-                  blurRadius: 10,
-                  offset: Offset(0, 4),
-                ),
-              ],
+              boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 10, offset: Offset(0, 4))],
             ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                Text(
-                  isLogin ? 'Login' : 'Register',
-                  style: Theme.of(context).textTheme.headlineSmall,
-                ),
+                Text(isLogin ? 'Login' : 'Register', style: Theme.of(context).textTheme.headlineSmall),
                 const SizedBox(height: 16),
-                TextField(
-                  controller: emailController,
-                  decoration: const InputDecoration(labelText: 'Email'),
-                  keyboardType: TextInputType.emailAddress,
-                ),
+                emailField,
                 const SizedBox(height: 12),
-                TextField(
-                  controller: passwordController,
-                  decoration: const InputDecoration(labelText: 'Password'),
-                  obscureText: true,
-                ),
-                if (isLogin) ...[
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      Checkbox(
-                        value: _rememberMe,
-                        onChanged: (value) {
-                          setState(() {
-                            _rememberMe = value ?? false;
-                            if (!_rememberMe) {
-                              _clearSavedCredentials();
-                            }
-                          });
-                        },
-                      ),
-                      const Text('Remember me'),
-                      const Spacer(),
-                      if (_rememberMe) ...[
-                        TextButton(
-                          onPressed: () {
-                            setState(() {
-                              _rememberMe = false;
-                              emailController.clear();
-                              passwordController.clear();
-                            });
-                            _clearSavedCredentials();
-                          },
-                          child: const Text('Clear saved'),
-                        ),
-                      ],
-                    ],
-                  ),
-                ],
+                passwordField,
+                if (isLogin) ...[const SizedBox(height: 12), rememberMeRow],
                 if (!isLogin) ...[
                   const SizedBox(height: 12),
-                  TextField(
-                    controller: accountNameController,
-                    decoration: const InputDecoration(
-                      labelText: 'Account Name',
-                    ),
-                  ),
+                  TextField(controller: accountNameController, decoration: const InputDecoration(labelText: 'Account Name')),
                   const SizedBox(height: 12),
-                  TextField(
-                    controller: numUsersController,
-                    decoration: const InputDecoration(
-                      labelText: 'Number of Users',
-                    ),
-                    keyboardType: TextInputType.number,
-                  ),
+                  TextField(controller: numUsersController, decoration: const InputDecoration(labelText: 'Number of Users'), keyboardType: TextInputType.number),
                   const SizedBox(height: 12),
-                  TextField(
-                    controller: promoCodeController,
-                    decoration: const InputDecoration(
-                      labelText: 'Promo Code (Optional)',
-                    ),
-                  ),
+                  TextField(controller: promoCodeController, decoration: const InputDecoration(labelText: 'Promo Code (Optional)')),
                   const SizedBox(height: 12),
-                  TextField(
-                    controller: addressController,
-                    decoration: const InputDecoration(
-                      labelText: 'Address (Optional)',
-                    ),
-                  ),
+                  TextField(controller: addressController, decoration: const InputDecoration(labelText: 'Address (Optional)')),
                   const SizedBox(height: 12),
-                  TextField(
-                    controller: phoneController,
-                    decoration: const InputDecoration(
-                      labelText: 'Phone (Optional)',
-                    ),
-                  ),
+                  TextField(controller: phoneController, decoration: const InputDecoration(labelText: 'Phone (Optional)')),
                   const SizedBox(height: 12),
-                  TextField(
-                    controller: therapistEmailController,
-                    decoration: const InputDecoration(
-                      labelText: 'Therapist/Admin Email (Optional)',
-                    ),
-                  ),
+                  TextField(controller: therapistEmailController, decoration: const InputDecoration(labelText: 'Therapist/Admin Email (Optional)')),
                 ],
                 const SizedBox(height: 20),
-                if (error.isNotEmpty) ...[
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: Colors.red.shade50,
-                      border: Border.all(color: Colors.red.shade300),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Row(
-                          children: [
-                            Icon(Icons.error, color: Colors.red, size: 20),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                'Authentication Error',
-                                style: TextStyle(
-                                  color: Colors.red.shade800,
-                                  fontWeight: FontWeight.bold,
-                                ),
-                              ),
-                            ),
-                            IconButton(
-                              onPressed: () {
-                                Clipboard.setData(ClipboardData(text: error));
-                                ScaffoldMessenger.of(context).showSnackBar(
-                                  const SnackBar(
-                                    content: Text('Error copied to clipboard'),
-                                  ),
-                                );
-                              },
-                              icon: Icon(
-                                Icons.copy,
-                                size: 16,
-                                color: Colors.red.shade600,
-                              ),
-                              tooltip: 'Copy error to clipboard',
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 8),
-                        Text(
-                          error,
-                          style: TextStyle(
-                            color: Colors.red.shade700,
-                            fontSize: 13,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                ],
+                if (errorBox != null) ...[errorBox, const SizedBox(height: 12)],
                 if (isLoading)
-                  const Padding(
-                    padding: EdgeInsets.all(8.0),
-                    child: CircularProgressIndicator(),
-                  ),
+                  const Padding(padding: EdgeInsets.all(8.0), child: CircularProgressIndicator()),
                 ElevatedButton(
-                  onPressed: isLoading
-                      ? null
-                      : () => isLogin ? handleLogin() : handleRegister(),
+                  onPressed: isLoading ? null : () => isLogin ? handleLogin() : handleRegister(),
                   child: Text(isLogin ? 'Login' : 'Register'),
                 ),
-                TextButton(
-                  onPressed: isLoading
-                      ? null
-                      : () => setState(() => isLogin = !isLogin),
-                  child: Text(
-                    isLogin
-                        ? "Don't have an account? Register here"
-                        : "Already have an account? Login here",
+                if (isLogin) ...[
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed: isLoading ? null : handleContinueOffline,
+                    icon: const Icon(Icons.wifi_off, size: 18),
+                    label: const Text('Continue Offline'),
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.orange.shade700,
+                      side: BorderSide(color: Colors.orange.shade400),
+                    ),
                   ),
+                ],
+                TextButton(
+                  onPressed: isLoading ? null : () => setState(() => isLogin = !isLogin),
+                  child: Text(isLogin ? "Don't have an account? Register here" : "Already have an account? Login here"),
                 ),
               ],
             ),
@@ -1383,6 +1454,34 @@ class _AuthPageState extends State<AuthPage> {
     } catch (_) {
       return false;
     }
+  }
+
+  Future<void> handleContinueOffline() async {
+    setState(() { isLoading = true; error = ''; });
+    final cached = await OfflineCacheService.loadProfile();
+    if (!mounted) return;
+    if (cached == null) {
+      setState(() {
+        isLoading = false;
+        error = 'No offline profile available. Please log in with a network connection first.';
+      });
+      return;
+    }
+    Provider.of<OfflineModeProvider>(context, listen: false).setOffline(true);
+    final cachedIdToken =
+        await FirebaseAuth.instance.currentUser?.getIdToken(false) ?? '';
+    if (!mounted) return;
+    setState(() { isLoading = false; });
+    Navigator.of(context).pushReplacement(
+      MaterialPageRoute(
+        builder: (_) => AppLoadingPage(
+          idToken: cachedIdToken,
+          aacUserId: cached.userId,
+          displayName: cached.displayName,
+          useTapInterface: true,
+        ),
+      ),
+    );
   }
 
   Future<void> handleLogin() async {
@@ -1646,7 +1745,7 @@ class _AuthPageState extends State<AuthPage> {
         }
 
         setState(() {
-          error = 'LOGIN FAILED: ${authError.toString()}';
+          error = 'LOGIN FAILED: ${authError.toString()}\n\nIf you are offline, tap the "Continue Offline" button below.';
           isLoading = false;
         });
         throw authError;
@@ -2307,8 +2406,12 @@ class MyApp extends StatelessWidget {
         ChangeNotifierProvider<MusicPlaybackService>(
           create: (_) => MusicPlaybackService(),
         ),
+        ChangeNotifierProvider<AppleMusicService>(
+          create: (_) => AppleMusicService(),
+        ),
       ],
       child: MaterialApp(
+        debugShowCheckedModeBanner: false,
         title: 'Bravo AAC',
         theme: ThemeData(
           colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
@@ -4654,6 +4757,12 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
         lastStep != null &&
         now.difference(lastStep).inMilliseconds > maxSilenceMs;
 
+    // Don't trigger recovery while scanning is intentionally paused — the timer
+    // is cancelled during a pause, which would otherwise make isTimerMissing=true.
+    if (_isScanningPaused) {
+      return;
+    }
+
     if (!isScanning || isTimerMissing || isStepStale) {
       final ageMs = lastStep == null
           ? -1
@@ -4960,6 +5069,8 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
   List<Map<String, dynamic>>?
   previousGridButtons; // Store previous grid for LLM
   String? previousPageName; // Store previous page name for LLM
+  String? _currentLLMQuery; // llmQuery that generated the currently displayed LLM buttons
+  String? _previousLLMQuery; // llmQuery that generated the buttons saved in previousGridButtons
 
   // Compose grid navigation stack (replaces dialog-based menus)
   final List<List<Map<String, dynamic>>> _composeGridStack = [];
@@ -5309,7 +5420,6 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       _resetFocusTree();
 
       _maybeStartScanning();
-      // Add listener for settings changes
       _settingsProvider!.addListener(_maybeStartScanning);
     });
   }
@@ -5461,6 +5571,16 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
         });
       }
 
+      // Always re-fetch LLM options on return if there's a stored prompt and LLM buttons.
+      final hasLlmButtons = gridButtons.any((b) => b['isLLMGenerated'] == true);
+      if (hasLlmButtons && activeLLMPromptForContext != null) {
+        final promptToRefresh = activeLLMPromptForContext!;
+        WidgetsBinding.instance.addPostFrameCallback((_) async {
+          if (!mounted) return;
+          await _getLLMResponse(promptToRefresh);
+        });
+      }
+
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         gridFocusNode?.requestFocus();
@@ -5514,21 +5634,35 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
             'AppLifecycle: App resumed after minimize - triggering focus refresh for keyboard suppression!',
           );
 
-          // Restore saved volume settings when app resumes
-          // This ensures volume preferences are maintained if user adjusted system volume while app was backgrounded
+          // Restore saved volume settings when app resumes.
+          // Skip when Spotify is actively playing — setupOptimalAudioSession calls
+          // setActive(true) which steals iOS audio focus and pauses Spotify, even
+          // with .mixWithOthers. Bravo isn't producing audio at this moment so the
+          // session reconfiguration gains nothing and causes a ~20s Spotify pause.
           debugPrint(
             '🔊 VOLUME: AppLifecycle: Restoring saved volume settings on app resume...',
           );
+          // Capture music service before the async gap to avoid BuildContext-across-async lint.
+          MusicPlaybackService? musicService;
+          try {
+            musicService = Provider.of<MusicPlaybackService>(context, listen: false);
+          } catch (_) {}
           Future.delayed(const Duration(milliseconds: 100), () async {
             if (!kIsWeb && (Platform.isIOS || Platform.isAndroid)) {
               try {
-                final platform = MethodChannel('audio_routing');
-                await _setApplicationVolume(
-                  settings: _settingsProvider?.settings,
-                );
-                debugPrint(
-                  '🔊 VOLUME: ✅ Saved volume settings restored successfully on app resume',
-                );
+                final spotifyIsPlaying = musicService?.isPlaying ?? false;
+                if (spotifyIsPlaying) {
+                  debugPrint(
+                    '🔊 VOLUME: Spotify is playing — skipping setupOptimalAudioSession to avoid interruption',
+                  );
+                } else {
+                  await _setApplicationVolume(
+                    settings: _settingsProvider?.settings,
+                  );
+                  debugPrint(
+                    '🔊 VOLUME: ✅ Saved volume settings restored successfully on app resume',
+                  );
+                }
               } catch (e) {
                 debugPrint(
                   '🔊 VOLUME: ⚠️  Failed to restore volume on resume: $e',
@@ -5816,6 +5950,10 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       case 'numberspage':
       case 'numbers':
         return 'numbers';
+      case 'text':
+      case 'text-message':
+      case 'texting':
+        return 'text';
       default:
         return normalized;
     }
@@ -6084,8 +6222,26 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       '_speakPersonalVoice: Effective personal volume = $finalVolume/10 (TTS: $ttsVolume)',
     );
 
-    // CRITICAL: Always ensure audio routing is reset to default/personal before speaking
-    // This ensures scanning announcements go to Bluetooth/default device, not built-in speaker
+    // Wait for any ongoing announcements to complete FIRST before rerouting audio.
+    // routeToPersonal must come AFTER this wait — calling it while announceViaBackend
+    // is using forceSpeaker switches the audio route mid-announcement.
+    if (_isAnnouncementPlaying) {
+      debugPrint(
+        '_speakPersonalVoice: Waiting for ongoing announcement to complete...',
+      );
+      int waitCount = 0;
+      while (_isAnnouncementPlaying && waitCount < 30) {
+        // Max 3 seconds
+        await Future.delayed(const Duration(milliseconds: 100));
+        waitCount++;
+      }
+      debugPrint(
+        '_speakPersonalVoice: Wait completed after ${waitCount * 100}ms',
+      );
+    }
+
+    // After any system announcement finishes, restore audio routing to personal/Bluetooth
+    // before starting local TTS for scanning.
     if (!kIsWeb && (Platform.isAndroid || Platform.isIOS)) {
       try {
         debugPrint(
@@ -6107,22 +6263,6 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           '_speakPersonalVoice: Audio routing reset failed (non-critical): $e',
         );
       }
-    }
-
-    // Wait for any ongoing announcements to complete before starting personal voice
-    if (_isAnnouncementPlaying) {
-      debugPrint(
-        '_speakPersonalVoice: Waiting for ongoing announcement to complete...',
-      );
-      int waitCount = 0;
-      while (_isAnnouncementPlaying && waitCount < 30) {
-        // Max 3 seconds
-        await Future.delayed(const Duration(milliseconds: 100));
-        waitCount++;
-      }
-      debugPrint(
-        '_speakPersonalVoice: Wait completed after ${waitCount * 100}ms',
-      );
     }
 
     try {
@@ -7088,15 +7228,19 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
               );
             }
 
-            // Route back to personal device (Bluetooth) after system announcement is complete
-            // Use routeToPersonal instead of resetToDefault to keep session active for BT
-            debugPrint(
-              'iOS: Routing back to personal device (Bluetooth) after system announcement',
+            // Route back to personal device (Bluetooth) in the background so we
+            // don't block the caller. The next announceViaBackend call always
+            // re-routes via forceSpeaker before playing, so this is safe.
+            unawaited(
+              platform.invokeMethod('routeToPersonal').catchError((e) {
+                debugPrint(
+                  'iOS: routeToPersonal (background) failed: $e',
+                );
+              }),
             );
-            await platform.invokeMethod('routeToPersonal');
 
-            // Dispose the player to free AudioTrack resources
-            await _disposeAudioPlayer(player, 'iOS announcement');
+            // Dispose the player in the background — audio is already finished.
+            unawaited(_disposeAudioPlayer(player, 'iOS announcement'));
           } else if (!kIsWeb && Platform.isWindows) {
             // Show speech bubble overlay immediately for Windows
             if (showSpeechBubble) {
@@ -8447,6 +8591,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
     if (llmQuery != null && llmQuery.isNotEmpty) {
       debugLogLLM(stage: 'LLM Query Start', prompt: llmQuery);
       // Always store both previous grid and page before showing LLM options
+      _previousLLMQuery = _currentLLMQuery; // preserve query that generated the buttons we're saving
       previousPageName = currentPageName;
       previousGridButtons = List<Map<String, dynamic>>.from(gridButtons);
       _stopAuditoryScanning();
@@ -8510,24 +8655,27 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           '#LLMOptions',
           llmOptions.toString(),
         );
+        final currentMood = settingsProvider.settings?.currentMood;
+        final moodSlug = (currentMood != null &&
+                currentMood.isNotEmpty &&
+                currentMood != 'No Mood Selected')
+            ? currentMood.toLowerCase().trim()
+            : null;
+        final moodContext =
+            moodSlug != null ? ' The user is currently feeling $moodSlug.' : '';
+        // Compact format instructions — server system prompt handles JSON structure;
+        // we just specify field names and vocab/summary style.
         final formatInstructions =
-            'Format your response as a JSON list where each item has "option", "summary", and "keywords" keys.\n'
-            'The "option" key should contain the FULL option text.\n'
-            'The "keywords" key should contain a list of 3-5 important words from the option.\n'
-            '${vocabularyInstruction}\n'
-            '${summaryInstruction}\n'
-            'Example:\n'
-            '[\n'
-            '  {"summary": "How are you?", "option": "Hello, how are you doing today?", "keywords": ["hello", "how", "you", "today", "doing"]},\n'
-            '  {"summary": "See You", "option": "Goodbye!  It was great seeing you. See you later!", "keywords": ["goodbye", "see", "you", "later", "great"]}\n'
-            ']';
+            'Respond with a JSON array. Each item: {"option":"...","summary":"...","keywords":[...]}. '
+            '$vocabularyInstruction '
+            '$summaryInstruction';
         final prompt = _composeSession.active
             ? '"${_sanitizeComposePrompt(rawPrompt)}". '
                   'Generate written composition options, not in-room conversation options. '
-                  'Ignore location, people present, nearby people, and current activity.\n'
+                  'Ignore location, people present, nearby people, and current activity. '
                   '$formatInstructions'
                   '${_getComposePromptContext()}'
-            : rawPrompt.trim() + '\n' + formatInstructions;
+            : 'Provide $llmOptions options for: "${rawPrompt.trim()}".$moodContext $formatInstructions';
         llmOriginalPrompt = prompt; // Store for "Something Else"
         if (!keepFollowUpContext) {
           _initializeFollowUpConversation(llmQuery);
@@ -8540,7 +8688,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
         debugLogLLM(stage: 'LLM Prompt Sent', prompt: prompt);
         debugPrint('LLM REQUEST URL: ${EnvironmentConfig.apiBaseUrl}/llm');
         debugPrint(
-          'LLM REQUEST BODY: ' + json.encode(_buildLlmRequestBody(prompt)),
+          'LLM REQUEST BODY: ${json.encode(_buildLlmRequestBody(prompt))}',
         );
 
         // Add 30-second timeout to LLM requests to prevent hanging
@@ -8714,6 +8862,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
                   (btn) => (btn['text'] ?? '').toString().trim().isNotEmpty,
                 )
                 .toList();
+            _currentLLMQuery = llmQuery; // track what generated the current LLM buttons
             setState(() {
               gridButtons = llmButtons;
               statusMessage =
@@ -9037,12 +9186,24 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           final pageToRestore = previousPageName;
           previousPageName = null;
           previousGridButtons = null;
+          _previousLLMQuery = null;
+          _currentLLMQuery = null;
           await fetchGridDataForPage(pageToRestore!);
         } else if (previousGridButtons != null) {
-          setState(() {
-            gridButtons = previousGridButtons!;
-            previousGridButtons = null;
-          });
+          final savedQuery = _previousLLMQuery;
+          final savedButtons = previousGridButtons!;
+          previousGridButtons = null;
+          _currentLLMQuery = savedQuery; // restored page becomes current
+          _previousLLMQuery = null;
+          if (savedQuery != null) {
+            // Re-query to get fresh LLM options reflecting current mood/context
+            debugPrint('handleButtonAction: Go Back - re-querying previous LLM page: $savedQuery');
+            await _getLLMResponse(savedQuery);
+          } else {
+            setState(() {
+              gridButtons = savedButtons;
+            });
+          }
         }
 
         // *** RESET SCANNING INDEX FOR GO BACK FUNCTIONALITY ***
@@ -9995,6 +10156,34 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           });
 
           _openComposeEntryGrid();
+        } else if (specialPage == 'text') {
+          setState(() {
+            statusMessage = 'Opening Text Message...';
+          });
+
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => TextingPage(
+                idToken: widget.idToken,
+                aacUserId: widget.aacUserId,
+                announceFunction: announceViaBackend,
+              ),
+            ),
+          );
+        } else if (specialPage == 'music' || specialPage == 'spotify') {
+          setState(() {
+            statusMessage = 'Opening Music...';
+          });
+
+          Navigator.of(context).push(
+            MaterialPageRoute(
+              builder: (context) => MusicPage(
+                idToken: widget.idToken,
+                aacUserId: widget.aacUserId,
+                displayName: widget.displayName,
+              ),
+            ),
+          );
         } else {
           setState(() {
             statusMessage = 'Unknown special page: $specialPage';
@@ -10362,11 +10551,20 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
     await ComposeSessionService.save(widget.aacUserId, _composeSession);
   }
 
-  Map<String, dynamic> _buildLlmRequestBody(String prompt) {
+  Map<String, dynamic> _buildLlmRequestBody(String prompt, {int? numOptions}) {
+    final settingsProvider = Provider.of<UserSettingsProvider>(context, listen: false);
+    final mood = settingsProvider.settings?.currentMood;
+    final moodSlug = (mood == null || mood.isEmpty || mood == 'No Mood Selected')
+        ? null
+        : mood.toLowerCase().trim();
+    final optionCount = numOptions ?? settingsProvider.settings?.llmOptions ?? 10;
     return {
       'prompt': prompt,
+      'num_options': optionCount,
+      'force_new': true,
       'compose_mode': _composeSession.active,
       'compose_body': _composeSession.active ? _composeSession.text : '',
+      if (moodSlug != null) 'current_mood': moodSlug,
     };
   }
 
@@ -11348,6 +11546,105 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
     }
   }
 
+  void _showCopyHistoryModal(String historyText) {
+    final lines = historyText
+        .split('\n')
+        .map((l) => l.trim())
+        .where((l) => l.isNotEmpty)
+        .toList()
+        .reversed
+        .toList();
+
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        // StatefulBuilder lets checkboxes toggle without closing the dialog
+        return StatefulBuilder(
+          builder: (sbContext, setDialogState) {
+            final checked = <int>{};
+
+            return StatefulBuilder(
+              builder: (_, setInnerState) {
+                return AlertDialog(
+                  title: const Text('Copy Speech History'),
+                  content: SizedBox(
+                    width: double.maxFinite,
+                    child: lines.isEmpty
+                        ? const Text(
+                            'No speech history to copy.',
+                            style: TextStyle(color: Colors.grey),
+                          )
+                        : ListView.builder(
+                            shrinkWrap: true,
+                            itemCount: lines.length,
+                            itemBuilder: (_, i) {
+                              return CheckboxListTile(
+                                value: checked.contains(i),
+                                onChanged: (selected) {
+                                  setInnerState(() {
+                                    if (selected == true) {
+                                      checked.add(i);
+                                    } else {
+                                      checked.remove(i);
+                                    }
+                                  });
+                                },
+                                title: Text(
+                                  lines[i],
+                                  style: const TextStyle(fontSize: 15),
+                                ),
+                                activeColor: Colors.green.shade700,
+                                controlAffinity:
+                                    ListTileControlAffinity.leading,
+                                contentPadding: const EdgeInsets.symmetric(
+                                    horizontal: 4),
+                              );
+                            },
+                          ),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.of(dialogContext).pop(),
+                      child: const Text('Cancel'),
+                    ),
+                    ElevatedButton(
+                      onPressed: lines.isEmpty
+                          ? null
+                          : () async {
+                              final selectedLines = checked.isEmpty
+                                  ? lines // copy all if none selected
+                                  : checked
+                                      .toList()
+                                      .map((i) => lines[i])
+                                      .toList();
+                              final text = selectedLines.join('\n');
+                              await Clipboard.setData(
+                                  ClipboardData(text: text));
+                              if (dialogContext.mounted) {
+                                Navigator.of(dialogContext).pop();
+                              }
+                              if (mounted) {
+                                setState(() {
+                                  statusMessage = 'Copied to clipboard';
+                                });
+                              }
+                            },
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Colors.green.shade700,
+                        foregroundColor: Colors.white,
+                      ),
+                      child: const Text('Copy'),
+                    ),
+                  ],
+                );
+              },
+            );
+          },
+        );
+      },
+    );
+  }
+
   Future<void> _copyComposeToClipboard() async {
     final text = _composeSession.text.trim();
     if (text.isEmpty) {
@@ -11695,6 +11992,14 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
       final summaryInstruction = (userSettings?.summaryOff ?? false)
           ? 'The "summary" key should contain the exact same FULL text as the "option" key.'
           : 'If the generated option is more than 5 words, the "summary" key should be a 3-5 word abbreviation of each option, including the exact key words from the option. If the option is 5 words or less, the "summary" key should contain the exact same FULL text as the "option" key.';
+      final currentMoodWW = userSettings?.currentMood;
+      final moodSlugWW = (currentMoodWW != null &&
+              currentMoodWW.isNotEmpty &&
+              currentMoodWW != 'No Mood Selected')
+          ? currentMoodWW.toLowerCase().trim()
+          : null;
+      final moodContextWW =
+          moodSlugWW != null ? 'The user is currently feeling $moodSlugWW.\n' : '';
       final promptForLLM = _composeSession.active
           ? 'Provide up to "$llmOptions" short written-composition options related to: "$question".\n'
                 'This is COMPOSE MODE. The user is writing a document for someone who may not be physically present.\n'
@@ -11707,6 +12012,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
                 'Example: [{"option": "I wanted to write and tell you how much this meant to me.", "summary": "Tell you this meant", "keywords": ["write", "tell", "meant", "much", "you"]}, {"option": "It made the whole day feel more special.", "summary": "Day more special", "keywords": ["day", "special", "feel", "whole", "made"]}]'
                 '${_getComposePromptContext()}'
           : 'Provide up to "$llmOptions" short, single-phrase options related to: "$question".\n'
+                '$moodContextWW'
                 'Format your response as a JSON list where each item has "option", "summary", and "keywords" keys.\n'
                 'The "option" key should contain the FULL option text.\n'
                 'The "keywords" key should contain a list of 3-5 important words from the option.\n'
@@ -12021,119 +12327,58 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
     showDialog(
       context: context,
       barrierDismissible: false,
-      builder: (BuildContext context) {
+      builder: (BuildContext dialogContext) {
+        final isCompact = MediaQuery.of(dialogContext).size.shortestSide < 600;
+        final btnW = isCompact ? 56.0 : 60.0;
+        final btnH = isCompact ? 36.0 : 42.0;
+        final rowGap = isCompact ? 2.0 : 3.0;
+
         return AlertDialog(
-          title: const Text('Enter Admin PIN'),
+          titlePadding: EdgeInsets.fromLTRB(16, isCompact ? 12 : 16, 16, 0),
+          contentPadding: EdgeInsets.fromLTRB(16, isCompact ? 8 : 12, 16, isCompact ? 8 : 12),
+          actionsPadding: EdgeInsets.fromLTRB(8, 0, 8, isCompact ? 6 : 8),
+          title: Text('Admin PIN', style: TextStyle(fontSize: isCompact ? 16 : 20)),
           content: SingleChildScrollView(
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: [
-                const Text('Enter your 4-digit PIN:'),
-                const SizedBox(height: 12),
                 TextField(
                   controller: pinController,
                   keyboardType: TextInputType.number,
                   maxLength: 4,
                   obscureText: true,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(fontSize: 20, letterSpacing: 3),
+                  style: TextStyle(fontSize: isCompact ? 18 : 20, letterSpacing: 3),
                   decoration: const InputDecoration(
                     hintText: '••••',
                     counterText: '',
                     border: OutlineInputBorder(),
+                    isDense: true,
                     contentPadding: EdgeInsets.symmetric(vertical: 8),
                   ),
-                  onSubmitted: (_) => _validatePIN(pinController.text, context),
+                  onSubmitted: (_) => _validatePIN(pinController.text, dialogContext),
                 ),
-                const SizedBox(height: 8),
-                const Text(
-                  'Or tap numbers below:',
-                  style: TextStyle(fontSize: 10, color: Colors.grey),
-                ),
-                const SizedBox(height: 6),
-                // Compact numeric keypad
+                SizedBox(height: isCompact ? 6 : 10),
                 StatefulBuilder(
                   builder: (context, setKeypadState) {
+                    Widget row(List<String> labels) => Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                      children: labels.map((l) => _buildKeypadButton(l, pinController, setKeypadState, btnW, btnH)).toList(),
+                    );
                     return Column(
                       children: [
+                        row(['1', '2', '3']),
+                        SizedBox(height: rowGap),
+                        row(['4', '5', '6']),
+                        SizedBox(height: rowGap),
+                        row(['7', '8', '9']),
+                        SizedBox(height: rowGap),
                         Row(
                           mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                           children: [
-                            _buildKeypadButton(
-                              '1',
-                              pinController,
-                              setKeypadState,
-                            ),
-                            _buildKeypadButton(
-                              '2',
-                              pinController,
-                              setKeypadState,
-                            ),
-                            _buildKeypadButton(
-                              '3',
-                              pinController,
-                              setKeypadState,
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 3),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                          children: [
-                            _buildKeypadButton(
-                              '4',
-                              pinController,
-                              setKeypadState,
-                            ),
-                            _buildKeypadButton(
-                              '5',
-                              pinController,
-                              setKeypadState,
-                            ),
-                            _buildKeypadButton(
-                              '6',
-                              pinController,
-                              setKeypadState,
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 3),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                          children: [
-                            _buildKeypadButton(
-                              '7',
-                              pinController,
-                              setKeypadState,
-                            ),
-                            _buildKeypadButton(
-                              '8',
-                              pinController,
-                              setKeypadState,
-                            ),
-                            _buildKeypadButton(
-                              '9',
-                              pinController,
-                              setKeypadState,
-                            ),
-                          ],
-                        ),
-                        const SizedBox(height: 3),
-                        Row(
-                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                          children: [
-                            _buildKeypadButton(
-                              '⌫',
-                              pinController,
-                              setKeypadState,
-                              isBackspace: true,
-                            ),
-                            _buildKeypadButton(
-                              '0',
-                              pinController,
-                              setKeypadState,
-                            ),
-                            const SizedBox(width: 40), // Empty space
+                            _buildKeypadButton('⌫', pinController, setKeypadState, btnW, btnH, isBackspace: true),
+                            _buildKeypadButton('0', pinController, setKeypadState, btnW, btnH),
+                            SizedBox(width: btnW),
                           ],
                         ),
                       ],
@@ -12142,7 +12387,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
                 ),
                 if (_pinAttempts > 0)
                   Padding(
-                    padding: const EdgeInsets.only(top: 6),
+                    padding: EdgeInsets.only(top: isCompact ? 4 : 6),
                     child: Text(
                       'Incorrect PIN. Attempts: $_pinAttempts/2',
                       style: const TextStyle(color: Colors.red, fontSize: 12),
@@ -12153,44 +12398,35 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
           ),
           actions: [
             TextButton(
-              onPressed: () {
-                Navigator.of(context).pop();
-                // Reclaim focus after dialog closes
-                _reclaimFocus();
-              },
+              onPressed: () { Navigator.of(dialogContext).pop(); _reclaimFocus(); },
               child: const Text('Cancel'),
             ),
             ElevatedButton(
-              onPressed: () => _validatePIN(pinController.text, context),
+              onPressed: () => _validatePIN(pinController.text, dialogContext),
               child: const Text('Unlock'),
             ),
           ],
         );
       },
-    ).then((_) {
-      // Reclaim focus when dialog is dismissed by any means
-      _reclaimFocus();
-    });
+    ).then((_) => _reclaimFocus());
   }
 
-  /// Build a simple keypad button for PIN entry
   Widget _buildKeypadButton(
     String label,
     TextEditingController controller,
-    Function setState, {
+    Function setState,
+    double width,
+    double height, {
     bool isBackspace = false,
   }) {
     return SizedBox(
-      width: 50,
-      height: 40,
+      width: width,
+      height: height,
       child: ElevatedButton(
         onPressed: () {
           if (isBackspace) {
             if (controller.text.isNotEmpty) {
-              controller.text = controller.text.substring(
-                0,
-                controller.text.length - 1,
-              );
+              controller.text = controller.text.substring(0, controller.text.length - 1);
               setState(() {});
             }
           } else {
@@ -12208,10 +12444,7 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
         ),
         child: Text(
           label,
-          style: TextStyle(
-            fontSize: isBackspace ? 16 : 18,
-            fontWeight: FontWeight.bold,
-          ),
+          style: TextStyle(fontSize: isBackspace ? 14 : 16, fontWeight: FontWeight.bold),
         ),
       ),
     );
@@ -13017,6 +13250,35 @@ The "keywords" key should contain 3-5 words that match available symbols. Focus 
                                       ),
                                     ),
                                   ),
+                                ),
+                                const SizedBox(width: 8),
+                                ElevatedButton(
+                                  onPressed: () => _showCopyHistoryModal(
+                                    composeActive
+                                        ? _composeSession.text
+                                        : speechHistory,
+                                  ),
+                                  style: ElevatedButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 8,
+                                    ),
+                                    textStyle: const TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                    backgroundColor: Colors.white,
+                                    foregroundColor: Colors.green.shade700,
+                                    elevation: 2,
+                                    shadowColor: Colors.green.withValues(alpha: 0.3),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(20),
+                                      side: BorderSide(
+                                        color: Colors.green.shade100,
+                                      ),
+                                    ),
+                                  ),
+                                  child: const Text('Copy'),
                                 ),
                                 const Spacer(),
                                 ElevatedButton(

@@ -10,6 +10,7 @@ import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:just_audio/just_audio.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'config/environment_config.dart';
 import 'services/user_settings_provider.dart';
 import 'services/pictogram_service.dart';
@@ -35,6 +36,7 @@ import 'services/authenticated_http_client.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'services/offline_cache_service.dart';
 import 'services/offline_mode_provider.dart';
+import 'pages/show_me_dialog.dart';
 
 /// Plays a brief click sound through the media audio channel when a sensitivity-gated tap is registered.
 /// Global session tracking set for missing images (shared across all button instances)
@@ -115,9 +117,9 @@ class TapInterfaceButton extends StatefulWidget {
   // are preferred and pre-assigned generic URLs are bypassed.
   final String mascot;
 
-  // Page-level tap sensitivity shared across all instances. 0 = instant (default).
+  // Page-level tap sensitivity shared across all instances. Default = Low (100ms).
   // Set by the page when loaded from SharedPreferences.
-  static int tapMinDurationMs = 0;
+  static int tapMinDurationMs = 100;
 
   const TapInterfaceButton({
     super.key,
@@ -656,27 +658,44 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
     // When the button's word changes entirely, reset image state so the new word
     // gets a fresh lookup instead of keeping the old word's image.
     final mascotChanged = widget.mascot != oldWidget.mascot;
+    // When a server-assigned image arrives (e.g. from bravo-build), reset so
+    // the widget immediately uses the new URL instead of keeping a stale
+    // batch-search result.  The lookupAttemptKey doesn't include assignedImageUrl,
+    // so without this reset the early-return guard would block the update.
+    final assignedImageChanged =
+        widget.assignedImageUrl != oldWidget.assignedImageUrl;
 
-    if (labelChanged || searchTextChanged || keywordsChanged || mascotChanged) {
+    // Label/searchText/mascot/assignedImage changes mean the button represents
+    // a completely different concept — reset image state unconditionally.
+    if (labelChanged || searchTextChanged || mascotChanged || assignedImageChanged) {
       _pictogramUrl = null;
+      _lastLoadedKey = null;
+      _isSightWord = false;
+      _isLoadingPictogram = false;
+    }
+
+    // Keywords changing alone should NOT reset an already-loaded image.
+    // "Once a button has an image, never replace it" — _loadPictogram already
+    // returns immediately when _pictogramUrl != null, so skipping the reset
+    // here prevents a flash when _wordKeywords is replaced by a dynamic refresh.
+    // Only clear state when the button has no image yet, so the new keywords
+    // can improve the first lookup.
+    if (keywordsChanged && !labelChanged && !searchTextChanged && _pictogramUrl == null) {
       _lastLoadedKey = null;
       _isSightWord = false;
       _isLoadingPictogram = false;
       // Clear the PictogramService in-memory cache entry so the re-lookup
       // actually hits the network instead of returning the stale null.
-      if (keywordsChanged && !labelChanged && !searchTextChanged) {
-        final settingsProvider =
-            Provider.of<UserSettingsProvider>(context, listen: false);
-        final userLocale =
-            settingsProvider.settings?.userLanguage ?? 'en-US';
-        final isNonEnglish = !userLocale.startsWith('en');
-        final effectiveSearchText =
-            (widget.imageSearchText ?? widget.label).trim().toLowerCase();
-        final ck = isNonEnglish
-            ? '${userLocale.toLowerCase()}:$effectiveSearchText'
-            : effectiveSearchText;
-        PictogramService().clearCacheEntry(ck);
-      }
+      final settingsProvider =
+          Provider.of<UserSettingsProvider>(context, listen: false);
+      final userLocale = settingsProvider.settings?.userLanguage ?? 'en-US';
+      final isNonEnglish = !userLocale.startsWith('en');
+      final effectiveSearchText =
+          (widget.imageSearchText ?? widget.label).trim().toLowerCase();
+      final ck = isNonEnglish
+          ? '${userLocale.toLowerCase()}:$effectiveSearchText'
+          : effectiveSearchText;
+      PictogramService().clearCacheEntry(ck);
     }
 
     if (labelChanged ||
@@ -686,7 +705,8 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
         gradeChanged ||
         keywordsChanged ||
         cacheOnlyChanged ||
-        mascotChanged) {
+        mascotChanged ||
+        assignedImageChanged) {
       _loadPictogram();
     }
   }
@@ -712,10 +732,12 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
       context,
       listen: false,
     );
+    bool isOffline = false;
+    try {
+      isOffline = Provider.of<OfflineModeProvider>(context, listen: false).isOffline;
+    } catch (_) {}
     final userLocale = settingsProvider.settings?.userLanguage ?? 'en-US';
     final isNonEnglish = !userLocale.startsWith('en');
-    final activeMascot = widget.mascot;
-    final mascotIsActive = activeMascot.isNotEmpty;
     final normalizedSearchTextForKey = effectiveSearchText.toLowerCase();
     final cacheKey = isNonEnglish
       ? '${userLocale.toLowerCase()}:$normalizedSearchTextForKey'
@@ -817,13 +839,24 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
             }
           } else if (widget.assignedImageUrl != null &&
               widget.assignedImageUrl!.isNotEmpty &&
-              !mascotIsActive) {
-            // Skip the pre-assigned URL shortcut when a mascot is active so the
-            // mascot-aware lookup can find the correct mascot-specific image.
-            debugPrint('🖼️ Using assigned global image for "${widget.label}": ${widget.assignedImageUrl}');
+              !isOffline) {
+            // Use the server-assigned image URL directly. bravo-build assigns
+            // mascot-correct images on the server, so there is no reason to
+            // bypass this for mascot users. The previous !mascotIsActive guard
+            // caused fallback to batch-search, which fails for short key terms
+            // like "go" (2 chars), "up", "in" due to a 3-char minimum filter.
+            final normalizedAssigned = _normalizePictogramUrl(widget.assignedImageUrl);
+            String? resolvedUrl = normalizedAssigned;
+            if (normalizedAssigned != null && normalizedAssigned.startsWith('http')) {
+              try {
+                final cached = await DefaultCacheManager().getFileFromCache(normalizedAssigned);
+                if (cached != null) resolvedUrl = cached.file.path;
+              } catch (_) {}
+            }
+            debugPrint('🖼️ Using assigned global image for "${widget.label}": $resolvedUrl');
             if (mounted) {
               setState(() {
-                _pictogramUrl = _normalizePictogramUrl(widget.assignedImageUrl);
+                _pictogramUrl = resolvedUrl;
                 _isSightWord = false;
                 _isLoading = false;
                 _lastLoadedKey = lookupAttemptKey;
@@ -891,15 +924,16 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
           pictogramService.enablePictograms = true;
 
           // Single pass lookup. Board-level warmup handles bulk priming.
+          // In offline mode, only check the disk cache — never hit the network.
           final result = await pictogramService.getPictogramResult(
             effectiveSearchText,
             sightWordGradeLevel: widget.sightWordGradeLevel != null
                 ? int.tryParse(widget.sightWordGradeLevel!)
                 : null,
             keywords: widget.keywords,
-            shouldLogMissing: widget.shouldLogMissing,
+            shouldLogMissing: widget.shouldLogMissing && !isOffline,
             locale: userLocale,
-            cacheOnly: widget.cacheOnlyImageLookup,
+            cacheOnly: widget.cacheOnlyImageLookup || isOffline,
           );
 
           debugPrint(
@@ -930,9 +964,29 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
             }
           }
 
+          // In offline mode, if PictogramService found nothing and the button has
+          // an assignedImageUrl, fall back to the disk-cached version of that URL.
+          // This covers images that were not in PictogramService's in-memory cache.
+          String? resolvedImageUrl = _normalizePictogramUrl(result?.imageUrl);
+          if (resolvedImageUrl == null &&
+              isOffline &&
+              widget.assignedImageUrl != null &&
+              widget.assignedImageUrl!.isNotEmpty) {
+            final normalizedAssigned = _normalizePictogramUrl(widget.assignedImageUrl);
+            if (normalizedAssigned != null && normalizedAssigned.startsWith('http')) {
+              try {
+                final cached = await DefaultCacheManager().getFileFromCache(normalizedAssigned);
+                if (cached != null) resolvedImageUrl = cached.file.path;
+              } catch (_) {}
+            }
+            if (resolvedImageUrl != null) {
+              debugPrint('🖼️ Offline fallback to assigned image disk cache for "${widget.label}": $resolvedImageUrl');
+            }
+          }
+
           if (mounted) {
             setState(() {
-              _pictogramUrl = _normalizePictogramUrl(result?.imageUrl);
+              _pictogramUrl = resolvedImageUrl;
               _isSightWord =
                   false; // No sight word formatting for non-sight words
               _isLoading = false;
@@ -1114,15 +1168,23 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
         borderRadius: radius,
         boxShadow: glowColor != null
             ? [
+                // Mid fuzzy halo.
                 BoxShadow(
-                  color: glowColor.withValues(alpha: 0.25),
-                  blurRadius: 0,
+                  color: glowColor.withValues(alpha: 0.55),
+                  blurRadius: 8,
+                  spreadRadius: 1,
+                ),
+                // Outer diffuse bloom.
+                BoxShadow(
+                  color: glowColor.withValues(alpha: 0.30),
+                  blurRadius: 18,
                   spreadRadius: 2,
                 ),
+                // Wide ambient glow.
                 BoxShadow(
-                  color: glowColor.withValues(alpha: 0.2),
-                  blurRadius: 8,
-                  offset: const Offset(0, 4),
+                  color: glowColor.withValues(alpha: 0.15),
+                  blurRadius: 30,
+                  spreadRadius: 3,
                 ),
               ]
             : const [],
@@ -1466,11 +1528,48 @@ class _TapInterfaceButtonState extends State<TapInterfaceButton> {
   }
 }
 
+// --- Show Me data classes ---
+enum _ShowMeActionType {
+  selectCategory,
+  selectSubCategory,
+  selectWord,
+  selectMoreOptions,
+  selectPastTense,
+  selectPlural,
+}
+
+class _ShowMeAction {
+  final _ShowMeActionType type;
+  final String label;
+  final String? id;
+  const _ShowMeAction(this.type, this.label, {this.id});
+}
+
+class _ShowMeWordLocation {
+  final TapInterfaceCategory topCategory;
+  final TapInterfaceCategory? subCategory;
+  final String buttonText;
+  final bool needsPastTense;
+  final bool needsPlural;
+  // Set when the button navigates to another board on selection, so
+  // _computeShowMeActions can look for subsequent words on that board.
+  final String? navigateTargetBoardId;
+  const _ShowMeWordLocation({
+    required this.topCategory,
+    this.subCategory,
+    required this.buttonText,
+    this.needsPastTense = false,
+    this.needsPlural = false,
+    this.navigateTargetBoardId,
+  });
+}
+
 class TapInterfacePage extends StatefulWidget {
   final String idToken;
   final String aacUserId;
   final String displayName;
   final dynamic preloadedConfig;
+  final TapBoardsResponse? preloadedBoards;
   final List<String> preloadedWordOptions;
   final List<Map<String, String>> preloadedPhraseOptions;
   final bool isOfflineMode;
@@ -1481,6 +1580,7 @@ class TapInterfacePage extends StatefulWidget {
     required this.aacUserId,
     required this.displayName,
     this.preloadedConfig,
+    this.preloadedBoards,
     this.preloadedWordOptions = const [],
     this.preloadedPhraseOptions = const [],
     this.isOfflineMode = false,
@@ -1490,24 +1590,19 @@ class TapInterfacePage extends StatefulWidget {
   State<TapInterfacePage> createState() => _TapInterfacePageState();
 }
 
-class _TapInterfacePageState extends State<TapInterfacePage> {
+class _TapInterfacePageState extends State<TapInterfacePage>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _splashSpinController;
+
   static bool _didInitialTapCachePrep = false;
   static const _tapTranslations = <String, Map<String, String>>{
-    'Something Else': {
-      'es-US': 'Algo más',
-      'fr-FR': 'Autre chose',
-      'de-DE': 'Etwas anderes',
-      'it-IT': 'Qualcos\'altro',
-      'pt-BR': 'Outra coisa',
-      'ar-XA': 'شيء آخر',
-    },
-    'Something Else A-Z': {
-      'es-US': 'Algo más A-Z',
-      'fr-FR': 'Autre chose A-Z',
-      'de-DE': 'Etwas anderes A-Z',
-      'it-IT': 'Qualcos\'altro A-Z',
-      'pt-BR': 'Outra coisa A-Z',
-      'ar-XA': 'شيء آخر أ-ي',
+    'More Options': {
+      'es-US': 'Más opciones',
+      'fr-FR': 'Plus d\'options',
+      'de-DE': 'Mehr Optionen',
+      'it-IT': 'Altre opzioni',
+      'pt-BR': 'Mais opções',
+      'ar-XA': 'المزيد من الخيارات',
     },
     'Go Back': {
       'es-US': 'Regresar',
@@ -1649,6 +1744,9 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
   final Map<String, List<String>> _categoryWordCache = {};
   final Map<String, Map<String, List<String>>> _categoryWordKeywordsCache = {};
   final Map<String, List<TapBoardButton>> _categoryBoardButtonsCache = {};
+  // Tracks board IDs that have already had assign-all-images called this session
+  // so we don't hammer the endpoint on every board visit.
+  final Set<String> _boardImagesAssigned = {};
   final Map<String, List<String>> _categoryBrowseWordCache = {};
   final Map<String, Map<String, List<String>>> _categoryBrowseWordKeywordsCache =
       {};
@@ -1665,9 +1763,6 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
   TapInterfaceCategory? _selectedCategory;
   List<String> _temporaryNavigationReturnStack = [];
   bool _temporaryNavigationPending = false;
-  // Breadcrumb stack for the Go Back button — each entry is
-  // (boardId, textAddedToSpeech) so Go Back can undo the exact phrase.
-  List<({String boardId, String addedText})> _navigationBreadcrumbs = [];
   String? _activeBoardModifierBoardId;
   String? _activeBoardModifierId;
 
@@ -1680,17 +1775,22 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
   final Set<String> _usedWordOptions = {};
   List<TapBoardButton> _boardWordOptions =
       []; // Static word rows - board-backed buttons
+  int _currentStaticPageOffset = 0; // Pagination offset into the full static pool
+  // When non-null, "More Options" is active and "Go Back" is shown.
+  // Stores the page offset and dynamic words to restore when Go Back is tapped.
+  int? _moreOptionsReturnOffset;
+  List<String>? _moreOptionsReturnWordOptions;
 
   // --- Past / Plural variant mode ---
   // null = normal, 'past' = show pastTense variants, 'plural' = show plural variants
   String? _variantMode;
 
   // 'left' | 'right' | 'top' | 'bottom'  — stored in SharedPreferences.
-  String _menuPosition = 'left';
+  String _menuPosition = 'top';
 
   // Minimum tap hold duration in ms — stored in SharedPreferences.
-  // 0 = instant (no filter), 100/200/300 = increasing sensitivity filter.
-  int _tapMinDurationMs = 0;
+  // 0 = instant (no filter), 100/200/300 = increasing sensitivity filter. Default = Low (100ms).
+  int _tapMinDurationMs = 100;
 
   // Tracks when the most recent pointer-down on an action-bar button occurred,
   // used by _withSensitivity to enforce the minimum tap duration.
@@ -1718,17 +1818,26 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
   bool _variantApplyInProgress = false;
   Map<String, List<String>> _wordKeywords =
       {}; // Keywords for each word option to improve image matching
+  // Keywords specifically for static board buttons — never replaced by dynamic
+  // word refreshes so static buttons never see a keywordsChanged signal.
+  Map<String, List<String>> _boardButtonKeywords = {};
   int _optionsRebuildKey = 0; // Force UI rebuild when options change
+  int _wordOptionsVersion = 0; // Increments only on word-content changes (not image loads)
   bool _isJokesMode =
       false; // Track if we're showing jokes (for Something Else handling)
-  String?
-  _activeWordLetterFilter; // Persist selected A-Z filter for Something Else refreshes
 
   bool _isLoadingPhraseOptions = false; // Separate loading state for phrases
   bool _isLoadingWordOptions = false; // Separate loading state for words
+  final ValueNotifier<bool> _dynLoadingNotifier = ValueNotifier(false);
   bool _cacheOnlyInitialImageLookup = false;
+  // Word option image URLs resolved by batch-search preload. Passed directly as
+  // assignedImageUrl so buttons never need per-button server calls.
+  // Empty until preload completes; reset to {} when new word options are generated.
+  Map<String, String> _wordOptionImageUrls = {};
   // bool _isLoadingOptions = false;       // General loading state for operations affecting both sections
   bool _isLoadingConfig = false;
+  String _loadingMessage = 'Preparing your experience...';
+  double _loadingProgress = 0.0;
   String? _lastInitialWordOptionsLocale;
   bool _isRefreshingInitialWordOptionsForLocale = false;
 
@@ -1741,6 +1850,20 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
   bool _isAdminToolbarLocked = true;
   String _currentPIN = '1234'; // Default PIN
   int _pinAttempts = 0; // Track failed PIN attempts
+
+  // --- Show Me state ---
+  bool _showMeActive = false;
+  bool _showMePulse = false;
+  bool _showMeAwaitingFinalTap = false; // true when all words done, waiting for speech field tap
+  Timer? _showMePulseTimer;
+  // Holds the in-flight background refresh Future so Show Me can await it
+  // before computing actions (board buttons are only available post-refresh).
+  Future<void>? _backgroundRefreshFuture;
+  // ValueNotifier lets the sub-category modal dialog observe pulse ticks
+  // without requiring the parent setState to reach the dialog's widget tree.
+  final ValueNotifier<bool> _showMePulseNotifier = ValueNotifier(false);
+  List<_ShowMeAction> _showMeActions = [];
+  int _showMeActionIndex = 0;
 
   // --- Floating status toast ---
   Timer? _statusToastTimer;
@@ -1802,6 +1925,11 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
     _globalSessionLoggedMissingImages.clear();
     debugPrint('🔄 Cleared session missing image tracking on page init');
 
+    _splashSpinController = AnimationController(
+      duration: const Duration(seconds: 2),
+      vsync: this,
+    )..repeat();
+
     _flutterTts = FlutterTts();
     _buildSpaceController.addListener(_onBuildSpaceChange);
     _speechHistoryController.addListener(_onSpeechHistoryChange);
@@ -1825,8 +1953,8 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
 
     // Load locally-stored preferences.
     SharedPreferences.getInstance().then((prefs) {
-      final savedPosition = prefs.getString('tap_menu_position') ?? 'left';
-      final savedSensitivity = prefs.getInt('tap_min_duration_ms') ?? 0;
+      final savedPosition = prefs.getString('tap_menu_position') ?? 'top';
+      final savedSensitivity = prefs.getInt('tap_min_duration_ms') ?? 100;
       debugPrint('[TapSensitivity] Loaded from SharedPreferences: tap_min_duration_ms=$savedSensitivity');
       TapInterfaceButton.tapMinDurationMs = savedSensitivity;
       debugPrint('[TapSensitivity] Static set to: ${TapInterfaceButton.tapMinDurationMs}');
@@ -1838,50 +1966,73 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
       }
     });
 
+    // If a valid config was passed in (e.g. from AppLoadingPage via MoodSelectionPage),
+    // apply it synchronously so the loading splash never renders at all.
+    final preloaded = widget.preloadedConfig;
+    if (!widget.isOfflineMode &&
+        preloaded is TapInterfaceConfig &&
+        preloaded.buttons.isNotEmpty) {
+      _tapConfig = _ensureEmailTapCategory(preloaded) ?? preloaded;
+      _loadingProgress = 1.0;
+      _loadingMessage = 'Ready!';
+      debugPrint('[TapInterface] Applied preloaded config (${_tapConfig!.buttons.length} categories) — skipping API fetch.');
+    }
+
     // Load tap interface configuration
     WidgetsBinding.instance.addPostFrameCallback((_) async {
-      await _syncAuthContextForTap();
-      // Refresh settings on page entry so language-dependent Tap requests
-      // (words/phrases/image locale) use the latest user profile values.
-      try {
-        await userSettings
-            .fetchSettings()
-            .timeout(const Duration(seconds: 8));
-      } catch (e) {
-        debugPrint(
-          '[TapInterface] Settings refresh timed out/failed on startup: $e',
+      unawaited(_syncAuthContextForTap());
+
+      if (!widget.isOfflineMode) {
+        // Refresh settings in the background — do not block config/word loading.
+        unawaited(
+          userSettings
+              .fetchSettings()
+              .timeout(const Duration(seconds: 8))
+              .catchError((e) {
+            debugPrint('[TapInterface] Settings refresh timed out/failed on startup: $e');
+          }),
         );
+
+        // Never block Tap startup on location override hydration.
+        unawaited(_hydrateLocationOverrideFromCurrentUser());
       }
 
-      // Never block Tap startup on location override hydration.
-      unawaited(_hydrateLocationOverrideFromCurrentUser());
       if (!mounted) return;
       final locale = userSettings.settings?.userLanguage ?? 'en-US';
 
-      // Start Tap config loading immediately. Cache prep runs in background.
-      _loadTapInterfaceConfig(); // word loading is handled inside after config resolves
-
-      if (!_didInitialTapCachePrep) {
-        unawaited(() async {
-          try {
-            await _clearAllCaches().timeout(const Duration(seconds: 8));
-            if (!locale.startsWith('en')) {
-              await PictogramService().prefetchLocaleImages(locale).timeout(
-                const Duration(seconds: 8),
-              );
-            }
-          } catch (e) {
-            debugPrint('[TapInterface] Initial cache prep timed out/failed: $e');
-          }
-        }());
-        _didInitialTapCachePrep = true;
+      if (widget.isOfflineMode) {
+        // Use preloaded cached config — no network calls in offline mode.
+        unawaited(_loadOfflineTapConfig());
+      } else if (_tapConfig != null) {
+        // Config already applied from preloaded data — load boards from cache
+        // and open the home board without any API call.
+        unawaited(_applyPreloadedBoardsAndStart());
       } else {
-        if (!locale.startsWith('en')) {
-          unawaited(
-            PictogramService().prefetchLocaleImages(locale).timeout(
-              const Duration(seconds: 8),
-            ),
-          );
+        // No preloaded config — fetch from API.
+        _loadTapInterfaceConfig(); // word loading is handled inside after config resolves
+
+        if (!_didInitialTapCachePrep) {
+          unawaited(() async {
+            try {
+              await _clearAllCaches().timeout(const Duration(seconds: 8));
+              if (!locale.startsWith('en')) {
+                await PictogramService().prefetchLocaleImages(locale).timeout(
+                  const Duration(seconds: 8),
+                );
+              }
+            } catch (e) {
+              debugPrint('[TapInterface] Initial cache prep timed out/failed: $e');
+            }
+          }());
+          _didInitialTapCachePrep = true;
+        } else {
+          if (!locale.startsWith('en')) {
+            unawaited(
+              PictogramService().prefetchLocaleImages(locale).timeout(
+                const Duration(seconds: 8),
+              ),
+            );
+          }
         }
       }
       _primeAudioSystem();
@@ -2085,24 +2236,23 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
   }
 
   /// Returns the text labels of board buttons currently visible in static rows.
-  /// Used to tell the LLM what to exclude from dynamic suggestions.
+  /// Uses the paginated pool view so the LLM excludes only what's on-screen now.
   List<String> _displayedStaticButtonLabels(UserSettings? userSettings) {
-    if (_boardWordOptions.isEmpty) return [];
-    final totalRows = userSettings?.tapWordsRows ?? 3;
-    final dynamicRows = userSettings?.tapDynamicRows ?? 1;
-    final staticRows = (totalRows - dynamicRows).clamp(0, totalRows);
-    if (staticRows == 0) return [];
-    // Use row field directly — avoids column-count mismatch between settings and board layout.
-    return _boardWordOptions
-        .where(
-          (btn) =>
-              btn.row < staticRows &&
-              !btn.hidden &&
-              !btn.isNavigationButton &&
-              btn.text.isNotEmpty,
-        )
-        .map((btn) => btn.text)
-        .toList();
+    final sorted = _sortedBoardWordOptions;
+    if (sorted.isEmpty) return [];
+    final slotsPerPage = _staticWordSlotCount(userSettings)
+        .clamp(0, (_wordsSlotCount(userSettings) - 1).clamp(0, sorted.length));
+    if (slotsPerPage == 0) return [];
+    final labels = <String>[];
+    for (var i = 0; i < slotsPerPage; i++) {
+      final poolIdx = _currentStaticPageOffset + i;
+      if (poolIdx >= sorted.length) break; // partial last page — stop here
+      final btn = sorted[poolIdx];
+      if (!btn.isNavigationButton && btn.text.isNotEmpty) {
+        labels.add(btn.text);
+      }
+    }
+    return labels;
   }
 
   /// Total words button slots = tapWordsRows × gridColumns
@@ -2112,12 +2262,52 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
     return rows * cols;
   }
 
-  /// Static word slots (board buttons) = (tapWordsRows - tapDynamicRows) × gridColumns
+  /// Dynamic rows for the currently selected board.
+  /// Profile-level tapDynamicRows is the authoritative source. A board's stored
+  /// dynamic_rows may be a stale copy from generation time, so we only honour it
+  /// when it represents a true per-board override (board value differs from profile
+  /// AND profile is not zero). tapDynamicRows=0 is always the master off-switch.
+  int _currentBoardDynamicRows(UserSettings? userSettings) {
+    final profileRows = userSettings?.tapDynamicRows ?? 1;
+
+    // Profile 0 means the user has disabled dynamic rows globally.
+    if (profileRows == 0) {
+      debugPrint('[TapInterface] 📊 dynamicRows: profile=0 → 0 (master off)');
+      return 0;
+    }
+
+    final boardId = _getCategoryBoardId(_selectedCategory);
+    final board = boardId != null
+        ? _tapBoards?.boards.where((b) => b.id == boardId).firstOrNull
+        : null;
+
+    // Use a board-level value only when it was explicitly set differently from
+    // the profile — i.e. it is a real per-board override, not a stale copy.
+    final boardRows = board?.dynamicRows;
+    final numDynamic = (boardRows != null && boardRows != profileRows)
+        ? boardRows
+        : profileRows;
+
+    debugPrint('[TapInterface] 📊 dynamicRows: board="$boardId" '
+        'boardDynamic=$boardRows profile=$profileRows → $numDynamic');
+    return numDynamic;
+  }
+
+  /// Static word slots (board buttons) = (tapWordsRows - dynamicRows) × gridColumns
   int _staticWordSlotCount(UserSettings? userSettings) {
     final total = userSettings?.tapWordsRows ?? 3;
-    final dynamic = userSettings?.tapDynamicRows ?? 1;
+    final dynamic = _currentBoardDynamicRows(userSettings);
     final cols = _getEffectiveMainContentColumns(userSettings?.gridColumns ?? 6);
     return (total - dynamic).clamp(0, total) * cols;
+  }
+
+  /// How many AI word options to request for the Tap Interface.
+  /// Derived from grid layout (dynamicRows × columns) so the dynamic section
+  /// is always fully populated regardless of the Freestyle "word options" setting.
+  int _tapDynamicWordCount(UserSettings? userSettings) {
+    final dynamicRows = _currentBoardDynamicRows(userSettings);
+    final cols = _getEffectiveMainContentColumns(userSettings?.gridColumns ?? 6);
+    return dynamicRows * cols;
   }
 
   /// Calculate flex value for Words section based on Phrases section size
@@ -2330,6 +2520,11 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
     return fullText.trim().isEmpty ? null : fullText.trim();
   }
 
+  /// Strip leading function words from a short AI-generated word option so the
+  /// image search targets the content term.
+  ///   "to eat" → "eat", "to go" → "go", "a ball" → "ball", "I want" → "want"
+  /// Negation phrases like "not that" are left intact.
+
   Widget _buildPhrasesGrid(UserSettings? userSettings) {
     final tapPictogramsDisabled = userSettings?.disableTapPictograms ?? false;
     final tapPictogramsEnabled = !tapPictogramsDisabled;
@@ -2348,7 +2543,7 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
       children: List.generate(_phraseSlotCount(userSettings) + 1, (index) {
         if (index == _phraseSlotCount(userSettings)) {
           return TapInterfaceButton(
-            label: _t('Something Else'),
+            label: _t('More Options'),
             onPressed: () => _loadMorePhraseOptions(),
             backgroundColor: Colors.green[50] ?? Colors.green.shade50,
             foregroundColor: Colors.black87,
@@ -2439,14 +2634,798 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
     return 6; // Very small buttons -> 6 columns
   }
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // Show Me helpers
+  // ─────────────────────────────────────────────────────────────────────────
+
+  _ShowMeAction? get _showMeCurrentAction =>
+      (_showMeActive && _showMeActionIndex < _showMeActions.length)
+          ? _showMeActions[_showMeActionIndex]
+          : null;
+
+  static const Color _showMeTargetColor = Color(0xFFFF1A1A);
+  static const Color _showMeTargetColorDim = Color(0xFF990000);
+
+  Color get _showMeGlowColor =>
+      _showMePulse ? _showMeTargetColor : _showMeTargetColorDim;
+
+  _ShowMeWordLocation? _findWordLocation(String word) {
+    final target = word.toLowerCase().trim();
+    final allCategories = _tapConfig?.buttons ?? [];
+    debugPrint('[ShowMe:lookup] "$word" — allCategories: ${allCategories.length}, '
+        '_wordOptions: ${_wordOptions.length}, _boardWordOptions: ${_boardWordOptions.length}');
+
+    bool boardHasWord(TapBoard board, String w) {
+      if (board.buttons.any((b) => b.text.toLowerCase() == w)) return true;
+      if (board.staticOptions != null) {
+        return board.staticOptions!
+            .split(',')
+            .any((o) => o.trim().toLowerCase() == w);
+      }
+      return false;
+    }
+
+    String? getBoardButtonText(TapBoard board, String w) {
+      final btn =
+          board.buttons.where((b) => b.text.toLowerCase() == w).firstOrNull;
+      if (btn != null) return btn.text;
+      if (board.staticOptions != null) {
+        return board.staticOptions!
+            .split(',')
+            .map((o) => o.trim())
+            .where((o) => o.toLowerCase() == w)
+            .firstOrNull;
+      }
+      return null;
+    }
+
+    // Uses the same resolution logic as _getCategoryBoardId: boardId first,
+    // then falls back to the category's own id (used by the Home board).
+    TapBoard? getBoard(TapInterfaceCategory cat) {
+      final boardId = _normalizeBoardId(cat.boardId ?? cat.id);
+      if (boardId == null) return null;
+      return _tapBoards?.boards.where((b) => b.id == boardId).firstOrNull;
+    }
+
+    // Checks whether a word is present in either the resolved board OR
+    // the boardWordOptions stored directly on the category (Home board pattern).
+    bool catHasWord(TapInterfaceCategory cat, String w) {
+      final board = getBoard(cat);
+      if (board != null && boardHasWord(board, w)) return true;
+      return cat.boardWordOptions.any((b) => b.text.toLowerCase() == w);
+    }
+
+    String? catButtonText(TapInterfaceCategory cat, String w) {
+      final board = getBoard(cat);
+      if (board != null) {
+        final text = getBoardButtonText(board, w);
+        if (text != null) return text;
+      }
+      return cat.boardWordOptions
+          .where((b) => b.text.toLowerCase() == w)
+          .firstOrNull
+          ?.text;
+    }
+
+    // Returns the raw TapBoardButton so callers can check afterSelection.
+    TapBoardButton? catGetBoardButton(TapInterfaceCategory cat, String w) {
+      final board = getBoard(cat);
+      if (board != null) {
+        final btn = board.buttons.where((b) => b.text.toLowerCase() == w).firstOrNull;
+        if (btn != null) return btn;
+      }
+      return cat.boardWordOptions.where((b) => b.text.toLowerCase() == w).firstOrNull;
+    }
+
+    // Home board is always searched first so that words appearing on both the
+    // Home board and another board (e.g. "Want", "I") resolve to Home.
+    //
+    // The Home board is often a synthesized category (created by
+    // _resolveTargetCategory) stored in _selectedCategory rather than in
+    // _tapConfig?.buttons. Try the left-panel list first, then fall back to
+    // _selectedCategory if its boardId matches the configured homeBoardId.
+    TapInterfaceCategory? homeCategory = allCategories
+        .where((c) => !c.hidden && _isConfiguredHomeCategory(c))
+        .firstOrNull;
+    if (homeCategory == null) {
+      final homeBoardId = _normalizeBoardId(_tapBoards?.boardSettings.homeBoardId);
+      if (homeBoardId != null &&
+          _normalizeBoardId(_getCategoryBoardId(_selectedCategory)) == homeBoardId) {
+        homeCategory = _selectedCategory;
+      }
+    }
+    final orderedCategories = [
+      if (homeCategory != null) homeCategory,
+      ...allCategories.where((c) => !c.hidden && c != homeCategory),
+    ];
+
+    for (final searchWord in _stemCandidates(target)) {
+      final isPast =
+          searchWord != target && _isPastTenseStemOf(searchWord, target);
+      final isPlural =
+          searchWord != target && _isPluralStemOf(searchWord, target);
+
+      for (final cat in orderedCategories) {
+        final board = getBoard(cat);
+        debugPrint('[ShowMe:lookup]   cat="${cat.label}" '
+            'board=${board?.id ?? "null"} '
+            'boardBtns=${board?.buttons.length ?? 0} '
+            'boardWordOpts=${cat.boardWordOptions.length}');
+
+        // For the home category: catHasWord relies on _getCategoryBoardId which
+        // uses boardId??id. The Home category is sometimes identified by the
+        // isHomeBoard flag rather than by matching boardId, so getBoard() returns
+        // null. Directly look up the configured homeBoardId from _tapBoards as
+        // an authoritative fallback before the regular catHasWord check.
+        if (cat == homeCategory) {
+          final configuredHomeBoardId =
+              _normalizeBoardId(_tapBoards?.boardSettings.homeBoardId);
+          if (configuredHomeBoardId != null && board == null) {
+            final homeBoard = _tapBoards?.boards
+                .where((b) => b.id == configuredHomeBoardId)
+                .firstOrNull;
+            if (homeBoard != null && boardHasWord(homeBoard, searchWord)) {
+              debugPrint('[ShowMe:lookup]   ✓ found "$searchWord" in home board '
+                  '(homeBoardId=$configuredHomeBoardId)');
+              final homeBtn = homeBoard.buttons
+                  .where((b) => b.text.toLowerCase() == searchWord)
+                  .firstOrNull;
+              return _ShowMeWordLocation(
+                topCategory: cat,
+                buttonText:
+                    getBoardButtonText(homeBoard, searchWord) ?? searchWord,
+                needsPastTense: isPast,
+                needsPlural: isPlural,
+                navigateTargetBoardId: homeBtn?.afterSelection == 'navigate'
+                    ? _normalizeBoardId(homeBtn?.targetBoardId)
+                    : null,
+              );
+            }
+          }
+        }
+
+        if (catHasWord(cat, searchWord)) {
+          debugPrint('[ShowMe:lookup]   ✓ found "$searchWord" in cat "${cat.label}"');
+          final btn = catGetBoardButton(cat, searchWord);
+          return _ShowMeWordLocation(
+            topCategory: cat,
+            buttonText: catButtonText(cat, searchWord) ?? searchWord,
+            needsPastTense: isPast,
+            needsPlural: isPlural,
+            navigateTargetBoardId: btn?.afterSelection == 'navigate'
+                ? _normalizeBoardId(btn?.targetBoardId)
+                : null,
+          );
+        }
+
+        for (final child in cat.children) {
+          if (child.hidden) continue;
+          if (catHasWord(child, searchWord)) {
+            debugPrint('[ShowMe:lookup]   ✓ found "$searchWord" in sub-cat "${child.label}"');
+            final btn = catGetBoardButton(child, searchWord);
+            return _ShowMeWordLocation(
+              topCategory: cat,
+              subCategory: child,
+              buttonText: catButtonText(child, searchWord) ?? searchWord,
+              needsPastTense: isPast,
+              needsPlural: isPlural,
+              navigateTargetBoardId: btn?.afterSelection == 'navigate'
+                  ? _normalizeBoardId(btn?.targetBoardId)
+                  : null,
+            );
+          }
+        }
+      }
+
+      // Fallback 1: check AI-generated dynamic word options (_wordOptions).
+      if (homeCategory != null) {
+        final dynMatch = _wordOptions
+            .where((w) => w.toLowerCase() == searchWord)
+            .firstOrNull;
+        debugPrint('[ShowMe:lookup]   _wordOptions fallback for "$searchWord": '
+            'dynMatch=$dynMatch');
+        if (dynMatch != null) {
+          debugPrint('[ShowMe:lookup]   ✓ found "$searchWord" in _wordOptions');
+          return _ShowMeWordLocation(
+            topCategory: homeCategory,
+            buttonText: dynMatch,
+            needsPastTense: isPast,
+            needsPlural: isPlural,
+          );
+        }
+      }
+
+      // Fallback 2: check the runtime-loaded board word buttons (_boardWordOptions).
+      // These are loaded into page state when a category is tapped but are NOT
+      // stored back onto the category object, so catHasWord() misses them.
+      // We pre-navigate to Home before computing actions, so _boardWordOptions
+      // contains the Home board's full button pool (e.g. "I", "you", "want").
+      if (homeCategory != null) {
+        final boardMatch = _boardWordOptions
+            .where((b) => b.text.toLowerCase() == searchWord)
+            .firstOrNull;
+        debugPrint('[ShowMe:lookup]   _boardWordOptions fallback for "$searchWord": '
+            'match=${boardMatch?.text}');
+        if (boardMatch != null) {
+          debugPrint('[ShowMe:lookup]   ✓ found "$searchWord" in _boardWordOptions');
+          return _ShowMeWordLocation(
+            topCategory: homeCategory,
+            buttonText: boardMatch.text,
+            needsPastTense: isPast,
+            needsPlural: isPlural,
+            navigateTargetBoardId: boardMatch.afterSelection == 'navigate'
+                ? _normalizeBoardId(boardMatch.targetBoardId)
+                : null,
+          );
+        }
+      }
+    }
+    debugPrint('[ShowMe:lookup]   ✗ "$word" not found anywhere');
+    return null;
+  }
+
+  List<String> _stemCandidates(String word) {
+    final results = [word];
+
+    for (final entry in _commonWordVariants.entries) {
+      final variants = entry.value;
+      if (variants['past'] == word || variants['plural'] == word) {
+        results.add(entry.key);
+      }
+    }
+
+    if (word.endsWith('ed')) {
+      results.add(word.substring(0, word.length - 2));
+      results.add(word.substring(0, word.length - 1));
+    } else if (word.endsWith('d') && !word.endsWith('ed')) {
+      results.add(word.substring(0, word.length - 1));
+    }
+
+    if (word.endsWith('es') && word.length > 3) {
+      results.add(word.substring(0, word.length - 2));
+      results.add(word.substring(0, word.length - 1));
+    } else if (word.endsWith('s') && word.length > 2) {
+      results.add(word.substring(0, word.length - 1));
+    }
+
+    return results.toSet().toList();
+  }
+
+  bool _isPastTenseStemOf(String base, String original) {
+    if (original == base) return false;
+    final entry = _commonWordVariants[base];
+    if (entry?['past'] == original) return true;
+    return original == '${base}d' ||
+        original == '${base}ed' ||
+        (original.endsWith('ed') &&
+            original.substring(0, original.length - 2) == base);
+  }
+
+  bool _isPluralStemOf(String base, String original) {
+    if (original == base) return false;
+    final entry = _commonWordVariants[base];
+    if (entry?['plural'] == original) return true;
+    return original == '${base}s' || original == '${base}es';
+  }
+
+  // Look for a phrase (may be multi-word, e.g. "am happy") on a specific board.
+  // Returns a location using [contextCategory] so no extra selectCategory step
+  // is generated — the navigation already happened via the preceding button tap.
+  _ShowMeWordLocation? _findWordOnBoard(
+    String phrase,
+    String boardId,
+    TapInterfaceCategory contextCategory,
+  ) {
+    final board =
+        _tapBoards?.boards.where((b) => b.id == boardId).firstOrNull;
+    if (board == null) return null;
+    final searchLower = phrase.toLowerCase().trim();
+    final btn = board.buttons
+        .where((b) => !b.hidden && b.text.toLowerCase() == searchLower)
+        .firstOrNull;
+    if (btn != null) {
+      debugPrint('[ShowMe:followOn] ✓ found "$phrase" on board "$boardId"');
+      return _ShowMeWordLocation(
+        topCategory: contextCategory,
+        buttonText: btn.text,
+        navigateTargetBoardId: btn.afterSelection == 'navigate'
+            ? _normalizeBoardId(btn.targetBoardId)
+            : null,
+      );
+    }
+    // Also check static options
+    if (board.staticOptions != null) {
+      final match = board.staticOptions!
+          .split(',')
+          .map((o) => o.trim())
+          .where((o) => o.toLowerCase() == searchLower)
+          .firstOrNull;
+      if (match != null) {
+        debugPrint('[ShowMe:followOn] ✓ found "$phrase" in staticOptions of board "$boardId"');
+        return _ShowMeWordLocation(
+          topCategory: contextCategory,
+          buttonText: match,
+        );
+      }
+    }
+    return null;
+  }
+
+  List<_ShowMeAction>? _computeShowMeActions(
+    String phrase, {
+    TapInterfaceCategory? startingCategory,
+  }) {
+    final words = phrase
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((w) => w.isNotEmpty)
+        .toList();
+    final actions = <_ShowMeAction>[];
+
+    // If we pre-navigated to the Home board, track it as the current position
+    // so consecutive Home board words don't each generate a selectCategory step.
+    TapInterfaceCategory? currentCategory = startingCategory;
+
+    // When a button navigates to another board on tap (afterSelection=navigate),
+    // store that board id here so subsequent words are first looked up there.
+    // This handles sequences like "I" (navigates to i_target) → "am happy"
+    // (compound button on i_target board), avoiding a redundant board switch.
+    String? followOnBoardId;
+
+    int wordIdx = 0;
+    while (wordIdx < words.length) {
+      final word = words[wordIdx];
+
+      // If the previous button navigated to a follow-on board, try to match
+      // remaining words on that board (longest compound first, then individual).
+      if (followOnBoardId != null && currentCategory != null) {
+        final contextCat = currentCategory;
+        bool consumed = false;
+        for (int end = words.length; end > wordIdx; end--) {
+          final compound = words.sublist(wordIdx, end).join(' ');
+          final loc = _findWordOnBoard(compound, followOnBoardId!, contextCat);
+          if (loc != null) {
+            actions.add(_ShowMeAction(_ShowMeActionType.selectWord, loc.buttonText));
+            currentCategory = loc.topCategory;
+            followOnBoardId = loc.navigateTargetBoardId;
+            wordIdx = end;
+            consumed = true;
+            break;
+          }
+        }
+        if (consumed) continue;
+        // Nothing found on follow-on board; fall through to regular search.
+        followOnBoardId = null;
+      }
+
+      final loc = _findWordLocation(word);
+      if (loc == null) {
+        debugPrint('[ShowMe] Word not found: "$word"');
+        wordIdx++;
+        continue;
+      }
+
+      if (!_showMeCategoriesMatch(currentCategory, loc.topCategory)) {
+        actions.add(_ShowMeAction(
+          _ShowMeActionType.selectCategory,
+          loc.topCategory.label,
+          id: loc.topCategory.id,
+        ));
+        currentCategory = loc.topCategory;
+      }
+
+      if (loc.subCategory != null) {
+        actions.add(_ShowMeAction(
+          _ShowMeActionType.selectSubCategory,
+          loc.subCategory!.label,
+          id: loc.subCategory!.id,
+        ));
+      }
+
+      if (loc.needsPastTense) {
+        actions.add(const _ShowMeAction(
+            _ShowMeActionType.selectPastTense, '-d'));
+      } else if (loc.needsPlural) {
+        actions.add(
+            const _ShowMeAction(_ShowMeActionType.selectPlural, '-s'));
+      }
+
+      actions.add(_ShowMeAction(_ShowMeActionType.selectWord, loc.buttonText));
+
+      // Keep currentCategory set so the NEXT word on the same board doesn't
+      // generate a redundant selectCategory step.
+      currentCategory = loc.topCategory;
+      followOnBoardId = loc.navigateTargetBoardId;
+      wordIdx++;
+    }
+
+    return actions.isEmpty ? null : actions;
+  }
+
+  Future<Map<String, WordSearchResult>> validateShowMePhrase(
+      String phrase) async {
+    final words =
+        phrase.trim().split(RegExp(r'\s+')).where((w) => w.isNotEmpty);
+    final results = <String, WordSearchResult>{};
+    for (final word in words) {
+      final loc = _findWordLocation(word);
+      if (loc == null) {
+        results[word] = const WordSearchResult(WordSearchStatus.notFound);
+      } else if (loc.needsPastTense || loc.needsPlural) {
+        results[word] = WordSearchResult(
+          WordSearchStatus.foundWithModifier,
+          foundAs: loc.buttonText,
+        );
+      } else {
+        results[word] = const WordSearchResult(WordSearchStatus.found);
+      }
+    }
+    return results;
+  }
+
+  void _openShowMeDialog() async {
+    if (_showMeActive) {
+      _cancelShowMe();
+      return;
+    }
+
+    final phrase = await showDialog<String>(
+      context: context,
+      builder: (_) => ShowMeDialog(
+        onValidatePhrase: validateShowMePhrase,
+      ),
+    );
+
+    if (phrase == null || !mounted) return;
+
+    // Identify the Home board category. It may be a synthesized category held
+    // in _selectedCategory (created by _resolveTargetCategory) rather than a
+    // left-panel entry in _tapConfig?.buttons.
+    TapInterfaceCategory? homeCategory = (_tapConfig?.buttons ?? [])
+        .where((c) => !c.hidden && _isConfiguredHomeCategory(c))
+        .firstOrNull;
+    if (homeCategory == null) {
+      final homeBoardId = _normalizeBoardId(_tapBoards?.boardSettings.homeBoardId);
+      if (homeBoardId != null &&
+          _normalizeBoardId(_getCategoryBoardId(_selectedCategory)) == homeBoardId) {
+        homeCategory = _selectedCategory;
+      }
+      // Fallback: resolve directly from board data — handles the case where
+      // the user is currently on a sub-board (e.g. nav_sub_i from a prior run).
+      if (homeCategory == null && homeBoardId != null) {
+        homeCategory = _resolveTargetCategory(homeBoardId);
+      }
+    }
+
+    debugPrint('[ShowMe] homeCategory found: ${homeCategory?.label} '
+        '(id=${homeCategory?.id}, boardId=${homeCategory?.boardId})');
+
+    if (homeCategory != null) {
+      await _handleCategoryTap(homeCategory);
+      // Poll for board data up to 3 s. Home board buttons come from the
+      // background refresh (async API call) and may not be ready yet.
+      for (int i = 0; i < 30; i++) {
+        await Future.delayed(const Duration(milliseconds: 100));
+        if (_wordOptions.isNotEmpty || _boardWordOptions.isNotEmpty) break;
+      }
+    }
+    if (!mounted) return;
+
+    // If _tapBoards.boards["board_home"].buttons is still empty the
+    // background refresh hasn't completed yet. Await it directly — it
+    // populates _tapBoards with fresh button data that _findWordLocation
+    // needs to locate words like "I" on the Home board.
+    if (_boardWordOptions.isEmpty) {
+      await _backgroundRefreshFuture?.timeout(
+        const Duration(seconds: 12),
+        onTimeout: () {},
+      );
+      if (!mounted) return;
+    }
+
+    debugPrint('[ShowMe] After Home nav — '
+        '_wordOptions (${_wordOptions.length}): ${_wordOptions.take(15).toList()}');
+    debugPrint('[ShowMe] _boardWordOptions (${_boardWordOptions.length}): '
+        '${_boardWordOptions.take(15).map((b) => b.text).toList()}');
+
+    final actions = _computeShowMeActions(phrase, startingCategory: homeCategory);
+
+    debugPrint('[ShowMe] Computed actions for "$phrase":');
+    if (actions != null) {
+      for (int i = 0; i < actions.length; i++) {
+        debugPrint('  [$i] ${actions[i].type.name}: "${actions[i].label}"');
+      }
+    } else {
+      debugPrint('  (null — no words found)');
+    }
+    if (actions == null || actions.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+              content:
+                  Text('No words from this phrase were found on the boards.')),
+        );
+      }
+      return;
+    }
+
+    _startShowMe(actions);
+  }
+
+  void _startShowMe(List<_ShowMeAction> actions) {
+    setState(() {
+      _showMeActive = true;
+      _showMeAwaitingFinalTap = false;
+      _showMeActions = actions;
+      _showMeActionIndex = 0;
+      _showMePulse = false;
+      // Lock+collapse the admin toolbar so it doesn't distract the user
+      _isAdminToolbarLocked = true;
+    });
+    _showMePulseTimer =
+        Timer.periodic(const Duration(milliseconds: 600), (_) {
+      if (mounted) {
+        setState(() => _showMePulse = !_showMePulse);
+        _showMePulseNotifier.value = _showMePulse;
+      }
+    });
+    // Handle the case where action index 0 is already a no-button category.
+    _autoNavigateShowMeCategoryIfNeeded();
+  }
+
+  void _cancelShowMe() {
+    _showMePulseTimer?.cancel();
+    _showMePulseTimer = null;
+    setState(() {
+      _showMeActive = false;
+      _showMeAwaitingFinalTap = false;
+      _showMeActions = [];
+      _showMeActionIndex = 0;
+      _showMePulse = false;
+    });
+    _showMePulseNotifier.value = false;
+  }
+
+  void _advanceShowMe() {
+    final next = _showMeActionIndex + 1;
+    if (next >= _showMeActions.length) {
+      _enterShowMeAwaitingFinalTap();
+      return;
+    }
+    setState(() => _showMeActionIndex = next);
+    _autoNavigateShowMeCategoryIfNeeded();
+  }
+
+  // Returns true when the Show Me guide needs the user to tap the top-bar
+  // Home button (the action targets the home board, which has no left-panel
+  // category button).
+  bool get _isHomeBtnShowMeTarget {
+    if (!_showMeActive) return false;
+    final action = _showMeCurrentAction;
+    if (action == null) return false;
+    if (action.type != _ShowMeActionType.selectCategory) return false;
+    // Check if this action targets the home board but has no left-panel button.
+    final allCats = _tapConfig?.buttons ?? [];
+    final hasPanelButton = allCats.any(
+      (c) => !c.hidden && _categoryMatchesShowMeAction(c, action),
+    );
+    if (hasPanelButton) return false;
+    // The Home button in the top bar handles navigation to the configured home board.
+    final homeBoardId = _normalizeBoardId(_tapBoards?.boardSettings.homeBoardId);
+    return homeBoardId != null &&
+        (action.id == homeBoardId ||
+         (action.id == null &&
+          action.label.toLowerCase() == 'home'));
+  }
+
+  // If the newly-current Show Me action is selectCategory but there is no
+  // visible left-panel button AND it's not the top-bar Home button, navigate
+  // programmatically and immediately advance past it.
+  void _autoNavigateShowMeCategoryIfNeeded() {
+    final action = _showMeCurrentAction;
+    if (action == null) return;
+    if (action.type != _ShowMeActionType.selectCategory) return;
+
+    // Home board is handled by the top-bar Home button — don't auto-navigate.
+    if (_isHomeBtnShowMeTarget) return;
+
+    final allCats = _tapConfig?.buttons ?? [];
+    final hasTappable = allCats.any(
+      (c) => !c.hidden && _categoryMatchesShowMeAction(c, action),
+    );
+    if (hasTappable) return; // visible button exists — let the user tap it
+
+    // No tappable button: navigate to the target board automatically.
+    final targetId = action.id;
+    if (targetId == null) return;
+
+    final targetCategory = _resolveTargetCategory(targetId);
+    if (targetCategory == null) return;
+
+    _handleCategoryTap(targetCategory, forceNavigation: true).then((_) {
+      if (mounted && _showMeActive) _advanceShowMe();
+    });
+  }
+
+  // All words selected — stop highlighting buttons and pulse the speech field instead.
+  // The confirmation sound only plays when the user taps the speech field.
+  void _enterShowMeAwaitingFinalTap() {
+    setState(() {
+      _showMeAwaitingFinalTap = true;
+      _showMePulse = false; // reset pulse; timer continues for speech field pulse
+    });
+  }
+
+  // Called when the user taps the speech field while Show Me is in the awaiting state.
+  Future<void> _onShowMeSpeechFieldTap() async {
+    if (!_showMeAwaitingFinalTap) return;
+    _cancelShowMe();
+    // Announce first, then play the confirmation sound once it completes.
+    await _handleSpeakButtonPress();
+    try {
+      final player = AudioPlayer();
+      await player.setAsset('assets/right_answer.mp3');
+      await player.play();
+      player.dispose();
+    } catch (e) {
+      debugPrint('[ShowMe] Sound error: $e');
+    }
+  }
+
+  bool _showMeInterceptCategory(TapInterfaceCategory category) {
+    final action = _showMeCurrentAction;
+    if (action == null) return false;
+    if (action.type != _ShowMeActionType.selectCategory &&
+        action.type != _ShowMeActionType.selectSubCategory) return false;
+    final match = _categoryMatchesShowMeAction(category, action);
+    if (match) _advanceShowMe();
+    return match;
+  }
+
+  bool _showMeInterceptWord(String word) {
+    final action = _showMeCurrentAction;
+    if (action == null) return false;
+    if (action.type != _ShowMeActionType.selectWord) return false;
+    final match = action.label.toLowerCase() == word.toLowerCase();
+    if (match) _advanceShowMe();
+    return match;
+  }
+
+
+  bool _showMeInterceptModifier(_ShowMeActionType type) {
+    final action = _showMeCurrentAction;
+    if (action == null) return false;
+    if (action.type != type) return false;
+    _advanceShowMe();
+    return true;
+  }
+
+  bool _showMeInterceptMoreOptions() {
+    final action = _showMeCurrentAction;
+    if (action == null) return false;
+    if (action.type == _ShowMeActionType.selectMoreOptions) {
+      _advanceShowMe(); // dedicated action — consume it
+      return true;
+    }
+    // Reactive: target word is off the current page — let the page advance
+    // without consuming the selectWord action so it highlights when visible.
+    if (action.type == _ShowMeActionType.selectWord) return true;
+    return false;
+  }
+
+  // Returns true when two categories represent the same board, even if their
+  // id fields differ (e.g. synthesized vs config category for the Home board).
+  bool _showMeCategoriesMatch(TapInterfaceCategory? a, TapInterfaceCategory? b) {
+    if (a == null || b == null) return a == b;
+    if (identical(a, b) || a.id == b.id) return true;
+    final aBoardId = _normalizeBoardId(a.boardId ?? a.id);
+    final bBoardId = _normalizeBoardId(b.boardId ?? b.id);
+    if (aBoardId != null && aBoardId == bBoardId) return true;
+    // Home-board fallback: both categories resolve to the configured home board.
+    final homeBoardId = _normalizeBoardId(_tapBoards?.boardSettings.homeBoardId);
+    if (homeBoardId != null) {
+      final aIsHome = aBoardId == homeBoardId || _isConfiguredHomeCategory(a);
+      final bIsHome = bBoardId == homeBoardId || _isConfiguredHomeCategory(b);
+      if (aIsHome && bIsHome) return true;
+    }
+    return false;
+  }
+
+  // Matches a rendered category button against a Show Me selectCategory/
+  // selectSubCategory action. Uses multiple strategies because the action may
+  // carry the board-data ID ("board_home") while the config category has its
+  // own separate ID field.
+  bool _categoryMatchesShowMeAction(TapInterfaceCategory cat, _ShowMeAction action) {
+    if (action.id == null) {
+      return cat.label.toLowerCase() == action.label.toLowerCase();
+    }
+    final actionId = action.id!;
+    // 1. Direct config id match.
+    if (cat.id == actionId) return true;
+    // 2. boardId match (synthesized categories use boardId == board.id).
+    final catBoardId = _normalizeBoardId(cat.boardId ?? cat.id);
+    if (catBoardId == actionId) return true;
+    // 3. Home-board fallback: action targets the configured home board ID and
+    //    this category IS the home board (regardless of its config id).
+    final homeBoardId = _normalizeBoardId(_tapBoards?.boardSettings.homeBoardId);
+    if (homeBoardId != null && actionId == homeBoardId && _isConfiguredHomeCategory(cat)) {
+      return true;
+    }
+    return false;
+  }
+
+  bool _isCategoryShowMeTarget(TapInterfaceCategory cat) {
+    final action = _showMeCurrentAction;
+    if (!_showMeActive || action == null) return false;
+    if (action.type != _ShowMeActionType.selectCategory &&
+        action.type != _ShowMeActionType.selectSubCategory) return false;
+    final result = _categoryMatchesShowMeAction(cat, action);
+    debugPrint('[ShowMe:catTarget] cat="${cat.label}" id="${cat.id}" boardId="${cat.boardId}" '
+        'action.id="${action.id}" action.label="${action.label}" → $result');
+    return result;
+  }
+
+  // Returns true when the current Show Me target word exists on the board but
+  // is outside the currently visible page, so More Options needs highlighting.
+  bool _isMoreOptionsShowMeTargetWithSettings(UserSettings? userSettings) {
+    if (!_showMeActive) return false;
+    final action = _showMeCurrentAction;
+    if (action == null) return false;
+    if (action.type == _ShowMeActionType.selectMoreOptions) return true;
+    if (action.type != _ShowMeActionType.selectWord) return false;
+    final sorted = _sortedBoardWordOptions;
+    if (sorted.isEmpty) return false;
+    final targetWord = action.label.toLowerCase();
+    final boardIdx = sorted.indexWhere((b) => b.text.toLowerCase() == targetWord);
+    if (boardIdx < 0) {
+      debugPrint('[ShowMe:moreOpts] "$targetWord" not in pool (${sorted.length} buttons)');
+      return false;
+    }
+    final staticSlots = _staticWordSlotCount(userSettings);
+    final offPage = boardIdx < _currentStaticPageOffset ||
+                    boardIdx >= _currentStaticPageOffset + staticSlots;
+    debugPrint('[ShowMe:moreOpts] "$targetWord" poolIdx=$boardIdx '
+        'page=[$_currentStaticPageOffset..${_currentStaticPageOffset + staticSlots}) '
+        'staticSlots=$staticSlots offPage=$offPage');
+    return offPage;
+  }
+
+  bool _isWordShowMeTarget(String word) {
+    final action = _showMeCurrentAction;
+    if (!_showMeActive || action == null) return false;
+    if (action.type != _ShowMeActionType.selectWord) return false;
+    return action.label.toLowerCase() == word.toLowerCase();
+  }
+
+  bool _isBoardButtonShowMeTarget(TapBoardButton btn) {
+    final action = _showMeCurrentAction;
+    if (!_showMeActive || action == null) return false;
+    if (action.type != _ShowMeActionType.selectWord) return false;
+    return action.label.toLowerCase() == btn.text.toLowerCase();
+  }
+
+  bool get _isPastTenseShowMeTarget =>
+      _showMeActive &&
+      _showMeCurrentAction?.type == _ShowMeActionType.selectPastTense;
+
+  bool get _isPluralShowMeTarget =>
+      _showMeActive &&
+      _showMeCurrentAction?.type == _ShowMeActionType.selectPlural;
+
+  // ─────────────────────────────────────────────────────────────────────────
+
   @override
   void dispose() {
+    _splashSpinController.dispose();
     _buildSpaceController.dispose();
     _speechHistoryController.dispose();
     _speechBubbleTimer?.cancel(); // Clean up speech bubble timer
     _scheduleCheckTimer?.cancel(); // Clean up schedule check timer
     _tapDebounceTimer?.cancel(); // Clean up tap debounce timer
+    _showMePulseTimer?.cancel(); // Clean up Show Me pulse timer
+    _showMePulseNotifier.dispose();
     _flutterTts.stop();
+    _dynLoadingNotifier.dispose();
 
     // Don't stop the wake word service completely since grid page may still need it
     // Just clear our callbacks so grid page can take over again
@@ -2480,6 +3459,24 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
 
       if (_wakeWordService != null) {
         print('TapInterface: Using existing wake word service instance');
+        // Rebuild wake word variants from the current user's settings so that
+        // a user with a different name (e.g. "buddy" vs "bravo") is recognised.
+        final wakeWordInterjection =
+            (userSettings.settings?.wakeWordInterjection ?? 'hey')
+                .trim()
+                .toLowerCase();
+        final wakeWordName = (userSettings.settings?.wakeWordName ?? 'bravo')
+            .trim()
+            .toLowerCase();
+        final wakeWordVariants = <String>{
+          '$wakeWordInterjection $wakeWordName',
+          '$wakeWordInterjection, $wakeWordName',
+          '$wakeWordInterjection,$wakeWordName',
+          'hey $wakeWordName',
+          'hey, $wakeWordName',
+          'hey,$wakeWordName',
+        }.toList();
+        WakeWordService.updateWakeWords(wakeWordVariants);
         WakeWordService.setWakeWordLocale(
           userSettings.effectivePartnerLanguage,
         );
@@ -2604,6 +3601,10 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
         _isListeningForQuestion = false;
         _isHandlingWakeWordTurn = true;
         _statusMessage = '';
+        // Clear stale options now that questionMode activates (same moment
+        // static rows hide). New options arrive from _generateOptionsFromQuestion.
+        _wordOptions = [];
+        _phraseOptions = [];
       });
 
       // Show the question in speech bubble
@@ -2754,8 +3755,9 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
         currentMood: currentMood != 'No Mood Selected' ? currentMood : null,
       );
 
-      // Get required word count
-      final requiredWordCount = userSettings.settings?.freestyleOptions ?? 29;
+      // In question mode all rows are dynamic, so use total slots minus the
+      // reserved More Options slot rather than just the configured dynamic rows.
+      final requiredWordCount = (_wordsSlotCount(userSettings.settings) - 1).clamp(1, 200);
 
       // Generate word options using generateCategoryWords (same as category selection)
       // CRITICAL FIX: Use the full question as category (matching web app behavior)
@@ -2994,75 +3996,355 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
 
   // --- New Tap Interface Methods ---
 
+  /// Called when a valid preloaded config was already applied synchronously in
+  /// initState. Loads boards from the offline cache (fast, no network) then
+  /// opens the home board or falls back to generating initial word options.
+  Future<void> _applyPreloadedBoardsAndStart() async {
+    // Prefer fresh boards passed in from AppLoadingPage over the disk cache.
+    TapBoardsResponse boards = widget.preloadedBoards ??
+        const TapBoardsResponse(boards: [], boardSettings: TapBoardSettings());
+
+    if (widget.preloadedBoards != null) {
+      debugPrint('[TapInterface] Preloaded path: using ${boards.boards.length} fresh boards from AppLoadingPage.');
+    } else {
+      try {
+        final boardsJson = await OfflineCacheService.loadTapBoardsJson();
+        if (boardsJson != null && boardsJson.length > 2) {
+          boards = TapBoardsResponse.fromJson(
+            jsonDecode(boardsJson) as Map<String, dynamic>,
+          );
+          debugPrint('[TapInterface] Preloaded path: loaded ${boards.boards.length} boards from disk cache (no fresh boards available).');
+        }
+      } catch (e) {
+        debugPrint('[TapInterface] Preloaded path: boards cache read failed: $e');
+      }
+    }
+
+    if (!mounted) return;
+    setState(() { _tapBoards = boards; });
+
+    _openConfiguredHomeBoard()
+        .timeout(const Duration(seconds: 12))
+        .then((opened) {
+          if (!opened) {
+            _loadInitialFreestyleOptions();
+            _loadInitialPhraseOptions();
+          }
+        })
+        .catchError((e) {
+          debugPrint('[TapInterface] Preloaded path: home board open failed: $e');
+          if (!mounted) return;
+          _loadInitialFreestyleOptions();
+          _loadInitialPhraseOptions();
+        });
+
+    _preloadCategoryImages();
+
+    // Fetch fresh config and boards from the API so stale disk-cached
+    // after_selection / target_board_id values are not used this session.
+    _backgroundRefreshFuture = _refreshConfigFromApiInBackground();
+  }
+
+  Future<void> _loadOfflineTapConfig() async {
+    setState(() {
+      _isLoadingConfig = true;
+      _loadingMessage = 'Loading from cache...';
+      _loadingProgress = 0.4;
+    });
+
+    final rawConfig = widget.preloadedConfig is TapInterfaceConfig
+        ? widget.preloadedConfig as TapInterfaceConfig
+        : null;
+
+    // Treat an empty config (0 buttons) the same as a missing config so we
+    // fall through to the local fallback rather than showing nothing.
+    final config = (rawConfig?.buttons.isNotEmpty == true) ? rawConfig : null;
+
+    debugPrint(
+      '[TapInterface] Offline: preloadedConfig has ${rawConfig?.buttons.length ?? 0} categories (${config == null ? "falling back" : "using cached"})',
+    );
+
+    final ensuredConfig = _ensureEmailTapCategory(config);
+    final finalConfig = ensuredConfig ?? _createLocalFallbackConfig();
+
+    // Load boards from disk cache so home board buttons are available.
+    TapBoardsResponse cachedBoards =
+        const TapBoardsResponse(boards: [], boardSettings: TapBoardSettings());
+    try {
+      final boardsJson = await OfflineCacheService.loadTapBoardsJson();
+      if (boardsJson != null && boardsJson != '{}' && boardsJson.length > 2) {
+        final decoded = jsonDecode(boardsJson) as Map<String, dynamic>;
+        cachedBoards = TapBoardsResponse.fromJson(decoded);
+        debugPrint(
+          '[TapInterface] Offline: loaded ${cachedBoards.boards.length} boards from cache, homeBoardId=${cachedBoards.boardSettings.homeBoardId}',
+        );
+      }
+    } catch (e) {
+      debugPrint('[TapInterface] Offline: boards cache load failed: $e');
+    }
+
+    setState(() {
+      _tapConfig = finalConfig;
+      _tapBoards = cachedBoards;
+      _isLoadingConfig = false;
+      _loadingMessage = 'Ready!';
+      _loadingProgress = 1.0;
+    });
+
+    _openConfiguredHomeBoard()
+        .timeout(const Duration(seconds: 5))
+        .then((opened) {
+          if (!opened) {
+            debugPrint('[TapInterface] Offline: no home board found');
+          }
+        })
+        .catchError((e) {
+          debugPrint('[TapInterface] Offline: home board open failed: $e');
+        });
+
+    _preloadCategoryImages();
+  }
+
+  /// Downloads all assigned image URLs from [config] into the disk cache so
+  /// they are available in future offline sessions. Runs entirely in the
+  /// background — never throws.
+  Future<void> _precacheConfigImages(TapInterfaceConfig config) async {
+    final seen = <String>{};
+
+    String? normalize(String? raw) {
+      if (raw == null) return null;
+      var url = raw.trim();
+      if (url.isEmpty || url.toLowerCase() == 'null') return null;
+      if (url.startsWith('gs://')) {
+        final rest = url.substring(5);
+        final slash = rest.indexOf('/');
+        if (slash > 0) {
+          return 'https://storage.googleapis.com/${rest.substring(0, slash)}/${rest.substring(slash + 1)}';
+        }
+      }
+      if (url.startsWith('//')) return 'https:$url';
+      if (url.startsWith('storage.googleapis.com/')) return 'https://$url';
+      return url;
+    }
+
+    Future<void> addAndCache(String? raw) async {
+      final url = normalize(raw);
+      if (url == null || !url.startsWith('http')) return;
+      if (!seen.add(url)) return;
+      try {
+        await DefaultCacheManager().downloadFile(url);
+      } catch (_) {}
+    }
+
+    for (final cat in config.buttons) {
+      await addAndCache(cat.imageUrl);
+      for (final btn in cat.boardWordOptions) { await addAndCache(btn.imageUrl); }
+      for (final child in cat.children) {
+        await addAndCache(child.imageUrl);
+        for (final btn in child.boardWordOptions) { await addAndCache(btn.imageUrl); }
+      }
+    }
+    debugPrint('[TapInterface] Pre-cached ${seen.length} config images for offline use');
+  }
+
   Future<void> _loadTapInterfaceConfig() async {
     setState(() {
       _isLoadingConfig = true;
+      _loadingMessage = 'Loading your menu...';
+      _loadingProgress = 0.1;
     });
 
+    // ── Cache-first: read from disk immediately ──────────────────────────────
+    // This avoids any network wait on every session after the first install.
+    TapInterfaceConfig? cachedConfig;
+    TapBoardsResponse? cachedBoards;
     try {
-      final config = await _tapService.fetchTapInterfaceConfig();
-      final boards = await _tapService.fetchTapBoards();
-      final ensuredConfig = _ensureEmailTapCategory(config);
-
-      // Debug: Log all categories and their speech text
-      if (ensuredConfig != null) {
-        debugPrint(
-          '[TapInterface] 📋 Loaded tap config with ${ensuredConfig.buttons.length} categories:',
+      final configJson = await OfflineCacheService.loadTapConfigJson();
+      final boardsJson = await OfflineCacheService.loadTapBoardsJson();
+      if (configJson != null && configJson.length > 2) {
+        cachedConfig = _ensureEmailTapCategory(
+          TapInterfaceConfig.fromJson(jsonDecode(configJson) as Map<String, dynamic>),
         );
-        for (var i = 0; i < ensuredConfig.buttons.length; i++) {
-          final category = ensuredConfig.buttons[i];
-          debugPrint(
-            '[TapInterface] Category $i: "${category.label}" - Speech Text: "${category.speechText}" (null: ${category.speechText == null})',
-          );
-        }
-      } else {
-        debugPrint('[TapInterface] ❌ No tap config loaded! Using local fallback configuration.');
       }
+      if (boardsJson != null && boardsJson.length > 2) {
+        cachedBoards = TapBoardsResponse.fromJson(
+          jsonDecode(boardsJson) as Map<String, dynamic>,
+        );
+      }
+    } catch (_) {}
 
-      final finalConfig = ensuredConfig ?? _createLocalFallbackConfig();
-
+    if (cachedConfig != null && cachedConfig.buttons.isNotEmpty) {
+      debugPrint('[TapInterface] Cache-first: loaded ${cachedConfig.buttons.length} categories from disk.');
       setState(() {
-        _tapConfig = finalConfig;
-        _tapBoards = boards ?? const TapBoardsResponse(boards: [], boardSettings: TapBoardSettings());
+        _tapConfig = cachedConfig!;
+        _tapBoards = cachedBoards ?? const TapBoardsResponse(boards: [], boardSettings: TapBoardSettings());
         _isLoadingConfig = false;
+        _loadingMessage = 'Ready!';
+        _loadingProgress = 1.0;
       });
 
       _openConfiguredHomeBoard()
           .timeout(const Duration(seconds: 12))
           .then((opened) {
-            if (opened) {
-              debugPrint('[TapInterface] Opened configured home board on startup');
-            } else {
-              // No home board configured (or startup home board open failed)
-              // -> load general initial options so the page never appears blank.
+            if (!opened) {
               _loadInitialFreestyleOptions();
               _loadInitialPhraseOptions();
             }
           })
           .catchError((e) {
-            debugPrint(
-              '[TapInterface] Home board startup load timed out/failed: $e. Falling back to initial options.',
-            );
+            debugPrint('[TapInterface] Home board open failed (cache-first): $e');
             if (!mounted) return;
             _loadInitialFreestyleOptions();
             _loadInitialPhraseOptions();
           });
 
-      // Preload category images in background for better performance
       _preloadCategoryImages();
-    } catch (e) {
-      debugPrint('Error loading tap interface config (exception): $e. Using local fallback.');
-      
-      final fallbackConfig = _createLocalFallbackConfig();
-      
+
+      // Background refresh — keeps cache current without blocking the UI.
+      _backgroundRefreshFuture = _refreshConfigFromApiInBackground();
+      return;
+    }
+
+    // ── No cache (first install) — must wait for API ─────────────────────────
+    setState(() { _loadingMessage = 'Loading your boards…'; _loadingProgress = 0.2; });
+    // Pulse the progress indicator so the user knows it's still working.
+    // The boards endpoint can take up to 60 s for accounts with many boards.
+    Future.delayed(const Duration(seconds: 10), () {
+      if (mounted && _isLoadingConfig) setState(() { _loadingMessage = 'Still loading (large account)…'; _loadingProgress = 0.4; });
+    });
+    Future.delayed(const Duration(seconds: 25), () {
+      if (mounted && _isLoadingConfig) setState(() { _loadingMessage = 'Almost there…'; _loadingProgress = 0.6; });
+    });
+    try {
+      final results = await Future.wait([
+        _tapService.fetchTapInterfaceConfig(),
+        _tapService.fetchTapBoards(),
+      ]);
+      final config = results[0] as TapInterfaceConfig?;
+      final boards = results[1] as TapBoardsResponse?;
+
+      if (mounted) setState(() { _loadingMessage = 'Setting up...'; _loadingProgress = 0.75; });
+
+      final finalConfig = _ensureEmailTapCategory(config) ?? _createLocalFallbackConfig();
+
+      if (config != null) {
+        OfflineCacheService.saveTapConfig(jsonEncode(finalConfig.toJson())).catchError((_) {});
+        unawaited(_precacheConfigImages(finalConfig));
+      }
+      if (boards != null) {
+        OfflineCacheService.saveTapBoards(jsonEncode(boards.toJson())).catchError((_) {});
+      }
+
       setState(() {
-        _tapConfig = fallbackConfig;
-        _tapBoards = const TapBoardsResponse(boards: [], boardSettings: TapBoardSettings());
+        _tapConfig = finalConfig;
+        _tapBoards = boards ?? const TapBoardsResponse(boards: [], boardSettings: TapBoardSettings());
         _isLoadingConfig = false;
+        _loadingMessage = 'Ready!';
+        _loadingProgress = 1.0;
       });
 
+      _openConfiguredHomeBoard()
+          .timeout(const Duration(seconds: 12))
+          .then((opened) {
+            if (!opened) {
+              _loadInitialFreestyleOptions();
+              _loadInitialPhraseOptions();
+            }
+          })
+          .catchError((e) {
+            debugPrint('[TapInterface] Home board startup load failed: $e');
+            if (!mounted) return;
+            _loadInitialFreestyleOptions();
+            _loadInitialPhraseOptions();
+          });
+
+      _preloadCategoryImages();
+    } catch (e) {
+      debugPrint('[TapInterface] Config fetch failed: $e');
+      setState(() {
+        _tapConfig = _createLocalFallbackConfig();
+        _tapBoards = const TapBoardsResponse(boards: [], boardSettings: TapBoardSettings());
+        _isLoadingConfig = false;
+        _loadingMessage = 'Ready!';
+        _loadingProgress = 1.0;
+      });
       _loadInitialFreestyleOptions();
       _loadInitialPhraseOptions();
+    }
+  }
+
+  /// Fetches fresh config and boards from the API and updates the offline cache.
+  /// Runs entirely in the background — never modifies UI state.
+  Future<void> _refreshConfigFromApiInBackground() async {
+    debugPrint('[TapInterface] Background refresh: ▶ starting API fetch...');
+    try {
+      final results = await Future.wait([
+        _tapService.fetchTapInterfaceConfig(),
+        _tapService.fetchTapBoards(),
+      ]);
+      final config = results[0] as TapInterfaceConfig?;
+      final boards = results[1] as TapBoardsResponse?;
+      debugPrint('[TapInterface] Background refresh: ✔ API fetch complete — '
+          'config=${config != null ? "${config.buttons.length} cats" : "null"} '
+          'boards=${boards != null ? "${boards.boards.length} boards" : "null"}');
+
+      if (config != null) {
+        OfflineCacheService.saveTapConfig(jsonEncode(config.toJson())).catchError((_) {});
+      }
+      if (boards != null) {
+        OfflineCacheService.saveTapBoards(jsonEncode(boards.toJson())).catchError((_) {});
+        // Log a sample of button values from the first board so we can verify
+        // that fresh field values (afterSelection, targetBoardId) are correct.
+        for (final board in boards.boards.take(3)) {
+          debugPrint('[TapInterface]   board "${board.id}" (${board.buttons.length} buttons):');
+          for (final b in board.buttons.take(4)) {
+            debugPrint('    ↳ "${b.text}" afterSelection=${b.afterSelection} targetBoardId=${b.targetBoardId}');
+          }
+        }
+      }
+
+      // Apply fresh data to the live UI so stale cached values are not used this session.
+      if (mounted && (config != null || boards != null)) {
+        setState(() {
+          if (config != null) {
+            _tapConfig = _ensureEmailTapCategory(config) ?? _tapConfig;
+          }
+          if (boards != null) {
+            _tapBoards = boards;
+          }
+        });
+
+        // Reload the current category's board buttons from the fresh data so
+        // that stale disk-cached after_selection values are not used this session.
+        final currentBoardId = _getCategoryBoardId(_selectedCategory);
+        debugPrint('[TapInterface] Background refresh: current board="$currentBoardId" '
+            'selectedCategory="${_selectedCategory?.label}"');
+        if (currentBoardId != null && mounted) {
+          final board = _tapBoards?.boards
+              .where((b) => b.id == currentBoardId)
+              .firstOrNull;
+          final freshButtons =
+              board?.buttons.where((b) => !b.hidden).toList() ?? [];
+          debugPrint('[TapInterface] Background refresh: found ${freshButtons.length} fresh buttons for "$currentBoardId"');
+          if (freshButtons.isNotEmpty && mounted) {
+            setState(() {
+              _boardWordOptions = freshButtons;
+              // Also invalidate the in-memory board-buttons cache for this board
+              // so that subsequent _loadCategoryWords calls use the fresh data.
+              _categoryBoardButtonsCache.removeWhere(
+                (key, _) => key.startsWith('${_selectedCategory?.id ?? ''}|'),
+              );
+            });
+            debugPrint('[TapInterface] Background refresh: ✔ updated _boardWordOptions '
+                '(${freshButtons.length} buttons). Sample:');
+            for (final b in freshButtons.take(3)) {
+              debugPrint('    ↳ "${b.text}" afterSelection=${b.afterSelection} targetBoardId=${b.targetBoardId}');
+            }
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[TapInterface] Background config refresh failed (non-fatal): $e');
     }
   }
 
@@ -3246,21 +4528,33 @@ class _TapInterfacePageState extends State<TapInterfacePage> {
   }
 
   Future<bool> _openConfiguredHomeBoard() async {
+    // Primary: use the explicit homeBoardId from board settings.
     final homeBoardId = (_tapBoards?.boardSettings.homeBoardId ?? '').trim();
-    if (homeBoardId.isEmpty) {
-      return false;
-    }
-
-    final homeCategory = _resolveTargetCategory(homeBoardId);
-    if (homeCategory == null) {
+    if (homeBoardId.isNotEmpty) {
+      final homeCategory = _resolveTargetCategory(homeBoardId);
+      if (homeCategory != null) {
+        await _handleCategoryTap(homeCategory);
+        return true;
+      }
       debugPrint(
         '[TapInterface] Configured home board not found: $homeBoardId',
       );
-      return false;
     }
 
-    await _handleCategoryTap(homeCategory);
-    return true;
+    // Fallback: look for a category explicitly marked as the home board in
+    // the tap config. This is the only source available in offline mode.
+    final fallbackHome = _tapConfig?.buttons
+        .where((c) => !c.hidden && c.isHomeBoard)
+        .firstOrNull;
+    if (fallbackHome != null) {
+      debugPrint(
+        '[TapInterface] Opening isHomeBoard category: ${fallbackHome.label}',
+      );
+      await _handleCategoryTap(fallbackHome);
+      return true;
+    }
+
+    return false;
   }
 
   String? _normalizeBoardId(String? rawBoardId) {
@@ -4293,24 +5587,23 @@ VARIETY RULES:
   }
 
   Future<void> _handleGoBack() async {
-    if (_navigationBreadcrumbs.isEmpty) return;
-    final crumb = _navigationBreadcrumbs.last;
+    if (_moreOptionsReturnOffset == null) return;
+    final returnOffset = _moreOptionsReturnOffset!;
+    final returnWords = _moreOptionsReturnWordOptions;
     setState(() {
-      _navigationBreadcrumbs = _navigationBreadcrumbs.sublist(
-        0,
-        _navigationBreadcrumbs.length - 1,
-      );
+      _currentStaticPageOffset = returnOffset;
+      if (returnWords != null) _wordOptions = List<String>.from(returnWords);
+      _moreOptionsReturnOffset = null;
+      _moreOptionsReturnWordOptions = null;
     });
-    // Undo the exact phrase spoken when the navigate button was tapped.
-    if (crumb.addedText.isNotEmpty) {
-      _removePhraseFromSpeechHistory(crumb.addedText);
-    }
-    final returnCategory = _resolveTargetCategory(crumb.boardId);
-    if (returnCategory != null) {
-      await _handleCategoryTap(returnCategory);
-    } else {
-      await _openConfiguredHomeBoard();
-    }
+  }
+
+  void _clearMoreOptionsState() {
+    if (_moreOptionsReturnOffset == null) return;
+    setState(() {
+      _moreOptionsReturnOffset = null;
+      _moreOptionsReturnWordOptions = null;
+    });
   }
 
   int _getBoardColumnCount() {
@@ -4327,20 +5620,29 @@ VARIETY RULES:
     return maxCol + 1;
   }
 
-  TapBoardButton? _getBoardButtonAtIndex(int index) {
-    final boardColumns = _getBoardColumnCount();
-    if (boardColumns <= 0) {
-      return null;
+  /// Returns buttons sorted for pool pagination: by poolIndex when available,
+  /// then falling back to row/col order for buttons without poolIndex.
+  List<TapBoardButton> get _sortedBoardWordOptions {
+    final visible = _boardWordOptions.where((b) => !b.hidden).toList();
+    final hasPoolIndex = visible.any((b) => b.poolIndex != null);
+    if (hasPoolIndex) {
+      final boardCols = _getBoardColumnCount();
+      visible.sort((a, b) {
+        final ai = a.poolIndex ?? (a.row * boardCols + a.col);
+        final bi = b.poolIndex ?? (b.row * boardCols + b.col);
+        return ai.compareTo(bi);
+      });
     }
+    return visible;
+  }
 
-    final row = index ~/ boardColumns;
-    final col = index % boardColumns;
-    for (final button in _boardWordOptions) {
-      if (button.row == row && button.col == col && !button.hidden) {
-        return button;
-      }
-    }
-    return null;
+  TapBoardButton? _getBoardButtonAtIndex(int slotIndex) {
+    final sorted = _sortedBoardWordOptions;
+    if (sorted.isEmpty) return null;
+    final poolIdx = _currentStaticPageOffset + slotIndex;
+    // No modulo wrap: out-of-bounds means the last page is partial → empty cell.
+    if (poolIdx >= sorted.length) return null;
+    return sorted[poolIdx];
   }
 
   /// Batch-preload pictogram images for a freshly committed set of phrase/word
@@ -4444,12 +5746,24 @@ VARIETY RULES:
     pictogramService.enablePictograms = true;
 
     final preloadTerms = <String>[];
-    preloadTerms.addAll(words);
     if (boardButtons.isNotEmpty) {
+      // Only warm images for board buttons that DON'T already have a server-
+      // assigned image_url. Buttons with imageUrl (e.g. from bravo-build) use
+      // assignedImageUrl in the widget directly — batch-searching their text
+      // (e.g. "to go", "a ride") would pollute _imageCache with wrong results
+      // because batch-search's 3-char minimum drops key terms like "go".
       for (final button in boardButtons) {
         if (button.hidden) continue;
+        if (button.imageUrl != null && button.imageUrl!.isNotEmpty) continue;
         final term = (button.imageSearchText ?? button.text).trim();
         if (term.isNotEmpty) preloadTerms.add(term);
+      }
+    } else {
+      // Non-board: use the full original phrase, matching the web app's approach
+      // of sending unmodified text to batch-search. The server handles multi-word
+      // matching and keyword expansion internally.
+      for (final word in words) {
+        if (word.trim().isNotEmpty) preloadTerms.add(word.trim());
       }
     }
 
@@ -4463,8 +5777,9 @@ VARIETY RULES:
             locale: locale,
             maxItems: preloadTerms.length,
             shouldLogMissing: true,
+            warmDiskCache: true,
           )
-          .timeout(const Duration(milliseconds: 4200));
+          .timeout(const Duration(milliseconds: 10000));
     } catch (e) {
       debugPrint('[TapInterface] Word warmup timeout/error: $e');
     }
@@ -4678,18 +5993,28 @@ VARIETY RULES:
         context,
         listen: false,
       );
-      final requiredWordCount = userSettings.settings?.freestyleOptions ?? 29;
+      final requiredWordCount = _tapDynamicWordCount(userSettings.settings);
       final currentMood =
           userSettings.settings?.currentMood ?? 'No Mood Selected';
 
-      final wordOpts = await _tapService.generateFreestyleOptions(
-        context: initialContext,
-        buildSpaceText: '',
-        singleWordsOnly: true,
-        maxOptions:
-            requiredWordCount + 15, // Request extra to ensure we have enough
-        currentMood: currentMood != 'No Mood Selected' ? currentMood : null,
-      );
+      // Use words already generated by the loading screen when available.
+      // This avoids a redundant LLM call and ensures the image prefetch
+      // (which started for these same words during the loading screen) hits
+      // the in-memory cache immediately on first render.
+      final List<String> wordOpts;
+      if (contextData == null && widget.preloadedWordOptions.isNotEmpty) {
+        debugPrint('[TapInterface] Using ${widget.preloadedWordOptions.length} preloaded word options (skipping LLM call)');
+        wordOpts = List<String>.from(widget.preloadedWordOptions);
+      } else {
+        wordOpts = await _tapService.generateFreestyleOptions(
+          context: initialContext,
+          buildSpaceText: '',
+          singleWordsOnly: true,
+          maxOptions:
+              requiredWordCount + 15, // Request extra to ensure we have enough
+          currentMood: currentMood != 'No Mood Selected' ? currentMood : null,
+        );
+      }
 
       debugPrint(
         '[TapInterface] Initial API returned ${wordOpts.length} word options for $requiredWordCount slots',
@@ -4733,8 +6058,10 @@ VARIETY RULES:
 
         setState(() {
           _wordOptions = _deduplicateWords(initialOptions);
+          if (_wordOptions.isNotEmpty) _wordOptionsVersion++;
           _wordKeywords = localizedInitialKeywords;
           _isLoadingWordOptions = false;
+          _wordOptionImageUrls = {}; // Clear stale URLs until preload resolves new ones
         });
         final resolvedLocale =
             _normalizeLocaleTag(userSettings.settings?.userLanguage) ??
@@ -4744,6 +6071,32 @@ VARIETY RULES:
         final preloadWords = List<String>.from(_wordOptions);
         final preloadKeywords = Map<String, List<String>>.from(_wordKeywords);
         Future.microtask(() async {
+          // Resolve auth — UserSettingsProvider may not have credentials yet on
+          // first load (Firebase Auth initialises async). Mirror the web app:
+          // sessionStorage always has valid tokens before images are fetched.
+          var uid = userSettings.userId ?? '';
+          var token = userSettings.idToken ?? '';
+          if (uid.isEmpty || token.isEmpty) {
+            try {
+              final authUser = FirebaseAuth.instance.currentUser;
+              if (authUser != null) {
+                if (uid.isEmpty) uid = authUser.uid;
+                if (token.isEmpty) token = (await authUser.getIdToken()) ?? '';
+                if (uid.isNotEmpty) userSettings.userId = uid;
+                if (token.isNotEmpty) userSettings.idToken = token;
+              }
+            } catch (e) {
+              debugPrint('[TapInterface] Prefetch auth fallback: $e');
+            }
+          }
+          if (uid.isNotEmpty && token.isNotEmpty) {
+            PictogramService().setUserContext(
+              userId: uid,
+              idToken: token,
+              mascot: userSettings.settings?.mascot,
+            );
+          }
+          debugPrint('🖼️🔍 PREFETCH START: uid=${uid.isNotEmpty ? "ok" : "MISSING"} token=${token.isNotEmpty ? "ok" : "MISSING"} mascot=${userSettings.settings?.mascot ?? "none"} words=$preloadWords');
           try {
             await PictogramService().prefetchButtonPictograms(
               words: preloadWords,
@@ -4752,8 +6105,55 @@ VARIETY RULES:
               maxItems: preloadWords.length,
             );
           } catch (e) {
-            debugPrint('[TapInterface] Pictogram prefetch error: $e');
+            debugPrint('🖼️❌ PREFETCH THREW: $e');
           }
+          // Pass 1: assign whatever the batch-search resolved.
+          final resolvedUrls = <String, String>{};
+          for (final word in preloadWords) {
+            final url = PictogramService().getCachedImageUrl(word, locale: resolvedLocale, exactOnly: true);
+            debugPrint('🖼️ getCachedImageUrl("$word") → ${url != null ? url.substring(url.length > 60 ? url.length - 60 : 0) : "NULL"}');
+            if (url != null) resolvedUrls[word] = url;
+          }
+          debugPrint('🖼️✅ PREFETCH DONE: ${resolvedUrls.length}/${preloadWords.length} resolved');
+          if (mounted) setState(() { _wordOptionImageUrls = resolvedUrls; _optionsRebuildKey++; });
+
+          // Retry passes: on a cold server, the first batch search may time out
+          // before the server warms up. Retry up to 3 times with increasing delays.
+          var accumulated = <String, String>{ ...resolvedUrls };
+          for (final retryDelaySecs in [5, 10, 20]) {
+            final missing = preloadWords.where((w) => !accumulated.containsKey(w)).toList();
+            if (missing.isEmpty || !mounted) break;
+            await Future.delayed(Duration(seconds: retryDelaySecs));
+            if (!mounted) break;
+            debugPrint('[TapInterface] Retry prefetch for ${missing.length} missing words (delay was ${retryDelaySecs}s)');
+            try {
+              await PictogramService().prefetchButtonPictograms(
+                words: missing,
+                keywordMap: preloadKeywords,
+                locale: resolvedLocale,
+                maxItems: missing.length,
+              );
+            } catch (e) {
+              debugPrint('[TapInterface] Retry prefetch error: $e');
+            }
+            final retryUrls = <String, String>{};
+            for (final word in missing) {
+              final url = PictogramService().getCachedImageUrl(word, locale: resolvedLocale, exactOnly: true);
+              if (url != null) retryUrls[word] = url;
+            }
+            if (retryUrls.isNotEmpty) {
+              accumulated = { ...accumulated, ...retryUrls };
+              if (mounted) {
+                setState(() {
+                  _wordOptionImageUrls = accumulated;
+                  _optionsRebuildKey++;
+                });
+              }
+            }
+          }
+          // After all retry passes, words still missing a cached image are confirmed
+          // missing from the database. Log them so the image team can add them.
+          _logConfirmedMissingWordImages(preloadWords, accumulated);
         });
         _validateWordOptions(); // Validate after setting options
         debugPrint(
@@ -4767,7 +6167,7 @@ VARIETY RULES:
           context,
           listen: false,
         );
-        final requiredWordCount = userSettings.settings?.freestyleOptions ?? 29;
+        final requiredWordCount = _tapDynamicWordCount(userSettings.settings);
         final sourceFallback = _getFallbackWordOptions()
             .take(requiredWordCount)
             .toList();
@@ -4777,10 +6177,12 @@ VARIETY RULES:
         setState(() {
           _isLoadingWordOptions = false;
           _wordOptions = _deduplicateWords(localizedFallback);
+          if (_wordOptions.isNotEmpty) _wordOptionsVersion++;
           _wordKeywords = _buildLocalizedKeywordFallbackMap(
             sourceFallback,
             localizedFallback,
           );
+          _wordOptionImageUrls = {}; // Clear stale URLs until preload resolves new ones
         });
         final resolvedLocale =
             _normalizeLocaleTag(userSettings.settings?.userLanguage) ??
@@ -4790,6 +6192,29 @@ VARIETY RULES:
         final preloadWords = List<String>.from(_wordOptions);
         final preloadKeywords = Map<String, List<String>>.from(_wordKeywords);
         Future.microtask(() async {
+          // Same auth-first pattern as the success path above.
+          var uid = userSettings.userId ?? '';
+          var token = userSettings.idToken ?? '';
+          if (uid.isEmpty || token.isEmpty) {
+            try {
+              final authUser = FirebaseAuth.instance.currentUser;
+              if (authUser != null) {
+                if (uid.isEmpty) uid = authUser.uid;
+                if (token.isEmpty) token = (await authUser.getIdToken()) ?? '';
+                if (uid.isNotEmpty) userSettings.userId = uid;
+                if (token.isNotEmpty) userSettings.idToken = token;
+              }
+            } catch (e) {
+              debugPrint('[TapInterface] Prefetch auth fallback (fallback path): $e');
+            }
+          }
+          if (uid.isNotEmpty && token.isNotEmpty) {
+            PictogramService().setUserContext(
+              userId: uid,
+              idToken: token,
+              mascot: userSettings.settings?.mascot,
+            );
+          }
           try {
             await PictogramService().prefetchButtonPictograms(
               words: preloadWords,
@@ -4800,9 +6225,68 @@ VARIETY RULES:
           } catch (e) {
             debugPrint('[TapInterface] Pictogram prefetch error (fallback): $e');
           }
+          final resolvedUrls = <String, String>{};
+          for (final word in preloadWords) {
+            final url = PictogramService().getCachedImageUrl(word, locale: resolvedLocale, exactOnly: true);
+            if (url != null) resolvedUrls[word] = url;
+          }
+          if (mounted) setState(() { _wordOptionImageUrls = resolvedUrls; _optionsRebuildKey++; });
+
+          var accumulated = <String, String>{ ...resolvedUrls };
+          for (final retryDelaySecs in [5, 10, 20]) {
+            final missing = preloadWords.where((w) => !accumulated.containsKey(w)).toList();
+            if (missing.isEmpty || !mounted) break;
+            await Future.delayed(Duration(seconds: retryDelaySecs));
+            if (!mounted) break;
+            try {
+              await PictogramService().prefetchButtonPictograms(
+                words: missing,
+                keywordMap: preloadKeywords,
+                locale: resolvedLocale,
+                maxItems: missing.length,
+              );
+            } catch (e) {
+              debugPrint('[TapInterface] Retry prefetch error (fallback): $e');
+            }
+            final retryUrls = <String, String>{};
+            for (final word in missing) {
+              final url = PictogramService().getCachedImageUrl(word, locale: resolvedLocale, exactOnly: true);
+              if (url != null) retryUrls[word] = url;
+            }
+            if (retryUrls.isNotEmpty) {
+              accumulated = { ...accumulated, ...retryUrls };
+              if (mounted) {
+                setState(() {
+                  _wordOptionImageUrls = accumulated;
+                  _optionsRebuildKey++;
+                });
+              }
+            }
+          }
+          _logConfirmedMissingWordImages(preloadWords, accumulated);
         });
         debugPrint('[TapInterface] Using fallback options: $_wordOptions');
       }
+    }
+  }
+
+  /// Log word options that still have no image after all prefetch + retry passes.
+  /// [allWords] is the full list that was prefetched; [resolved] is the subset
+  /// that ended up with a cached image. Words in [allWords] but not [resolved]
+  /// are confirmed missing — the full library→batch-search→button-search chain
+  /// ran and found nothing, so this is not a cold-cache false positive.
+  void _logConfirmedMissingWordImages(
+    List<String> allWords,
+    Map<String, String> resolved,
+  ) {
+    for (final word in allWords) {
+      if (resolved.containsKey(word)) continue;
+      final lower = word.toLowerCase().trim();
+      if (lower.isEmpty) continue;
+      if (_globalSessionLoggedMissingImages.contains(lower)) continue;
+      _globalSessionLoggedMissingImages.add(lower);
+      debugPrint('📋 Confirmed-missing word option (no image after all retries): "$word"');
+      unawaited(_logMissingImage(word));
     }
   }
 
@@ -5297,16 +6781,23 @@ VARIETY RULES:
     Map<String, dynamic>? contextData,
   }) async {
     try {
+      final userSettings = Provider.of<UserSettingsProvider>(
+        context,
+        listen: false,
+      );
+
+      // Skip LLM call entirely when phrase rows are hidden.
+      if ((userSettings.settings?.tapPhrasesRows ?? 0) == 0) {
+        debugPrint('[TapInterface] tapPhrasesRows=0; skipping phrase options LLM call.');
+        return;
+      }
+
       debugPrint('[TapInterface] Loading initial phrase options...');
       setState(() {
         _isLoadingPhraseOptions = true;
       });
 
       // Generate basic phrase options for the top 2 rows using the new method with mood context
-      final userSettings = Provider.of<UserSettingsProvider>(
-        context,
-        listen: false,
-      );
       final currentMood =
           userSettings.settings?.currentMood ?? 'No Mood Selected';
 
@@ -5351,7 +6842,7 @@ VARIETY RULES:
           );
 
           if (mounted) {
-            // Take exactly the required number of options for display (leaving 1 slot for Something Else button)
+            // Take exactly the required number of options for display (leaving 1 slot for More Options button)
             List<Map<String, String>> initialPhraseOptions = phraseOpts
                 .take(requiredPhraseCount)
                 .toList();
@@ -5501,6 +6992,7 @@ VARIETY RULES:
                           .where((category) => !category.hidden)
                           .map((category) {
                             final isSelected = _selectedCategory == category;
+                            final isShowMeTarget = _isCategoryShowMeTarget(category);
                             final headerTextColor =
                                 Colors.purple[700] ?? Colors.purple.shade700;
                             return TapInterfaceButton(
@@ -5515,10 +7007,13 @@ VARIETY RULES:
                               foregroundColor: isSelected
                                   ? Colors.white
                                   : Colors.black87,
-                              borderColor: isSelected
-                                  ? headerTextColor
-                                  : Colors.purple[300] ??
-                                        Colors.purple.shade300,
+                              borderColor: isShowMeTarget
+                                  ? _showMeGlowColor
+                                  : isSelected
+                                      ? headerTextColor
+                                      : Colors.purple[300] ??
+                                            Colors.purple.shade300,
+                              glowColor: isShowMeTarget ? _showMeGlowColor : null,
                               fontSize: 18,
                               enablePictograms: tapPictogramsEnabled,
                               sightWordGradeLevel:
@@ -5545,7 +7040,10 @@ VARIETY RULES:
     );
   }
 
-  Future<void> _handleCategoryTap(TapInterfaceCategory category) async {
+  Future<void> _handleCategoryTap(TapInterfaceCategory category, {bool forceNavigation = false}) async {
+    if (_showMeActive && !forceNavigation) {
+      if (!_showMeInterceptCategory(category)) return;
+    }
     final stopwatch = Stopwatch()..start();
     debugPrint('[TapInterface] === CATEGORY TAP START ===');
     debugPrint(
@@ -5586,7 +7084,8 @@ VARIETY RULES:
     );
     final locale =
         _normalizeLocaleTag(userSettings.settings?.userLanguage) ?? 'en-US';
-    final categoryCacheKey = '${category.id}|$locale';
+    final moodSlug = (userSettings.settings?.currentMood ?? '').toLowerCase().trim();
+    final categoryCacheKey = '${category.id}|$locale|${moodSlug.isEmpty ? 'none' : moodSlug}';
 
     final cacheTimestamp = _categoryOptionsCacheTimestamp[categoryCacheKey];
     final cacheIsFresh =
@@ -5620,9 +7119,15 @@ VARIETY RULES:
       setState(() {
         _selectedCategory = category;
         _phraseOptions = cachedPhrases;
-        _wordOptions = cachedWords;
+        // For board categories, keep dynamic words empty until
+        // cachedAIWords or _loadWordOptionsBasedOnBuildSpace provides the
+        // deduped set, preventing a flash of raw static button labels.
+        _wordOptions = cachedBoardButtons.isNotEmpty ? [] : cachedWords;
+        if (_wordOptions.isNotEmpty) _wordOptionsVersion++;
         _wordKeywords = cachedWordKeywords;
+        _boardButtonKeywords = cachedWordKeywords;
         _boardWordOptions = cachedBoardButtons;
+        _currentStaticPageOffset = 0;
         _textPromptUsed = false;
         _isLoadingPhraseOptions = true;
         _isLoadingWordOptions = true;
@@ -5670,6 +7175,7 @@ VARIETY RULES:
         if (cachedAIWords != null && cachedAIWords.isNotEmpty) {
           setState(() {
             _wordOptions = cachedAIWords;
+            _wordOptionsVersion++;
           });
         } else {
           _loadWordOptionsBasedOnBuildSpace();
@@ -5689,22 +7195,25 @@ VARIETY RULES:
 
     // Synchronously resolve board buttons so they appear in the same frame as
     // the navigation instead of waiting for the async _loadCategoryWords chain.
+    // Prefer _tapBoards (kept fresh by background refresh) over the category's
+    // inline boardWordOptions, which may have stale disk-cached field values.
     List<TapBoardButton> synchronousButtons = [];
-    if (category.hasBoardWordOptions && category.boardWordOptions.isNotEmpty) {
-      synchronousButtons =
-          category.boardWordOptions.where((b) => !b.hidden).toList();
-    } else if ((category.boardId ?? '').trim().isNotEmpty) {
+    final syncBoardId = _getCategoryBoardId(category);
+    if ((syncBoardId ?? '').isNotEmpty) {
       final board = _tapBoards?.boards
-          .where((b) => b.id.trim() == category.boardId!.trim())
+          .where((b) => b.id == syncBoardId)
           .firstOrNull;
       if (board != null) {
         synchronousButtons = board.buttons.where((b) => !b.hidden).toList();
       }
     }
+    if (synchronousButtons.isEmpty && category.hasBoardWordOptions) {
+      synchronousButtons =
+          category.boardWordOptions.where((b) => !b.hidden).toList();
+    }
 
     setState(() {
       _selectedCategory = category;
-      _activeWordLetterFilter = null;
       _currentQuestion = '';
       _isLoadingPhraseOptions = true;
       _isLoadingWordOptions = true;
@@ -5712,9 +7221,20 @@ VARIETY RULES:
       _wordOptions = [];
       _usedWordOptions.clear();
       _boardWordOptions = synchronousButtons; // pre-fill; async load will localize
+      _currentStaticPageOffset = 0;
       _textPromptUsed = false;
       _variantMode = null;
     });
+
+    // In offline mode, board buttons are already set synchronously above.
+    // Skip all LLM/API calls — they would only fail and produce empty results.
+    if (widget.isOfflineMode) {
+      setState(() {
+        _isLoadingPhraseOptions = false;
+        _isLoadingWordOptions = false;
+      });
+      return;
+    }
 
     // If we already have board buttons, kick off dynamic-word generation now
     // rather than waiting for _loadCategoryWords to complete its async chain.
@@ -5727,8 +7247,12 @@ VARIETY RULES:
     // We need to know if we are still on the same category when results come back
     final String targetCategoryId = category.id;
 
-    // 1. Load Phrases
-    _loadCategoryPhrases(category)
+    // 1. Load Phrases (skip entirely when phrase rows are hidden)
+    final tapPhrasesRowsNow = Provider.of<UserSettingsProvider>(
+      context,
+      listen: false,
+    ).settings?.tapPhrasesRows ?? 0;
+    (tapPhrasesRowsNow > 0 ? _loadCategoryPhrases(category) : Future.value(<Map<String, String>>[]))
       .then((phrases) async {
           debugPrint(
             '[TapInterface] 🕒 Phrases loaded in ${stopwatch.elapsedMilliseconds}ms',
@@ -5785,9 +7309,18 @@ VARIETY RULES:
               result['boardButtons'] as List<TapBoardButton>? ?? const [];
 
           setState(() {
-            _wordOptions = words;
+            // For board categories, _wordOptions is populated by
+            // _loadWordOptionsBasedOnBuildSpace (which deduplicates against
+            // static buttons). Setting raw button texts here would flash
+            // duplicates of the static row before the filtered words arrive.
+            if (boardButtons.isEmpty) {
+              _wordOptions = words;
+              if (_wordOptions.isNotEmpty) _wordOptionsVersion++;
+            }
             _boardWordOptions = boardButtons;
+            _currentStaticPageOffset = 0;
             _wordKeywords = keywords;
+            _boardButtonKeywords = keywords;
             _categoryWordCache[categoryCacheKey] = List<String>.from(words);
             _categoryWordKeywordsCache[categoryCacheKey] = keywords;
             _categoryBoardButtonsCache[categoryCacheKey] = boardButtons;
@@ -5815,6 +7348,35 @@ VARIETY RULES:
               _isLoadingWordOptions = false;
               _optionsRebuildKey++;
             });
+
+            // Re-assign images for boards whose buttons lack image_url.
+            // Skip boards from bravo-build (all buttons already have imageUrl).
+            // Only call assign-all-images for pre-existing boards with missing images
+            // so we never overwrite correct bravo-build images with stale results.
+            final hasButtonsWithoutImages = boardButtons.any(
+              (b) => !b.hidden && (b.imageUrl == null || b.imageUrl!.isEmpty),
+            );
+            final boardIdForImages = category.boardId ?? category.id;
+            if (hasButtonsWithoutImages &&
+                boardIdForImages.isNotEmpty &&
+                !_boardImagesAssigned.contains(boardIdForImages)) {
+              _boardImagesAssigned.add(boardIdForImages);
+              unawaited(Future.microtask(() async {
+                final imageMap =
+                    await _tapService.assignAllImages(boardIdForImages);
+                if (imageMap == null || imageMap.isEmpty) return;
+                if (!mounted || _selectedCategory?.id != targetCategoryId) return;
+                setState(() {
+                  _boardWordOptions = _boardWordOptions.map((btn) {
+                    final updatedUrl = imageMap[btn.id];
+                    if (updatedUrl == null) return btn;
+                    return btn.copyWith(imageUrl: updatedUrl);
+                  }).toList();
+                  _categoryBoardButtonsCache.remove(categoryCacheKey);
+                });
+              }));
+            }
+
             // Start AI dynamic-row generation. Skip if the synchronous pre-fill
             // already kicked it off — avoids a redundant second API call.
             if (!startedAIWordLoadSynchronously) {
@@ -5967,31 +7529,6 @@ VARIETY RULES:
               idToken: widget.idToken,
               aacUserId: widget.aacUserId,
               displayName: widget.displayName,
-              onTalkAboutMusic: (musicContext) async {
-                await Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (context) => FreestylePage(
-                      idToken: widget.idToken,
-                      aacUserId: widget.aacUserId,
-                      displayName: widget.displayName,
-                      sourceContext: musicContext,
-                      sourcePage: 'music',
-                    ),
-                  ),
-                );
-              },
-              onTalkAboutSomethingElse: () async {
-                await Navigator.of(context).push(
-                  MaterialPageRoute(
-                    builder: (context) => FreestylePage(
-                      idToken: widget.idToken,
-                      aacUserId: widget.aacUserId,
-                      displayName: widget.displayName,
-                      sourcePage: 'music',
-                    ),
-                  ),
-                );
-              },
             ),
           ),
         );
@@ -6187,9 +7724,36 @@ VARIETY RULES:
   ) async {
     List<String> wordOpts = [];
     Map<String, List<String>> keywordsMap = {};
-    var boardButtons = category.hasBoardWordOptions
-        ? category.boardWordOptions.where((button) => !button.hidden).toList()
-        : <TapBoardButton>[];
+
+    // Always resolve buttons from _tapBoards first — it is updated by the
+    // background refresh with fresh API data. The category's inline
+    // boardWordOptions was built from the disk cache at startup and may have
+    // stale after_selection / target_board_id values.
+    var boardButtons = <TapBoardButton>[];
+    final resolvedBoardId = _getCategoryBoardId(category);
+    if ((resolvedBoardId ?? '').isNotEmpty) {
+      final liveBoard = _tapBoards?.boards
+          .where((b) => b.id == resolvedBoardId)
+          .firstOrNull;
+      if (liveBoard != null) {
+        boardButtons = liveBoard.buttons.where((b) => !b.hidden).toList();
+        debugPrint('[TapInterface] _loadCategoryWords: resolved ${boardButtons.length} buttons '
+            'from _tapBoards["$resolvedBoardId"] for "${category.label}"');
+        if (boardButtons.isNotEmpty) {
+          final sample = boardButtons.take(3);
+          for (final b in sample) {
+            debugPrint('  ↳ id=${b.id} text="${b.text}" afterSelection=${b.afterSelection} targetBoardId=${b.targetBoardId}');
+          }
+        }
+      }
+    }
+    // Fallback: use the category's inline boardWordOptions (used for config
+    // categories that embed buttons directly rather than via a board lookup).
+    if (boardButtons.isEmpty && category.hasBoardWordOptions) {
+      boardButtons = category.boardWordOptions.where((b) => !b.hidden).toList();
+      debugPrint('[TapInterface] _loadCategoryWords: using ${boardButtons.length} inline '
+          'boardWordOptions (no _tapBoards match) for "${category.label}"');
+    }
 
     try {
       final userSettings = Provider.of<UserSettingsProvider>(
@@ -6198,14 +7762,17 @@ VARIETY RULES:
       );
       final currentMood =
           userSettings.settings?.currentMood ?? 'No Mood Selected';
-      final requiredWordCount = userSettings.settings?.freestyleOptions ?? 29;
+      final requiredWordCount = _tapDynamicWordCount(userSettings.settings);
       final canonicalCategoryLabel = _canonicalizeCategoryLabel(category.label);
       final locale =
           _normalizeLocaleTag(userSettings.settings?.userLanguage) ?? 'en-US';
       final isNonEnglishLocale = !locale.startsWith('en');
       final isPureCategoryBrowse = _buildSpaceText.trim().isEmpty;
+      final moodSlugForBrowse = (currentMood == 'No Mood Selected' || currentMood.isEmpty)
+          ? 'none'
+          : currentMood.toLowerCase().trim();
       final browseCacheKey =
-          '$locale::${canonicalCategoryLabel.toLowerCase()}::$requiredWordCount';
+          '$locale::${canonicalCategoryLabel.toLowerCase()}::$requiredWordCount::$moodSlugForBrowse';
 
       if (isPureCategoryBrowse && _categoryBrowseWordCache.containsKey(browseCacheKey)) {
         final cachedWords = _categoryBrowseWordCache[browseCacheKey] ?? const <String>[];
@@ -6225,20 +7792,7 @@ VARIETY RULES:
         }
       }
 
-      if (boardButtons.isEmpty && (category.boardId ?? '').trim().isNotEmpty) {
-        final boards = _tapBoards?.boards ?? const <TapBoard>[];
-        for (final board in boards) {
-          if (board.id.trim() == category.boardId!.trim()) {
-            boardButtons = board.buttons
-                .where((button) => !button.hidden)
-                .toList();
-            debugPrint(
-              '[TapInterface] Words source: boardId=${category.boardId} resolved ${boardButtons.length} board buttons for ${category.label}',
-            );
-            break;
-          }
-        }
-      }
+      // _tapBoards lookup is now done above before the try block.
 
       if (boardButtons.isNotEmpty) {
         debugPrint(
@@ -6387,6 +7941,10 @@ VARIETY RULES:
         );
         // Use keywords-aware method so image search works for non-English words.
         // The backend returns {text: "word", keywords: ["english", "keyword"]} objects.
+        // Mirror web app: fall back to llmPrompt as custom_prompt when
+        // wordsPrompt is absent, so board AI prompts drive word generation.
+        final effectiveCustomPrompt =
+            category.hasWordsPrompt ? null : category.llmPrompt;
         final wordsWithKeywords = await _tapService
             .generateCategoryWordsWithKeywords(
               category: promptText,
@@ -6395,6 +7953,7 @@ VARIETY RULES:
               // Non-English requests overfetch less to cut LLM workload.
               maxOptions: requiredWordCount + (isNonEnglishLocale ? 4 : 10),
               currentMood: moodForWordRequest,
+              customPrompt: effectiveCustomPrompt,
             )
             .timeout(const Duration(seconds: 20));
 
@@ -7185,6 +8744,10 @@ VARIETY RULES:
     showDialog(
       context: context,
       builder: (BuildContext context) {
+        // StatefulBuilder gives the modal its own rebuild cycle so the Show Me
+        // pulse timer can animate the target sub-category button independently.
+        return StatefulBuilder(
+          builder: (context, setModalState) {
         final settingsProvider = Provider.of<UserSettingsProvider>(
           context,
           listen: false,
@@ -7263,6 +8826,37 @@ VARIETY RULES:
                           !tapPictogramsDisabled &&
                           (userSettings?.enableSightWords ?? true);
 
+                      final isSubTarget = _isCategoryShowMeTarget(child);
+                      if (isSubTarget) {
+                        return ValueListenableBuilder<bool>(
+                          valueListenable: _showMePulseNotifier,
+                          builder: (_, pulse, _) {
+                            final glowColor = pulse
+                                ? _showMeTargetColor
+                                : _showMeTargetColorDim;
+                            return TapInterfaceButton(
+                              label: child.label,
+                              onPressed: () {
+                                Navigator.of(context).pop();
+                                _handleCategoryTap(child);
+                              },
+                              backgroundColor: Colors.white,
+                              foregroundColor: Colors.black87,
+                              borderColor: glowColor,
+                              glowColor: glowColor,
+                              fontSize: 12,
+                              enablePictograms: tapPictogramsEnabled,
+                              sightWordGradeLevel: userSettings?.sightWordGradeLevel,
+                              enableSightWords: tapSightWordLogicEnabled,
+                              padding: const EdgeInsets.all(2),
+                              assignedImageUrl: child.imageUrl,
+                              shouldLogMissing: false,
+                              cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
+                              mascot: userSettings?.mascot ?? '',
+                            );
+                          },
+                        );
+                      }
                       return TapInterfaceButton(
                         label: child.label,
                         onPressed: () {
@@ -7272,17 +8866,13 @@ VARIETY RULES:
                         backgroundColor: Colors.white,
                         foregroundColor: Colors.black87,
                         borderColor: Colors.grey[300] ?? Colors.grey.shade300,
-                        fontSize: 12, // Same as main sections
+                        fontSize: 12,
                         enablePictograms: tapPictogramsEnabled,
                         sightWordGradeLevel: userSettings?.sightWordGradeLevel,
                         enableSightWords: tapSightWordLogicEnabled,
-                        padding: const EdgeInsets.all(
-                          2,
-                        ), // Same as main sections
-                        assignedImageUrl: child
-                            .imageUrl, // Pass the assigned image URL from database
-                        shouldLogMissing:
-                            false, // Don't log missing images for sub-category navigation buttons
+                        padding: const EdgeInsets.all(2),
+                        assignedImageUrl: child.imageUrl,
+                        shouldLogMissing: false,
                         cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
                         mascot: userSettings?.mascot ?? '',
                       );
@@ -7298,8 +8888,10 @@ VARIETY RULES:
             ),
           ),
         );
-      },
-    );
+          }, // closes StatefulBuilder builder
+        ); // closes StatefulBuilder
+      }, // closes showDialog builder
+    ); // closes showDialog
   }
 
   // --- Menu Actions ---
@@ -8574,22 +10166,23 @@ VARIETY RULES:
     );
 
     setState(() {
-      _speechHistory = "";
-      _speechHistoryController.text = "";
-      _buildSpaceText = "";
-      _buildSpaceController.text = "";
       _selectedCategory = null;
       _clearTemporaryNavigationState();
       _clearActiveBoardModifier();
-      _isJokesMode = false; // Clear jokes mode on page reset
-      _currentQuestion = ''; // Clear question when entering freestyle mode
+      _isJokesMode = false;
+      _currentQuestion = '';
       _phraseOptions.clear();
       _wordOptions.clear();
       _usedWordOptions.clear();
       _boardWordOptions.clear();
-      _wordKeywords.clear(); // Clear keywords when clearing word options
-      _textPromptUsed = false; // Reset text prompt usage flag
-      // _pastSpeechHistory is NOT cleared here - only cleared by History button
+      _wordKeywords.clear();
+      _textPromptUsed = false;
+      // Clear the AI context so Home board reloads fresh options.
+      // _speechHistory and _speechHistoryController are preserved so the
+      // speech text field still shows what the user has built.
+      _buildSpaceText = '';
+      _buildSpaceController.text = '';
+      // _pastSpeechHistory is NOT cleared here — only cleared by History button
     });
 
     // Reload initial options after clearing
@@ -8625,28 +10218,6 @@ VARIETY RULES:
 
   // Removes [phrase] (as a whole token) from the end of the speech history.
   // Handles multi-word phrases like "to play" without leaving partial words.
-  void _removePhraseFromSpeechHistory(String phrase) {
-    final current = _speechHistoryController.text.trim();
-    if (current.isEmpty || phrase.isEmpty) return;
-    final suffix = phrase.trim();
-    String newText;
-    if (current.endsWith(suffix)) {
-      newText = current.substring(0, current.length - suffix.length).trimRight();
-    } else {
-      // Fallback: remove the last word if the phrase isn't at the end.
-      final words = current.split(RegExp(r'\s+'));
-      words.removeLast();
-      newText = words.join(' ');
-    }
-    setState(() {
-      _speechHistory = newText;
-      _speechHistoryController.text = newText;
-      _buildSpaceText = newText;
-      _buildSpaceController.text = newText;
-    });
-    _loadWordOptionsBasedOnBuildSpace();
-  }
-
   void _clearSpeechHistory() {
     setState(() {
       _pastSpeechHistory.clear();
@@ -8796,7 +10367,7 @@ VARIETY RULES:
                                 borderRadius: BorderRadius.circular(6),
                                 boxShadow: [
                                   BoxShadow(
-                                    color: Colors.blue.withOpacity(0.3),
+                                    color: Colors.blue.withValues(alpha: 0.3),
                                     offset: const Offset(0, 2),
                                     blurRadius: 4,
                                   ),
@@ -8887,7 +10458,7 @@ VARIETY RULES:
                 borderRadius: BorderRadius.circular(6),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.blue.withOpacity(0.3),
+                    color: Colors.blue.withValues(alpha: 0.3),
                     offset: const Offset(0, 2),
                     blurRadius: 4,
                   ),
@@ -8918,7 +10489,7 @@ VARIETY RULES:
                 borderRadius: BorderRadius.circular(6),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.red.withOpacity(0.3),
+                    color: Colors.red.withValues(alpha: 0.3),
                     offset: const Offset(0, 2),
                     blurRadius: 4,
                   ),
@@ -9309,8 +10880,8 @@ VARIETY RULES:
     try {
       // Reload local SharedPreferences (menu position, tap sensitivity).
       final prefs = await SharedPreferences.getInstance();
-      final savedPosition = prefs.getString('tap_menu_position') ?? 'left';
-      final savedSensitivity = prefs.getInt('tap_min_duration_ms') ?? 0;
+      final savedPosition = prefs.getString('tap_menu_position') ?? 'top';
+      final savedSensitivity = prefs.getInt('tap_min_duration_ms') ?? 100;
       debugPrint('[TapSensitivity] _refreshSettingsFromAdmin: tap_min_duration_ms=$savedSensitivity menuPosition=$savedPosition');
       TapInterfaceButton.tapMinDurationMs = savedSensitivity;
       if (mounted) {
@@ -9330,6 +10901,27 @@ VARIETY RULES:
 
       // Force refresh settings from server
       await settingsProvider.fetchSettings();
+
+      // Re-fetch board data so board-level settings (e.g. dynamic_rows) are current.
+      try {
+        final freshBoards = await _tapService.fetchTapBoards();
+        if (mounted && freshBoards != null) {
+          OfflineCacheService.saveTapBoards(jsonEncode(freshBoards.toJson())).catchError((_) {});
+          setState(() => _tapBoards = freshBoards);
+          if (_selectedCategory != null) {
+            _loadCategoryWords(_selectedCategory!).then((result) {
+              if (!mounted) return;
+              final boardButtons = result['boardButtons'] as List<TapBoardButton>? ?? const [];
+              if (boardButtons.isNotEmpty) {
+                setState(() {
+                  _boardWordOptions = boardButtons;
+                  _currentStaticPageOffset = 0;
+                });
+              }
+            }).catchError((_) {});
+          }
+        }
+      } catch (_) {}
 
       debugPrint('🔄 TAP INTERFACE: Settings refreshed successfully');
 
@@ -9380,19 +10972,15 @@ VARIETY RULES:
       // Keep custom image cache warm across Tap page entries to avoid
       // re-downloading/matching delays on first board render.
 
-      // Warm up standard control buttons so locale-specific UI controls like
-      // "Something Else" (e.g. "Algo más") have an image before the grid renders.
+      // Warm up "More Options" so the locale-specific label has an image ready.
       if (!userLocale.startsWith('en')) {
         debugPrint(
           '🌍 TAP INTERFACE: Preloading localized control button images for "$userLocale"',
         );
         await PictogramService().prefetchButtonPictograms(
-          words: [
-            _t('Something Else'),
-            _t('Something Else A-Z'),
-          ],
+          words: [_t('More Options')],
           locale: userLocale,
-          maxItems: 2,
+          maxItems: 1,
         );
       }
 
@@ -9543,6 +11131,7 @@ VARIETY RULES:
     Color headerTextColor, {
     required bool horizontal,
   }) {
+    final bool isCompactPanel = MediaQuery.of(context).size.shortestSide < 600;
     final tapPictogramsEnabled =
         !(userSettings?.disableTapPictograms ?? false);
     final tapSightWordLogicEnabled =
@@ -9567,7 +11156,7 @@ VARIETY RULES:
               ? Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.library_books, size: 30, color: Colors.teal[800]),
+                    Icon(Icons.library_books, size: isCompactPanel ? 18 : 30, color: Colors.teal[800]),
                     const SizedBox(width: 4),
                     Text(
                       'BOARDS',
@@ -9595,7 +11184,7 @@ VARIETY RULES:
                     const SizedBox(height: 4),
                     Divider(color: Colors.teal[300], height: 1, thickness: 1),
                     const SizedBox(height: 4),
-                    Icon(Icons.library_books, size: 48, color: Colors.teal[800]),
+                    Icon(Icons.library_books, size: isCompactPanel ? 24 : 48, color: Colors.teal[800]),
                   ],
                 ),
         ),
@@ -9605,19 +11194,23 @@ VARIETY RULES:
     // Builds a single category button.
     Widget categoryButton(TapInterfaceCategory category) {
       final isSelected = _selectedCategory == category;
+      final isShowMeTarget = _isCategoryShowMeTarget(category);
       return TapInterfaceButton(
         label: category.label,
         onPressed: () {
-          setState(() => _navigationBreadcrumbs = []);
+          _clearMoreOptionsState();
           _handleCategoryTap(category);
         },
         backgroundColor:
             isSelected ? headerTextColor.withValues(alpha: 0.8) : Colors.white,
         foregroundColor: isSelected ? Colors.white : Colors.black87,
-        borderColor: isSelected
-            ? headerTextColor
-            : Colors.purple[300] ?? Colors.purple.shade300,
-        fontSize: 18,
+        borderColor: isShowMeTarget
+            ? _showMeGlowColor
+            : isSelected
+                ? headerTextColor
+                : Colors.orange[300] ?? Colors.orange.shade300,
+        glowColor: isShowMeTarget ? _showMeGlowColor : null,
+        fontSize: isCompactPanel ? 10 : 18,
         enablePictograms: tapPictogramsEnabled,
         sightWordGradeLevel: userSettings?.sightWordGradeLevel,
         enableSightWords: tapSightWordLogicEnabled,
@@ -9632,20 +11225,20 @@ VARIETY RULES:
     final decoration = BoxDecoration(
       gradient: LinearGradient(
         colors: [
-          Colors.purple[25] ?? Colors.purple.shade50,
-          Colors.purple[50] ?? Colors.purple.shade100,
+          Colors.orange[50] ?? Colors.orange.shade50,
+          Colors.orange[100] ?? Colors.orange.shade100,
         ],
         begin: horizontal ? Alignment.topCenter : Alignment.topLeft,
         end: horizontal ? Alignment.bottomCenter : Alignment.bottomRight,
       ),
       borderRadius: BorderRadius.circular(12),
       border: Border.all(
-        color: Colors.purple[300] ?? Colors.purple.shade300,
+        color: Colors.orange[300] ?? Colors.orange.shade300,
         width: 2,
       ),
       boxShadow: [
         BoxShadow(
-          color: Colors.purple.withValues(alpha: 0.2),
+          color: Colors.orange.withValues(alpha: 0.2),
           offset: const Offset(0, 3),
           blurRadius: 8,
         ),
@@ -9655,7 +11248,8 @@ VARIETY RULES:
     if (horizontal) {
       // Top / bottom: single row of buttons with horizontal scroll.
       // Fixed height for horizontal strip: roughly one button tall.
-      const stripHeight = 120.0;
+      final bool isCompactStrip = MediaQuery.of(context).size.shortestSide < 600;
+      final stripHeight = isCompactStrip ? 75.0 : 120.0;
       return Container(
         height: stripHeight,
         decoration: decoration,
@@ -9692,7 +11286,7 @@ VARIETY RULES:
               width: double.infinity,
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
               decoration: BoxDecoration(
-                color: Colors.purple[50] ?? Colors.purple.shade50,
+                color: Colors.orange[100] ?? Colors.orange.shade100,
                 borderRadius: const BorderRadius.only(
                   topLeft: Radius.circular(10),
                   topRight: Radius.circular(10),
@@ -9726,6 +11320,8 @@ VARIETY RULES:
     UserSettings? userSettings,
     Color headerTextColor,
   ) {
+    final bool isCompactMain = MediaQuery.of(context).size.shortestSide < 600;
+    final double sidePanelWidth = isCompactMain ? 80.0 : 173.0;
     final horizontal =
         _menuPosition == 'top' || _menuPosition == 'bottom';
     final panel = _buildCategoryPanel(
@@ -9758,7 +11354,7 @@ VARIETY RULES:
             Expanded(flex: 9, child: grid),
             const SizedBox(width: 8),
             SizedBox(
-              width: 173,
+              width: sidePanelWidth,
               child: panel,
             ),
           ],
@@ -9767,7 +11363,7 @@ VARIETY RULES:
         return Row(
           children: [
             SizedBox(
-              width: 173,
+              width: sidePanelWidth,
               child: panel,
             ),
             const SizedBox(width: 8),
@@ -9831,7 +11427,6 @@ VARIETY RULES:
         final wordsSectionH = wordsRows * buttonSize + wordsRowSpacing + kWordsVOverhead;
 
         Widget column = Column(
-          key: ValueKey(_optionsRebuildKey),
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             if (phrasesRows > 0) ...[
@@ -9843,55 +11438,37 @@ VARIETY RULES:
             ],
             SizedBox(
               height: wordsSectionH,
-              child: Container(
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      Colors.blue[25] ?? Colors.blue.shade50,
-                      Colors.blue[50] ?? Colors.blue.shade100,
-                    ],
-                    begin: Alignment.topLeft,
-                    end: Alignment.bottomRight,
-                  ),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(
-                    color: Colors.blue[300] ?? Colors.blue.shade300,
-                    width: 2,
-                  ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: Colors.blue.withOpacity(0.2),
-                      offset: const Offset(0, 3),
-                      blurRadius: 8,
-                    ),
-                  ],
-                ),
-                child: Padding(
-                  padding: const EdgeInsets.all(6),
-                  child: Align(
-                    alignment: Alignment.topCenter,
-                    child: SizedBox(
-                      width: gridW,
-                      child: Stack(
-                        children: [
-                          if (!_isLoadingWordOptions ||
-                              _wordOptions.isNotEmpty ||
-                              _boardWordOptions.isNotEmpty)
-                            _buildWordsGrid(userSettings),
-                          if (_isLoadingWordOptions)
-                            _wordOptions.isEmpty && _boardWordOptions.isEmpty
-                                ? const Center(child: CircularProgressIndicator())
-                                : const Positioned(
-                                    top: 0,
-                                    left: 0,
-                                    right: 0,
-                                    child: LinearProgressIndicator(
-                                      minHeight: 2,
-                                      backgroundColor: Colors.transparent,
+              child: Padding(
+                padding: const EdgeInsets.all(6),
+                child: Align(
+                  alignment: Alignment.topCenter,
+                  child: SizedBox(
+                    width: gridW,
+                    child: Builder(
+                      builder: (context) {
+                        return Stack(
+                          children: [
+                            if (!_isLoadingWordOptions ||
+                                _wordOptions.isNotEmpty ||
+                                _boardWordOptions.isNotEmpty)
+                              _buildWordsGrid(userSettings, buttonSize: buttonSize),
+                            if (_isLoadingWordOptions && _boardWordOptions.isEmpty)
+                              _wordOptions.isEmpty
+                                  ? const Center(
+                                      child: CircularProgressIndicator(),
+                                    )
+                                  : const Positioned(
+                                      top: 0,
+                                      left: 0,
+                                      right: 0,
+                                      child: LinearProgressIndicator(
+                                        minHeight: 2,
+                                        backgroundColor: Colors.transparent,
+                                      ),
                                     ),
-                                  ),
-                        ],
-                      ),
+                          ],
+                        );
+                      },
                     ),
                   ),
                 ),
@@ -9913,49 +11490,54 @@ VARIETY RULES:
   }
 
   /// Builds the unified words grid: static board-button rows on top, AI dynamic rows on bottom.
-  Widget _buildWordsGrid(UserSettings? userSettings) {
-    if (widget.isOfflineMode) return const SizedBox.shrink();
+  /// When [buttonSize] is provided and both static and dynamic rows exist, renders two
+  /// separate GridViews with an explicit purple separator between them — guaranteeing
+  /// the separator never overlaps the buttons regardless of floating-point rounding.
+  Widget _buildWordsGrid(UserSettings? userSettings, {double buttonSize = 0.0}) {
+    // In offline mode, hide the grid entirely only if there are no static board
+    // buttons to show. When board buttons exist, the grid renders them normally;
+    // the dynamic (AI) slots simply render as empty cells.
+    if (widget.isOfflineMode && _boardWordOptions.isEmpty) return const SizedBox.shrink();
     final totalSlots = _wordsSlotCount(userSettings);
     final staticSlots = _staticWordSlotCount(userSettings);
     final gridCols = _getEffectiveMainContentColumns(
       userSettings?.gridColumns ?? 6,
     );
+    const kSpacing = 2.0;
     final tapPictogramsDisabled = userSettings?.disableTapPictograms ?? false;
     final tapPictogramsEnabled = !tapPictogramsDisabled;
     final tapSightWordLogicEnabled =
         !tapPictogramsDisabled && (userSettings?.enableSightWords ?? true);
 
-    // In question mode, or when no board is loaded, all slots are dynamic
+    // In question mode, or when no board is loaded, all slots are dynamic.
+    // Always reserve the last slot for "More Options".
     final questionMode = _currentQuestion.isNotEmpty;
     final noBoardLoaded = _boardWordOptions.isEmpty;
-    final effectiveStaticSlots =
-        (noBoardLoaded || questionMode) ? 0 : staticSlots;
-    final dynamicSlots = totalSlots - effectiveStaticSlots;
+    final effectiveStaticSlots = (noBoardLoaded || questionMode || totalSlots == 0)
+        ? 0
+        : staticSlots.clamp(0, totalSlots - 1);
+    // Dynamic slots = everything between static and the last "More Options" slot.
+    final dynamicSlots = totalSlots - effectiveStaticSlots - 1;
 
-    // Something Else / Go Back controls sit at the end of the dynamic section.
-    // Go Back and Something Else A-Z are mutually exclusive (board loaded vs not).
-    final hasSomethingElseAZ =
-        noBoardLoaded && (_selectedCategory?.hasLLMQuery ?? false);
-    final hasGoBack = _navigationBreadcrumbs.isNotEmpty;
-    final somethingElseAZOffset =
-        hasSomethingElseAZ && dynamicSlots >= 2 ? dynamicSlots - 2 : -1;
+    // Go Back sits at the end of the dynamic section when More Options is active.
+    final hasGoBack = _moreOptionsReturnOffset != null;
     final goBackOffset =
-        hasGoBack && dynamicSlots >= 2 ? dynamicSlots - 2 : -1;
-    final somethingElseOffset = dynamicSlots >= 1 ? dynamicSlots - 1 : -1;
+        hasGoBack && dynamicSlots >= 1 ? dynamicSlots - 1 : -1;
 
-    return GridView.count(
-      physics: const NeverScrollableScrollPhysics(),
-      padding: EdgeInsets.zero,
-      crossAxisCount: gridCols,
-      childAspectRatio: 1.0,
-      crossAxisSpacing: 2,
-      mainAxisSpacing: 2,
-      children: List.generate(totalSlots, (index) {
+    // Build ALL cell widgets once; split into two lists when needed.
+    final allChildren = List.generate(totalSlots, (index) {
         final isStaticSlot = index < effectiveStaticSlots;
 
         if (isStaticSlot) {
           // --- Static board-button cell ---
           final rawBoardButton = _getBoardButtonAtIndex(index);
+          if (index == 0) {
+            debugPrint(
+              '🔲 Grid build: offset=$_currentStaticPageOffset '
+              'effectiveStatic=$effectiveStaticSlots pool=${_sortedBoardWordOptions.length} '
+              'slot0="${rawBoardButton?.text ?? 'null'}"'
+            );
+          }
           if (rawBoardButton == null) {
             return _buildEmptyWordCell(isDynamic: false);
           }
@@ -10010,33 +11592,67 @@ VARIETY RULES:
               : isPreviewArmed
               ? const Color(0xFFd97706) // amber-600
               : null;
-          final Color borderColor = variantGlowColor ??
+          final bool isBoardShowMeTarget = _isBoardButtonShowMeTarget(rawBoardButton);
+          final Color? effectiveBoardGlow = isBoardShowMeTarget ? _showMeGlowColor : variantGlowColor;
+          final Color borderColor = effectiveBoardGlow ??
               (isPureNavButton
                   ? (Colors.orange[300] ?? Colors.orange.shade300)
                   : (Colors.blue[300] ?? Colors.blue.shade300));
 
+          // Key by absolute pool index so each pool entry gets a stable,
+          // unique widget identity regardless of duplicate button IDs.
+          final poolIdx = _currentStaticPageOffset + index;
+          // Inset each button within its grid cell so the Show Me highlight
+          // border and glow are not obscured by adjacent buttons.
+          return Padding(
+            padding: const EdgeInsets.all(3),
+            child: TapInterfaceButton(
+              key: ValueKey(
+                'board_pool${poolIdx}_${hasVariant ? displayLabel : ''}',
+              ),
+              label: displayLabel,
+              imageSearchText: boardButton.imageSearchText,
+              onPressed: () => _handleBoardWordOptionTap(
+                boardButton,
+                variantLabel: hasVariant ? displayLabel : null,
+              ),
+              backgroundColor: Colors.white,
+              foregroundColor: Colors.black87,
+              borderColor: borderColor,
+              glowColor: effectiveBoardGlow,
+              fontSize: 8,
+              enablePictograms: tapPictogramsEnabled,
+              sightWordGradeLevel: userSettings?.sightWordGradeLevel,
+              enableSightWords: tapSightWordLogicEnabled,
+              padding: const EdgeInsets.all(2),
+              keywords: _boardButtonKeywords[boardButton.text],
+              assignedImageUrl: boardButton.imageUrl,
+              shouldLogMissing: !boardButton.isNavigationButton,
+              cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
+              mascot: userSettings?.mascot ?? '',
+            ),
+          );
+        } else if (index == totalSlots - 1) {
+          // --- "More Options" always occupies the last slot ---
+          final moreOptionsIsTarget = _isMoreOptionsShowMeTargetWithSettings(userSettings);
           return TapInterfaceButton(
-            key: ValueKey(
-              'board_${boardButton.id}_${hasVariant ? displayLabel : ''}',
-            ),
-            label: displayLabel,
-            imageSearchText: boardButton.imageSearchText,
-            onPressed: () => _handleBoardWordOptionTap(
-              boardButton,
-              variantLabel: hasVariant ? displayLabel : null,
-            ),
+            label: _t('More Options'),
+            onPressed: () {
+              if (_showMeActive) _showMeInterceptMoreOptions();
+              _handleMoreOptions();
+            },
             backgroundColor: Colors.white,
             foregroundColor: Colors.black87,
-            borderColor: borderColor,
-            glowColor: variantGlowColor,
+            borderColor: moreOptionsIsTarget
+                ? _showMeGlowColor
+                : Colors.blue[300] ?? Colors.blue.shade300,
+            glowColor: moreOptionsIsTarget ? _showMeGlowColor : null,
             fontSize: 8,
             enablePictograms: tapPictogramsEnabled,
             sightWordGradeLevel: userSettings?.sightWordGradeLevel,
             enableSightWords: tapSightWordLogicEnabled,
             padding: const EdgeInsets.all(2),
-            keywords: _wordKeywords[boardButton.text],
-            assignedImageUrl: boardButton.imageUrl,
-            shouldLogMissing: !boardButton.isNavigationButton,
+            shouldLogMissing: false,
             cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
             mascot: userSettings?.mascot ?? '',
           );
@@ -10061,39 +11677,6 @@ VARIETY RULES:
               cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
               mascot: userSettings?.mascot ?? '',
             );
-          } else if (dynamicIndex == somethingElseOffset) {
-            return TapInterfaceButton(
-              label: _t('Something Else'),
-              onPressed: () =>
-                  _loadMoreWordOptions(startsWithLetter: _activeWordLetterFilter),
-              backgroundColor: Colors.white,
-              foregroundColor: Colors.black87,
-              borderColor: Colors.blue[300] ?? Colors.blue.shade300,
-              fontSize: 8,
-              enablePictograms: tapPictogramsEnabled,
-              sightWordGradeLevel: userSettings?.sightWordGradeLevel,
-              enableSightWords: tapSightWordLogicEnabled,
-              padding: const EdgeInsets.all(2),
-              shouldLogMissing: false,
-              cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
-              mascot: userSettings?.mascot ?? '',
-            );
-          } else if (dynamicIndex == somethingElseAZOffset) {
-            return TapInterfaceButton(
-              label: _t('Something Else A-Z'),
-              onPressed: _showSomethingElseAZDialog,
-              backgroundColor: Colors.white,
-              foregroundColor: Colors.black87,
-              borderColor: Colors.teal[300] ?? Colors.teal.shade300,
-              fontSize: 8,
-              enablePictograms: tapPictogramsEnabled,
-              sightWordGradeLevel: userSettings?.sightWordGradeLevel,
-              enableSightWords: tapSightWordLogicEnabled,
-              padding: const EdgeInsets.all(2),
-              shouldLogMissing: false,
-              cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
-              mascot: userSettings?.mascot ?? '',
-            );
           } else if (dynamicIndex < _wordOptions.length) {
             final wordOption = _wordOptions[dynamicIndex];
             // Resolve variant label if a mode is active
@@ -10108,6 +11691,10 @@ VARIETY RULES:
                 _isAudioSurfingEnabled &&
                 _audioSurfingPreviewOptionKey == wordOptionKey;
             final keywords = _wordKeywords[wordOption];
+            // Use the full display phrase for image lookup — mirrors the web app's
+            // getSymbolImageForText which sends the unmodified text to button-search.
+            // shouldLogMissing is false so a cold-cache miss never writes a false entry.
+            final imageSearchText = wordOption;
             final Color? wordGlowColor = wordHasVariant && _variantMode == 'past'
                 ? const Color(0xFFea580c) // orange-600
                 : wordHasVariant && _variantMode == 'plural'
@@ -10115,16 +11702,24 @@ VARIETY RULES:
                 : isPreviewArmed
                 ? const Color(0xFFd97706) // amber-600
                 : null;
+            final bool isDynShowMeTarget = _isWordShowMeTarget(wordOption);
+            final Color? effectiveDynGlow =
+                isDynShowMeTarget ? _showMeGlowColor : wordGlowColor;
             return TapInterfaceButton(
               key: ValueKey(
-                'dyn_${_selectedCategory?.id}_${wordOption}_${wordHasVariant ? displayWord : ''}',
+                // Include _optionsRebuildKey so each preload cycle creates fresh button
+                // state. Without this, the ValueKey survives the Column key change and
+                // didUpdateWidget fires while _isLoadingPictogram=true (sight-word check
+                // is still running), blocking the second _loadPictogram call entirely.
+                'dyn_${_selectedCategory?.id}_${wordOption}_${wordHasVariant ? displayWord : ''}_$_optionsRebuildKey',
               ),
               label: displayWord,
+              imageSearchText: imageSearchText,
               onPressed: () => _handleWordOptionTap(displayWord),
               backgroundColor: Colors.white,
               foregroundColor: Colors.black87,
-              borderColor: wordGlowColor ?? dynamicBorderColor,
-              glowColor: wordGlowColor,
+              borderColor: effectiveDynGlow ?? dynamicBorderColor,
+              glowColor: effectiveDynGlow ?? dynamicBorderColor,
               borderWidth: 2.5,
               fontSize: 8,
               enablePictograms: tapPictogramsEnabled,
@@ -10132,15 +11727,160 @@ VARIETY RULES:
               enableSightWords: tapSightWordLogicEnabled,
               padding: const EdgeInsets.all(2),
               keywords: keywords,
-              shouldLogMissing: true,
-              cacheOnlyImageLookup: _cacheOnlyInitialImageLookup,
+              shouldLogMissing: false, // AI-generated labels are ephemeral; cold-cache first-render misses cause false positives
+              // Mirror web app: per-button server calls are never made for word options.
+              // Images come from assignedImageUrl (batch-search preload) or local cache only.
+              assignedImageUrl: _wordOptionImageUrls[wordOption],
+              cacheOnlyImageLookup: true,
               mascot: userSettings?.mascot ?? '',
             );
           } else {
             return _buildEmptyWordCell(isDynamic: true);
           }
         }
-      }),
+      });
+
+    // When both static and dynamic rows are present, split into two GridViews
+    // with a Container separator between them — a real layout element that
+    // cannot overlap either grid regardless of floating-point rounding.
+    final hasSplit = buttonSize > 0 && effectiveStaticSlots > 0 && dynamicSlots > 0;
+    if (hasSplit) {
+      final staticCells = allChildren.sublist(0, effectiveStaticSlots);
+      final dynamicCells = allChildren.sublist(effectiveStaticSlots);
+
+      final staticRowCount = (effectiveStaticSlots / gridCols).ceil();
+      final dynamicCellCount = totalSlots - effectiveStaticSlots;
+      final dynamicRowCount = (dynamicCellCount / gridCols).ceil();
+
+      // Heights sum to the same total as the original single GridView, so the
+      // outer wordsSectionH calculation needs no adjustment.
+      // Inter-button gaps come from per-cell Padding(3) wrappers on the widgets.
+      final staticH = staticRowCount * buttonSize +
+          (staticRowCount > 1 ? (staticRowCount - 1) * kSpacing : 0.0);
+      final dynamicH = dynamicRowCount * buttonSize +
+          (dynamicRowCount > 1 ? (dynamicRowCount - 1) * kSpacing : 0.0);
+
+      // Wrap each dynamic cell in Padding(3) so buttons are visually inset,
+      // matching the static section's gutter and inter-button spacing.
+      final paddedDynamicCells = dynamicCells
+          .map((c) => Padding(
+                padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 3),
+                child: c,
+              ))
+          .toList();
+
+      return Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          RepaintBoundary(
+            child: SizedBox(
+              height: staticH,
+              child: Stack(
+                children: [
+                  Positioned.fill(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          colors: [
+                            Colors.blue[25] ?? Colors.blue.shade50,
+                            Colors.blue[50] ?? Colors.blue.shade100,
+                          ],
+                          begin: Alignment.topCenter,
+                          end: Alignment.bottomCenter,
+                        ),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12),
+                    child: GridView.count(
+                      physics: const NeverScrollableScrollPhysics(),
+                      padding: EdgeInsets.zero,
+                      crossAxisCount: gridCols,
+                      childAspectRatio: 1.0,
+                      crossAxisSpacing: kSpacing,
+                      mainAxisSpacing: kSpacing,
+                      children: staticCells,
+                    ),
+                  ),
+                  Positioned.fill(
+                    child: IgnorePointer(
+                      child: DecoratedBox(
+                        decoration: BoxDecoration(
+                          border: Border.all(
+                            color: Colors.blue[300] ?? Colors.blue.shade300,
+                            width: 2,
+                          ),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          SizedBox(height: kSpacing),
+          SizedBox(
+            height: dynamicH,
+            child: Stack(
+              children: [
+                Positioned.fill(
+                  child: DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        colors: [
+                          Colors.purple[25] ?? Colors.purple.shade50,
+                          Colors.purple[50] ?? Colors.purple.shade100,
+                        ],
+                        begin: Alignment.topCenter,
+                        end: Alignment.bottomCenter,
+                      ),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                  ),
+                ),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: _MagicDynamicGrid(
+                    cells: paddedDynamicCells,
+                    height: dynamicH,
+                    spacing: kSpacing,
+                    crossAxisCount: gridCols,
+                    contentVersion: _wordOptionsVersion,
+                    loadingNotifier: _dynLoadingNotifier,
+                  ),
+                ),
+                Positioned.fill(
+                  child: IgnorePointer(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        border: Border.all(
+                          color: Colors.purple[300] ?? Colors.purple.shade300,
+                          width: 4,
+                        ),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      );
+    }
+
+    // Fallback: single unified grid (no static/dynamic split needed).
+    return GridView.count(
+      physics: const NeverScrollableScrollPhysics(),
+      padding: EdgeInsets.zero,
+      crossAxisCount: gridCols,
+      childAspectRatio: 1.0,
+      crossAxisSpacing: kSpacing,
+      mainAxisSpacing: kSpacing,
+      children: allChildren,
     );
   }
 
@@ -10439,12 +12179,6 @@ VARIETY RULES:
       '[TapInterface] Added phrase to speech history: "$_speechHistory"',
     );
 
-    // Update status message
-    setState(() {
-      _statusMessage =
-          'Phrase added to speech. Say "${_getFormattedWakeWord()}" to ask a question.';
-    });
-
     if (await _returnFromTemporaryNavigationIfNeeded()) {
       return;
     }
@@ -10464,6 +12198,10 @@ VARIETY RULES:
     }
 
     _setTapInProgress();
+
+    if (_showMeActive) {
+      if (!_showMeInterceptWord(word)) return;
+    }
 
     debugPrint('[TapInterface] === WORD OPTION TAPPED ===');
     debugPrint('[TapInterface] Word option tapped: "$word"');
@@ -10557,12 +12295,6 @@ VARIETY RULES:
       '[TapInterface] Speech history controller AFTER: "${_speechHistoryController.text}"',
     );
 
-    // Update status message
-    setState(() {
-      _statusMessage =
-          'Text added to speech. Say "${_getFormattedWakeWord()}" to ask a question.';
-    });
-
     if (await _returnFromTemporaryNavigationIfNeeded()) {
       return;
     }
@@ -10583,6 +12315,19 @@ VARIETY RULES:
 
     _setTapInProgress();
 
+    if (_showMeActive) {
+      final isTarget = _isBoardButtonShowMeTarget(button);
+      if (!isTarget) return;
+      _advanceShowMe();
+      // Always fall through to normal processing so the word is announced and
+      // added to the speech history. For navigation buttons also clear stale
+      // temporary-navigation state so the board switch is not intercepted.
+      if (button.afterSelection == 'navigate') {
+        _clearTemporaryNavigationState();
+        _clearMoreOptionsState();
+      }
+    }
+
     final pendingReturnBoardId = _temporaryNavigationPending
         ? _peekTemporaryReturnBoard()
         : null;
@@ -10595,7 +12340,8 @@ VARIETY RULES:
 
     final optionKey = 'board::${_selectedCategory?.id ?? 'none'}::${button.id}';
     final previewLabel = effectiveButton.speechText ?? effectiveButton.text;
-    final proceedWithSelection = await _handleAudioSurfingTap(
+    // Show Me drives taps directly — skip audio-surfing's two-tap preview gate.
+    final proceedWithSelection = _showMeActive || await _handleAudioSurfingTap(
       optionKey,
       previewLabel,
     );
@@ -10673,7 +12419,7 @@ VARIETY RULES:
 
       final targetCategory = _resolveTargetCategory(effectiveTargetBoardId);
       if (targetCategory != null) {
-        await _handleCategoryTap(targetCategory);
+        await _handleCategoryTap(targetCategory, forceNavigation: _showMeActive);
         return;
       }
     }
@@ -10686,544 +12432,37 @@ VARIETY RULES:
       setState(() {});
     }
 
-    final effectiveAfterSelection = effectiveButton.afterSelection.isNotEmpty
-        ? effectiveButton.afterSelection
-        : 'use_ai';
+    final effectiveAfterSelection = effectiveButton.afterSelection;
+
+    debugPrint('[TapInterface] ▶ BUTTON tap: id="${effectiveButton.id}" '
+        'text="${effectiveButton.text}" afterSelection="$effectiveAfterSelection" '
+        'targetBoardId="${effectiveTargetBoardId}" actionType="${effectiveButton.actionType}" '
+        'buttonType="${effectiveButton.buttonType}"');
 
     if (effectiveAfterSelection == 'navigate' &&
         effectiveTargetBoardId != null) {
       _clearTemporaryNavigationState();
-      final currentBoardId = _getCategoryBoardId(_selectedCategory);
-      if (currentBoardId != null) {
-        setState(() {
-          _navigationBreadcrumbs = [
-            ..._navigationBreadcrumbs,
-            (boardId: currentBoardId, addedText: textToAdd),
-          ];
-        });
-      }
+      _clearMoreOptionsState();
       final targetCategory = _resolveTargetCategory(effectiveTargetBoardId);
       if (targetCategory != null) {
-        await _handleCategoryTap(targetCategory);
+        await _handleCategoryTap(targetCategory, forceNavigation: _showMeActive);
         return;
       }
     }
 
     if (effectiveAfterSelection == 'navigate_home') {
       _clearTemporaryNavigationState();
-      setState(() => _navigationBreadcrumbs = []);
+      _clearMoreOptionsState();
       await _openConfiguredHomeBoard();
       return;
     }
 
-    if (effectiveAfterSelection == 'use_ai' ||
-        effectiveAfterSelection == 'do_nothing') {
-      if (effectiveAfterSelection == 'use_ai') {
-        // Push current board so user can Go Back after AI board is generated.
-        final currentBoardId = _getCategoryBoardId(_selectedCategory);
-        if (currentBoardId != null) {
-          setState(() {
-            _navigationBreadcrumbs = [
-              ..._navigationBreadcrumbs,
-              (boardId: currentBoardId, addedText: textToAdd),
-            ];
-          });
-        }
-        await _generateAndSaveAIBoard(
-          tappedButton: effectiveButton,
-          parentBoardId: boardIdForModifiers,
-        );
-        return;
-      }
-      // do_nothing: text was added, no further action
-    }
-  }
-
-  // ---------------------------------------------------------------------------
-  // AI Board Generation (use_ai afterSelection)
-  // ---------------------------------------------------------------------------
-
-  /// Converts a [TapBoardButton] to the JSON payload expected by the backend.
-  Map<String, dynamic> _buttonToJson(TapBoardButton btn) => {
-    'id': btn.id,
-    'text': btn.text,
-    'label': btn.text,
-    'speech_text': btn.speechText,
-    'row': btn.row,
-    'col': btn.col,
-    'after_selection': btn.afterSelection,
-    'target_board_id': btn.targetBoardId,
-    'action_type': btn.actionType,
-    'hidden': btn.hidden,
-    'button_type': btn.buttonType,
-    'image_url': btn.imageUrl,
-    'background_color': btn.backgroundColor,
-    'text_color': btn.textColor,
-    'past_tense': btn.pastTense,
-    'plural': btn.plural,
-  };
-
-  /// When a static button has `after_selection: use_ai`, this method:
-  /// 1. Generates static board buttons via LLM based on current speech history.
-  /// 2. Saves the new board via POST /api/tap-interface/boards.
-  /// 3. Updates [tappedButton] on [parentBoardId] to navigate to the new board.
-  /// 4. Reloads the board config and navigates to the new board.
-  Future<void> _generateAndSaveAIBoard({
-    required TapBoardButton tappedButton,
-    required String? parentBoardId,
-  }) async {
-    final userSettings = Provider.of<UserSettingsProvider>(
-      context,
-      listen: false,
-    );
-    final settings = userSettings.settings;
-    final userId = userSettings.userId ?? widget.aacUserId;
-
-    final gridCols = _getEffectiveMainContentColumns(
-      settings?.gridColumns ?? 6,
-    );
-    final tapWordsRows = settings?.tapWordsRows ?? 3;
-    final tapDynamicRows = settings?.tapDynamicRows ?? 1;
-    final staticRows = (tapWordsRows - tapDynamicRows).clamp(0, tapWordsRows);
-    final staticSlotCount = staticRows * gridCols;
-
-    if (staticSlotCount == 0) {
-      // Nothing static to generate — fall back to plain AI refresh.
-      setState(() {
-        _boardWordOptions = [];
-        _wordOptions = [];
-      });
+    if (effectiveAfterSelection == 'do_nothing') {
+      // do_nothing: text was added; refresh dynamic options to reflect new context
       await _loadWordOptionsBasedOnBuildSpace();
-      await _loadPhraseOptionsBasedOnBuildSpace();
-      return;
-    }
-
-    setState(() {
-      _isLoadingWordOptions = true;
-      _showStatusToast('Generating board…');
-    });
-
-    try {
-      // ── 1. Reuse existing board if one already exists for this button ─────
-      // Board label = tapped button text (no prefix — keeps alphabetical sort clean).
-      final boardLabel = tappedButton.text;
-      final existingBoard = _tapBoards?.boards.where(
-        (b) => b.label.trim().toLowerCase() == boardLabel.trim().toLowerCase(),
-      ).firstOrNull;
-
-      if (existingBoard != null && existingBoard.buttons.isNotEmpty) {
-        debugPrint(
-          '[TapInterface] ♻️ Reusing existing board "${existingBoard.label}" (${existingBoard.id})',
-        );
-        // Navigate immediately — board data is already in _tapBoards.
-        final existingCategory = _buildCategoryFromBoard(existingBoard);
-        setState(() => _statusMessage = '');
-        await _handleCategoryTap(existingCategory);
-
-        // Update the source button in the background so future taps navigate
-        // directly (no need to block navigation on this).
-        _updateSourceButton(
-          parentBoardId: parentBoardId,
-          tappedButton: tappedButton,
-          newBoardId: existingBoard.id,
-          userId: userId,
-        ).then((_) async {
-          if (!mounted) return;
-          final freshBoards = await _tapService.fetchTapBoards();
-          if (mounted && freshBoards != null) {
-            setState(() => _tapBoards = freshBoards);
-          }
-        }).catchError((e) {
-          debugPrint('[TapInterface] ❌ Background source update error: $e');
-        });
-        return;
-      }
-
-      // ── 2. Generate static button labels (same short-word style as dynamic row)
-      final speechContext = _speechHistory.trim();
-      // Use the tapped button's text (the board topic) as context, not the parent
-      // board's label — e.g. tapping "am" on the "I" board should generate words
-      // like "hungry, tired, happy" (topic = "am"), not "I"-topic words.
-      final context = tappedButton.text.trim().isNotEmpty
-          ? tappedButton.text.trim()
-          : 'general communication';
-      final currentMood = settings?.currentMood;
-
-      final rawWords = await _tapService.generateFreestyleOptions(
-        context: context,
-        buildSpaceText: speechContext,
-        singleWordsOnly: true,
-        maxOptions: staticSlotCount + 5,
-        currentMood: (currentMood != null && currentMood != 'No Mood Selected')
-            ? currentMood
-            : null,
-        excludeOptions: _displayedStaticButtonLabels(settings),
-      );
-
-      // Client-side dedup of any options that are identical to the static buttons
-      final excludeSet = _displayedStaticButtonLabels(settings)
-          .map((e) => e.toLowerCase().trim())
-          .toSet();
-      final optionLabels = rawWords
-          .where((s) => s.isNotEmpty && !excludeSet.contains(s.toLowerCase().trim()))
-          .take(staticSlotCount)
-          .toList();
-
-      // ── 3. Build button list ──────────────────────────────────────────────
-      final buttons = <Map<String, dynamic>>[];
-      for (var i = 0; i < optionLabels.length; i++) {
-        final row = i ~/ gridCols;
-        final col = i % gridCols;
-        buttons.add({
-          'id': 'btn_${row}_$col',
-          'text': optionLabels[i],
-          'label': optionLabels[i],
-          'speech_text': optionLabels[i],
-          'row': row,
-          'col': col,
-          'after_selection': 'use_ai',
-          'action_type': 'announce',
-          'hidden': false,
-          'button_type': 'static',
-        });
-      }
-
-      // ── 4. Navigate immediately with a temp board ID ──────────────────────
-      // Assign a client-side temp ID so we can navigate before the POST
-      // completes. The POST (which can be slow) runs in the background and
-      // swaps in the real server-assigned ID when done.
-      final tempBoardId =
-          '_temp_${DateTime.now().millisecondsSinceEpoch}';
-      final newBoardButtonObjects = buttons
-          .map((b) => TapBoardButton.fromJson(b))
-          .toList();
-      final tempBoard = TapBoard(
-        id: tempBoardId,
-        label: boardLabel,
-        boardType: 'static',
-        buttons: newBoardButtonObjects,
-      );
-      setState(() {
-        _tapBoards = TapBoardsResponse(
-          boards: [...(_tapBoards?.boards ?? const <TapBoard>[]), tempBoard],
-          boardSettings:
-              _tapBoards?.boardSettings ?? const TapBoardSettings(),
-        );
-        _statusMessage = '';
-      });
-
-      await _handleCategoryTap(_buildCategoryFromBoard(tempBoard));
-
-      // ── 5. Persist board + link source button in the background ───────────
-      // None of these operations block the user from interacting with the new
-      // board. When the POST returns the real ID we swap it into _tapBoards
-      // and update any breadcrumbs that still hold the temp ID.
-      () async {
-        try {
-          final createResponse =
-              await AuthenticatedHttpClient.makeAuthenticatedRequest(
-                'POST',
-                '${EnvironmentConfig.apiBaseUrl}/api/tap-interface/boards',
-                baseHeaders: {
-                  'X-User-ID': userId,
-                  'Content-Type': 'application/json',
-                },
-                body: jsonEncode({
-                  'label': boardLabel,
-                  'board_type': 'static',
-                  'buttons': buttons,
-                }),
-              );
-
-          if (createResponse.statusCode != 200 &&
-              createResponse.statusCode != 201) {
-            debugPrint(
-              '[TapInterface] ⚠️ Board POST failed (${createResponse.statusCode}) — temp board stays in memory',
-            );
-            return;
-          }
-
-          final createData =
-              jsonDecode(createResponse.body) as Map<String, dynamic>;
-          final realBoardId =
-              (createData['board'] as Map<String, dynamic>?)?['id']
-                  as String? ??
-              (createData['id'] as String?);
-
-          if (realBoardId == null || realBoardId.isEmpty) {
-            debugPrint('[TapInterface] ⚠️ Board POST returned no ID');
-            return;
-          }
-
-          // Replace temp board with real board; patch breadcrumbs.
-          if (mounted && _tapBoards != null) {
-            final realBoard = TapBoard(
-              id: realBoardId,
-              label: boardLabel,
-              boardType: 'static',
-              buttons: newBoardButtonObjects,
-            );
-            setState(() {
-              _tapBoards = TapBoardsResponse(
-                boards: _tapBoards!.boards
-                    .where((b) => b.id != tempBoardId)
-                    .toList()
-                  ..add(realBoard),
-                boardSettings: _tapBoards!.boardSettings,
-              );
-              // Update any breadcrumb that still carries the temp ID.
-              _navigationBreadcrumbs = _navigationBreadcrumbs
-                  .map(
-                    (c) => c.boardId == tempBoardId
-                        ? (boardId: realBoardId, addedText: c.addedText)
-                        : c,
-                  )
-                  .toList();
-            });
-          }
-
-          // Link the source button and refresh authoritative boards state.
-          await _updateSourceButton(
-            parentBoardId: parentBoardId,
-            tappedButton: tappedButton,
-            newBoardId: realBoardId,
-            userId: userId,
-          );
-          if (!mounted) return;
-          final freshBoards = await _tapService.fetchTapBoards();
-          if (mounted && freshBoards != null) {
-            setState(() => _tapBoards = freshBoards);
-          }
-        } catch (e) {
-          debugPrint('[TapInterface] ❌ Background board save error: $e');
-        }
-      }();
-    } catch (e) {
-      debugPrint('[TapInterface] ❌ _generateAndSaveAIBoard error: $e');
-      if (mounted) {
-        setState(() {
-          _isLoadingWordOptions = false;
-          _statusMessage = '';
-        });
-        // Fallback: plain AI refresh so the user isn't left with a blank screen.
-        await _loadWordOptionsBasedOnBuildSpace();
-        await _loadPhraseOptionsBasedOnBuildSpace();
-      }
     }
   }
 
-  /// Updates the [tappedButton] on [parentBoardId] to navigate directly to
-  /// [newBoardId] on future taps (changing `after_selection` from `use_ai` to
-  /// `navigate`).  Skips silently when the parent board can't be found or is
-  /// read-only, so the caller doesn't need to guard against it.
-  Future<void> _updateSourceButton({
-    required String? parentBoardId,
-    required TapBoardButton tappedButton,
-    required String newBoardId,
-    required String userId,
-  }) async {
-    if (parentBoardId == null || parentBoardId.isEmpty) return;
-
-    // The Home board category typically has no explicit board_id, so
-    // _getCategoryBoardId falls back to the category's own id.  If that id
-    // isn't found in the boards list, try the configured home_board_id instead.
-    TapBoard? parentBoard = _tapBoards?.boards.where(
-      (b) => b.id == parentBoardId,
-    ).firstOrNull;
-
-    String effectiveBoardId = parentBoardId;
-    if (parentBoard == null) {
-      final homeBoardId = _normalizeBoardId(
-        _tapBoards?.boardSettings.homeBoardId,
-      );
-      if (homeBoardId != null && homeBoardId.isNotEmpty) {
-        final homeBoard = _tapBoards?.boards.where(
-          (b) => b.id == homeBoardId,
-        ).firstOrNull;
-        if (homeBoard != null) {
-          parentBoard = homeBoard;
-          effectiveBoardId = homeBoardId;
-          debugPrint(
-            '[TapInterface] 🏠 Home board fallback: using homeBoardId $homeBoardId',
-          );
-        }
-      }
-    }
-
-    final sourceButtons =
-        parentBoard?.buttons.isNotEmpty == true
-        ? parentBoard!.buttons
-        : _boardWordOptions;
-
-    if (sourceButtons.isEmpty) {
-      debugPrint('[TapInterface] ⚠️ No source buttons found for board $parentBoardId');
-      return;
-    }
-
-    final updatedButtons = sourceButtons.map((btn) {
-      final isMatch = btn.id == tappedButton.id ||
-          btn.text.toLowerCase().trim() == tappedButton.text.toLowerCase().trim();
-      if (isMatch) {
-        return {
-          ..._buttonToJson(btn),
-          'after_selection': 'navigate',
-          'target_board_id': newBoardId,
-        };
-      }
-      return _buttonToJson(btn);
-    }).toList();
-
-    final boardLabel = parentBoard?.label ?? _selectedCategory?.label ?? 'Board';
-    final boardType = parentBoard?.boardType ?? 'static';
-
-    final putResp = await AuthenticatedHttpClient.makeAuthenticatedRequest(
-      'PUT',
-      '${EnvironmentConfig.apiBaseUrl}/api/tap-interface/boards/$effectiveBoardId',
-      baseHeaders: {
-        'X-User-ID': userId,
-        'Content-Type': 'application/json',
-      },
-      body: jsonEncode({
-        'label': boardLabel,
-        'board_type': boardType,
-        'default_columns': parentBoard?.defaultColumns ?? 12,
-        'max_rows': parentBoard?.maxRows ?? 7,
-        'hidden': parentBoard?.hidden ?? false,
-        'llm_prompt': parentBoard?.llmPrompt,
-        'buttons': updatedButtons,
-      }),
-    );
-
-    debugPrint('[TapInterface] PUT $effectiveBoardId → ${putResp.statusCode}');
-
-    // Only fall back to the nav config patch when the PUT was rejected.
-    // legacy_category boards return 403 because they are read-only via PUT;
-    // their buttons live in board_word_options inside the nav config, so we
-    // must patch the config directly.
-    //
-    // For custom / AI-generated boards the PUT succeeds (200/201) and is the
-    // authoritative update. Calling the nav config patch for those boards is
-    // NOT safe: the generated button IDs (btn_0_0, btn_0_1 …) can collide with
-    // IDs of unrelated buttons that happen to be stored in the nav config,
-    // causing the wrong button to be patched (e.g. Home board's "I" button
-    // getting its target changed to the most recently generated board).
-    final putSucceeded =
-        putResp.statusCode == 200 || putResp.statusCode == 201;
-    if (!putSucceeded) {
-      await _updateLegacyButtonViaNavConfig(
-        tappedButton: tappedButton,
-        newBoardId: newBoardId,
-        userId: userId,
-      );
-    }
-  }
-
-  /// Patches a button's after_selection+target_board_id inside the full nav
-  /// config (required for legacy_category boards which are read-only via PUT).
-  Future<void> _updateLegacyButtonViaNavConfig({
-    required TapBoardButton tappedButton,
-    required String newBoardId,
-    required String userId,
-  }) async {
-    try {
-      // 1. Fetch raw config JSON
-      final getResp = await AuthenticatedHttpClient.makeAuthenticatedRequest(
-        'GET',
-        '${EnvironmentConfig.apiBaseUrl}/api/tap-interface/config',
-        baseHeaders: {
-          'X-User-ID': userId,
-          'Content-Type': 'application/json',
-        },
-      );
-      if (getResp.statusCode != 200) {
-        debugPrint(
-          '[TapInterface] ❌ Config GET failed: ${getResp.statusCode}',
-        );
-        return;
-      }
-
-      final configJson = jsonDecode(getResp.body) as Map<String, dynamic>;
-
-      // 2. Walk all buttons arrays looking for the matching button by ID or text
-      bool patched = false;
-
-      void patchButtonList(List<dynamic> buttonList) {
-        for (var i = 0; i < buttonList.length; i++) {
-          final btn = buttonList[i];
-          if (btn is! Map<String, dynamic>) continue;
-
-          final btnId = (btn['id'] ?? '').toString();
-          final btnText = (btn['text'] ?? btn['label'] ?? '').toString().toLowerCase().trim();
-          final tapText = tappedButton.text.toLowerCase().trim();
-          final tapId = tappedButton.id;
-
-          if (btnId == tapId || btnText == tapText) {
-            buttonList[i] = {
-              ...btn,
-              'after_selection': 'navigate',
-              'target_board_id': newBoardId,
-            };
-            patched = true;
-            debugPrint(
-              '[TapInterface] ✅ Patched legacy button "$btnText" in nav config',
-            );
-            return;
-          }
-
-          // Recurse into board_word_options
-          final wordOpts = btn['board_word_options'];
-          if (wordOpts is List) patchButtonList(wordOpts);
-
-          // Recurse into children
-          final children = btn['children'];
-          if (children is List) patchButtonList(children);
-        }
-      }
-
-      // Search top-level buttons
-      final topButtons = configJson['buttons'];
-      if (topButtons is List) patchButtonList(topButtons);
-
-      // Also search any boards embedded in the config
-      final boards = configJson['boards'];
-      if (!patched && boards is List) {
-        for (final board in boards) {
-          if (board is! Map<String, dynamic>) continue;
-          final boardBtns = board['buttons'];
-          if (boardBtns is List) patchButtonList(boardBtns);
-          if (patched) break;
-        }
-      }
-
-      if (!patched) {
-        debugPrint(
-          '[TapInterface] ⚠️ Button "${tappedButton.text}" not found in nav config',
-        );
-        return;
-      }
-
-      // 3. POST updated config back
-      final postResp = await AuthenticatedHttpClient.makeAuthenticatedRequest(
-        'POST',
-        '${EnvironmentConfig.apiBaseUrl}/api/tap-interface/config',
-        baseHeaders: {
-          'X-User-ID': userId,
-          'Content-Type': 'application/json',
-        },
-        body: jsonEncode(configJson),
-      );
-
-      if (postResp.statusCode == 200 || postResp.statusCode == 201) {
-        debugPrint('[TapInterface] ✅ Nav config updated for legacy button patch');
-      } else {
-        debugPrint(
-          '[TapInterface] ❌ Nav config POST failed: ${postResp.statusCode}: ${postResp.body}',
-        );
-      }
-    } catch (e) {
-      debugPrint('[TapInterface] ❌ _updateLegacyButtonViaNavConfig error: $e');
-    }
-  }
 
   /// Enable tap debouncing to prevent rapid multiple taps on buttons
   void _setTapInProgress() {
@@ -11240,9 +12479,25 @@ VARIETY RULES:
     // results from a newer navigation.
     final snapshotCategoryId = _selectedCategory?.id;
     try {
-      setState(() {
-        _isLoadingWordOptions = true;
-      });
+      _isLoadingWordOptions = true;
+      _dynLoadingNotifier.value = true;
+
+      // Show fallback words immediately so the dynamic grid isn't empty while
+      // the AI API call (~10s) is in flight. AI words replace these when ready.
+      // Skip this when static board buttons are present — they already give the
+      // user something to interact with, and generic words would flash and
+      // potentially duplicate static button labels.
+      if (_wordOptions.isEmpty && _boardWordOptions.isEmpty && mounted) {
+        final settingsSync = Provider.of<UserSettingsProvider>(context, listen: false);
+        final requiredCount = _tapDynamicWordCount(settingsSync.settings);
+        final fallback = _getFallbackWordOptions().take(requiredCount).toList();
+        if (fallback.isNotEmpty) {
+          setState(() {
+            _wordOptions = fallback;
+            _wordOptionsVersion++;
+          });
+        }
+      }
 
       debugPrint('[TapInterface] === WORD OPTIONS REFRESH ===');
       debugPrint('[TapInterface] Build space text: "$_buildSpaceText"');
@@ -11268,7 +12523,19 @@ VARIETY RULES:
         );
         final currentMood =
             userSettings.settings?.currentMood ?? 'No Mood Selected';
-        final maxWordOptions = userSettings.settings?.freestyleOptions ?? 29;
+        // In question mode every row is dynamic, so fill the whole grid.
+        final maxWordOptions = _currentQuestion.isNotEmpty
+            ? (_wordsSlotCount(userSettings.settings) - 1).clamp(1, 200)
+            : _tapDynamicWordCount(userSettings.settings);
+
+        if (maxWordOptions <= 0) {
+          debugPrint('[TapInterface] dynamicRows=0 — skipping category words API call.');
+          if (mounted && _selectedCategory?.id == snapshotCategoryId) {
+            _isLoadingWordOptions = false;
+            _dynLoadingNotifier.value = false;
+          }
+          return;
+        }
 
         // Exclude words already visible in static rows so dynamic options are distinct
         final excludeStatic =
@@ -11276,28 +12543,27 @@ VARIETY RULES:
 
         final selectedCategory = _selectedCategory;
         String categoryLabel;
+        String? categoryCustomPrompt;
         if (selectedCategory != null &&
             _shouldUseDefaultHomeStarterWords(selectedCategory)) {
           // Home board with no explicit word options — use the built-in AAC
-          // starter-word prompt.
-          categoryLabel = _getDefaultHomeStarterPrompt(maxWordOptions);
-        } else if (selectedCategory?.llmPrompt != null &&
-            selectedCategory!.llmPrompt!.isNotEmpty) {
-          // Board has a configured LLM prompt — use it verbatim so the dynamic
-          // row respects the board's intended vocabulary (e.g. the Home board's
-          // "Generate high-frequency starters…" prompt rather than just the
-          // label "home", which produces literal house-related words).
-          categoryLabel = selectedCategory.llmPrompt!;
-          if (currentMood != 'No Mood Selected' && currentMood.isNotEmpty) {
-            categoryLabel =
-                '$categoryLabel appropriate for someone feeling $currentMood';
-          }
+          // starter-word prompt as custom_prompt so the server generates the
+          // right words (not as the category name which produces house vocab).
+          categoryLabel = selectedCategory.label;
+          categoryCustomPrompt = _getDefaultHomeStarterPrompt(maxWordOptions);
         } else {
+          // Always pass the category label as the category identifier.
+          // When the board has an llm_prompt (or words_prompt), send it as
+          // custom_prompt — matching the web app's words_prompt || llm_prompt
+          // fallback — so the server generates category-specific words.
           categoryLabel = selectedCategory?.label ?? '';
-          if (currentMood != 'No Mood Selected' && currentMood.isNotEmpty) {
-            categoryLabel =
-                '${selectedCategory?.label ?? ''} appropriate for someone feeling $currentMood';
-          }
+          categoryCustomPrompt =
+              selectedCategory?.wordsPrompt ??
+              selectedCategory?.llmPrompt;
+        }
+        if (currentMood != 'No Mood Selected' && currentMood.isNotEmpty) {
+          categoryLabel =
+              '$categoryLabel appropriate for someone feeling $currentMood';
         }
 
         wordOpts = await _tapService.generateCategoryWords(
@@ -11306,6 +12572,7 @@ VARIETY RULES:
           excludeWords: excludeStatic,
           maxOptions: maxWordOptions,
           currentMood: currentMood != 'No Mood Selected' ? currentMood : null,
+          customPrompt: categoryCustomPrompt,
         );
         debugPrint(
           '[TapInterface] Category Words API returned ${wordOpts.length} words',
@@ -11317,14 +12584,29 @@ VARIETY RULES:
         );
         final currentMood =
             userSettings.settings?.currentMood ?? 'No Mood Selected';
-        final maxWordOptions = userSettings.settings?.freestyleOptions ?? 29;
+        // In question mode every row is dynamic, so fill the whole grid.
+        final maxWordOptions = _currentQuestion.isNotEmpty
+            ? (_wordsSlotCount(userSettings.settings) - 1).clamp(1, 200)
+            : _tapDynamicWordCount(userSettings.settings);
+
+        if (maxWordOptions <= 0) {
+          debugPrint('[TapInterface] dynamicRows=0 — skipping freestyle API call.');
+          if (mounted && _selectedCategory?.id == snapshotCategoryId) {
+            _isLoadingWordOptions = false;
+            _dynLoadingNotifier.value = false;
+          }
+          return;
+        }
 
         final excludeStatic =
             _displayedStaticButtonLabels(userSettings.settings);
 
         String ctx;
         if (_selectedCategory != null) {
-          ctx = _selectedCategory?.label ?? '';
+          final llmPrompt = _selectedCategory?.llmPrompt;
+          ctx = (llmPrompt != null && llmPrompt.isNotEmpty)
+              ? llmPrompt
+              : (_selectedCategory?.label ?? '');
         } else if (_buildSpaceText.isNotEmpty) {
           ctx = _buildSpaceText;
         } else {
@@ -11373,7 +12655,9 @@ VARIETY RULES:
           context,
           listen: false,
         );
-        final requiredWordCount = userSettings.settings?.freestyleOptions ?? 29;
+        final requiredWordCount = _currentQuestion.isNotEmpty
+            ? (_wordsSlotCount(userSettings.settings) - 1).clamp(1, 200)
+            : _tapDynamicWordCount(userSettings.settings);
 
         List<String> newOptions;
         if (wordOpts.isNotEmpty) {
@@ -11423,9 +12707,11 @@ VARIETY RULES:
             ).settings?.userLanguage ??
             'en-US';
         _categoryAIWordCache['${snapshotCategoryId}|$locale'] = newOptions;
+        _isLoadingWordOptions = false;
+        _dynLoadingNotifier.value = false;
         setState(() {
           _wordOptions = newOptions;
-          _isLoadingWordOptions = false;
+          if (_wordOptions.isNotEmpty) _wordOptionsVersion++;
           _globalSessionLoggedMissingImages.clear();
         });
         // If a variant mode was active when dynamic words loaded, process the
@@ -11440,6 +12726,82 @@ VARIETY RULES:
         debugPrint(
           '[TapInterface] First 5 UI options: ${_wordOptions.take(5).toList()}',
         );
+
+        // Prefetch images for updated word options, then log confirmed misses.
+        if (newOptions.isNotEmpty) {
+          final preloadWords = List<String>.from(newOptions);
+          final preloadKeywords = Map<String, List<String>>.from(_wordKeywords);
+          final resolvedLocale = locale;
+          Future.microtask(() async {
+            var uid = userSettings.userId ?? '';
+            var token = userSettings.idToken ?? '';
+            if (uid.isEmpty || token.isEmpty) {
+              try {
+                final authUser = FirebaseAuth.instance.currentUser;
+                if (authUser != null) {
+                  if (uid.isEmpty) uid = authUser.uid;
+                  if (token.isEmpty) token = (await authUser.getIdToken()) ?? '';
+                  if (uid.isNotEmpty) userSettings.userId = uid;
+                  if (token.isNotEmpty) userSettings.idToken = token;
+                }
+              } catch (e) {
+                debugPrint('[TapInterface] _loadWordOptionsBasedOnBuildSpace prefetch auth: $e');
+              }
+            }
+            if (uid.isNotEmpty && token.isNotEmpty) {
+              PictogramService().setUserContext(
+                userId: uid,
+                idToken: token,
+                mascot: userSettings.settings?.mascot,
+              );
+            }
+            debugPrint('🖼️🔍 BUILD-SPACE PREFETCH START: ${preloadWords.length} words');
+            try {
+              await PictogramService().prefetchButtonPictograms(
+                words: preloadWords,
+                keywordMap: preloadKeywords,
+                locale: resolvedLocale,
+                maxItems: preloadWords.length,
+              );
+            } catch (e) {
+              debugPrint('[TapInterface] _loadWordOptionsBasedOnBuildSpace prefetch error: $e');
+            }
+            final resolvedUrls = <String, String>{};
+            for (final word in preloadWords) {
+              final url = PictogramService().getCachedImageUrl(word, locale: resolvedLocale, exactOnly: true);
+              if (url != null) resolvedUrls[word] = url;
+            }
+            if (mounted) setState(() { _wordOptionImageUrls = resolvedUrls; _optionsRebuildKey++; });
+
+            var accumulated = <String, String>{ ...resolvedUrls };
+            for (final retryDelaySecs in [5, 10, 20]) {
+              final missing = preloadWords.where((w) => !accumulated.containsKey(w)).toList();
+              if (missing.isEmpty || !mounted) break;
+              await Future.delayed(Duration(seconds: retryDelaySecs));
+              if (!mounted) break;
+              try {
+                await PictogramService().prefetchButtonPictograms(
+                  words: missing,
+                  keywordMap: preloadKeywords,
+                  locale: resolvedLocale,
+                  maxItems: missing.length,
+                );
+              } catch (e) {
+                debugPrint('[TapInterface] _loadWordOptionsBasedOnBuildSpace retry error: $e');
+              }
+              final retryUrls = <String, String>{};
+              for (final word in missing) {
+                final url = PictogramService().getCachedImageUrl(word, locale: resolvedLocale, exactOnly: true);
+                if (url != null) retryUrls[word] = url;
+              }
+              if (retryUrls.isNotEmpty) {
+                accumulated = { ...accumulated, ...retryUrls };
+                if (mounted) setState(() { _wordOptionImageUrls = accumulated; _optionsRebuildKey++; });
+              }
+            }
+            _logConfirmedMissingWordImages(preloadWords, accumulated);
+          });
+        }
       }
     } catch (e) {
       debugPrint('[TapInterface] ERROR in word options refresh: $e');
@@ -11449,13 +12811,17 @@ VARIETY RULES:
           context,
           listen: false,
         );
-        final requiredWordCount = userSettings.settings?.freestyleOptions ?? 29;
+        final requiredWordCount = _currentQuestion.isNotEmpty
+            ? (_wordsSlotCount(userSettings.settings) - 1).clamp(1, 200)
+            : _tapDynamicWordCount(userSettings.settings);
         final localizedFallback = await _localizeWordsForUserIfNeeded(
           _getFallbackWordOptions().take(requiredWordCount).toList(),
         );
+        _isLoadingWordOptions = false;
+        _dynLoadingNotifier.value = false;
         setState(() {
           _wordOptions = localizedFallback;
-          _isLoadingWordOptions = false;
+          if (_wordOptions.isNotEmpty) _wordOptionsVersion++;
         });
       }
     }
@@ -12041,170 +13407,55 @@ VARIETY RULES:
     }
   }
 
-  List<String> _getTapInterfaceLetterOrder() {
-    final settings = Provider.of<UserSettingsProvider>(
+  void _handleMoreOptions() {
+    final userSettings = Provider.of<UserSettingsProvider>(
       context,
       listen: false,
-    ).settings;
-    final letterOrder = settings?.spellLetterOrder ?? 'alphabetical';
-
-    if (letterOrder == 'qwerty') {
-      return [
-        'Q',
-        'W',
-        'E',
-        'R',
-        'T',
-        'Y',
-        'U',
-        'I',
-        'O',
-        'P',
-        'A',
-        'S',
-        'D',
-        'F',
-        'G',
-        'H',
-        'J',
-        'K',
-        'L',
-        'Z',
-        'X',
-        'C',
-        'V',
-        'B',
-        'N',
-        'M',
-      ];
-    }
-
-    if (letterOrder == 'frequency') {
-      return 'ETAOINSHRDLUCMFWGYPBVKXJZQ'.split('');
-    }
-
-    return 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
-  }
-
-  Future<void> _showSomethingElseAZDialog() async {
-    if (_selectedCategory == null) {
-      setState(() {
-        _showStatusToast('Select a category first to use Something Else A-Z.');
-      });
-      return;
-    }
-
-    if (!(_selectedCategory?.hasLLMQuery ?? false)) {
-      setState(() {
-        _statusMessage =
-            'Something Else A-Z is available only for AI-generated boards.';
-      });
-      return;
-    }
-
-    final letters = _getTapInterfaceLetterOrder();
-    final selectedLetter = await showDialog<String>(
-      context: context,
-      builder: (dialogContext) {
-        return Dialog(
-          child: Container(
-            width: MediaQuery.of(dialogContext).size.width * 0.9,
-            padding: const EdgeInsets.all(16),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Row(
-                  children: [
-                    const Expanded(
-                      child: Text(
-                        'Choose a Letter',
-                        style: TextStyle(
-                          fontSize: 20,
-                          fontWeight: FontWeight.bold,
-                        ),
-                      ),
-                    ),
-                    IconButton(
-                      icon: const Icon(Icons.close),
-                      onPressed: () => Navigator.of(dialogContext).pop(),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                SizedBox(
-                  width: double.infinity,
-                  child: LayoutBuilder(
-                    builder: (context, constraints) {
-                      const columns = 5;
-                      const spacing = 6.0;
-                      final tileSize =
-                          ((constraints.maxWidth - ((columns - 1) * spacing)) /
-                                  columns)
-                              .clamp(58.0, 82.0)
-                              .toDouble();
-
-                      return Wrap(
-                        spacing: spacing,
-                        runSpacing: spacing,
-                        children: letters
-                            .map(
-                              (letter) => SizedBox(
-                                width: tileSize,
-                                height: tileSize,
-                                child: ElevatedButton(
-                                  onPressed: () =>
-                                      Navigator.of(dialogContext).pop(letter),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor:
-                                        Colors.blue[50] ?? Colors.blue.shade50,
-                                    foregroundColor: Colors.black87,
-                                    side: BorderSide(
-                                      color:
-                                          Colors.blue[300] ??
-                                          Colors.blue.shade300,
-                                    ),
-                                    shape: RoundedRectangleBorder(
-                                      borderRadius: BorderRadius.circular(8),
-                                    ),
-                                    elevation: 0,
-                                    padding: EdgeInsets.zero,
-                                    minimumSize: Size(tileSize, tileSize),
-                                  ),
-                                  child: Text(
-                                    letter,
-                                    style: TextStyle(
-                                      fontSize: (tileSize * 0.42).clamp(
-                                        22.0,
-                                        32.0,
-                                      ),
-                                      fontWeight: FontWeight.w700,
-                                      height: 1,
-                                    ),
-                                  ),
-                                ),
-                              ),
-                            )
-                            .toList(),
-                      );
-                    },
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
     );
+    // Cycle to next page of static pool buttons.
+    final sorted = _sortedBoardWordOptions;
+    final poolSize = sorted.length;
+    if (poolSize > 0) {
+      final staticSlots = _staticWordSlotCount(userSettings.settings);
+      final totalSlots = _wordsSlotCount(userSettings.settings);
+      final maxPage = (totalSlots - 1).clamp(1, poolSize);
+      final slotsPerPage = staticSlots.clamp(1, maxPage);
+      final newOffset = _currentStaticPageOffset + slotsPerPage;
+      final nextOffset = newOffset >= poolSize ? 0 : newOffset;
 
-    if (selectedLetter == null || selectedLetter.isEmpty) {
-      return;
+      debugPrint(
+        '📄 More Options: poolSize=$poolSize staticSlots=$staticSlots '
+        'slotsPerPage=$slotsPerPage offset=$_currentStaticPageOffset → $nextOffset '
+        'first="${sorted[nextOffset].text}"'
+      );
+
+      setState(() {
+        // Save pre-More-Options state on first tap so Go Back can restore it.
+        _moreOptionsReturnOffset ??= _currentStaticPageOffset;
+        _moreOptionsReturnWordOptions ??= List<String>.from(_wordOptions);
+        _currentStaticPageOffset = nextOffset;
+      });
+
+      // Pre-warm images for the NEXT page in the background.
+      final nextNextOffset = nextOffset + slotsPerPage;
+      if (nextNextOffset < poolSize) {
+        final nextPageButtons = sorted.sublist(
+          nextNextOffset,
+          (nextNextOffset + slotsPerPage).clamp(0, poolSize),
+        );
+        if (nextPageButtons.isNotEmpty) {
+          unawaited(Future.microtask(() => _warmVisibleWordImages(
+            words: const [],
+            wordKeywords: const {},
+            boardButtons: nextPageButtons,
+          )));
+        }
+      }
     }
-
-    setState(() {
-      _activeWordLetterFilter = selectedLetter.toLowerCase();
-    });
-
-    await _loadMoreWordOptions(startsWithLetter: selectedLetter);
+    // Refresh dynamic LLM options if the category has an LLM query.
+    if (_selectedCategory?.hasLLMQuery ?? false) {
+      _loadMoreWordOptions();
+    }
   }
 
   Future<void> _loadMoreWordOptions({String? startsWithLetter}) async {
@@ -12276,7 +13527,10 @@ VARIETY RULES:
 
       final currentMood =
           userSettings.settings?.currentMood ?? 'No Mood Selected';
-      final requiredWordCount = userSettings.settings?.freestyleOptions ?? 29;
+      // In question mode every row is dynamic; use full grid size.
+      final requiredWordCount = _currentQuestion.isNotEmpty
+          ? (_wordsSlotCount(userSettings.settings) - 1).clamp(1, 200)
+          : _tapDynamicWordCount(userSettings.settings);
 
       // Question mode only takes priority when not letter-filtering by category.
       if (!isLetterMode && _currentQuestion.isNotEmpty) {
@@ -12332,7 +13586,7 @@ VARIETY RULES:
 
         final currentMood =
             userSettings.settings?.currentMood ?? 'No Mood Selected';
-        final requiredWordCount = userSettings.settings?.freestyleOptions ?? 29;
+        final requiredWordCount = _tapDynamicWordCount(userSettings.settings);
         final selectedCategory = _selectedCategory;
         final letterInstruction = isLetterMode
             ? ' Generate many single-word options that start with letter "${normalizedLetter.toUpperCase()}". Return only words that begin with that letter.'
@@ -12444,7 +13698,7 @@ VARIETY RULES:
               '$context appropriate for someone feeling $currentMood';
         }
 
-        final requiredWordCount = userSettings.settings?.freestyleOptions ?? 29;
+        final requiredWordCount = _tapDynamicWordCount(userSettings.settings);
 
         newWordOptions = await _tapService.generateFreestyleOptions(
           context: contextWithMood,
@@ -12616,7 +13870,7 @@ VARIETY RULES:
           context,
           listen: false,
         );
-        final requiredWordCount = userSettings.settings?.freestyleOptions ?? 29;
+        final requiredWordCount = _tapDynamicWordCount(userSettings.settings);
         newWordOptions = filteredOptions.take(requiredWordCount).toList();
         debugPrint(
           '[TapInterface] Final fallback selection: ${newWordOptions.length} words',
@@ -12714,6 +13968,7 @@ VARIETY RULES:
         _wordOptions = List<String>.from(
           newWordOptions.take(requiredWordCount),
         );
+        if (_wordOptions.isNotEmpty) _wordOptionsVersion++;
         _wordKeywords = localizedNewWordKeywords;
 
         // CRITICAL DEBUG: Check for duplicates in final word options
@@ -12764,6 +14019,83 @@ VARIETY RULES:
           '📋 Cleared session-tracked missing images for fresh word options',
         );
       });
+
+      // Prefetch images for the new word options, then log any that remain missing.
+      if (newWordOptions.isNotEmpty) {
+        final preloadWords = List<String>.from(newWordOptions);
+        final preloadKeywords = Map<String, List<String>>.from(localizedNewWordKeywords);
+        final resolvedLocale =
+            _normalizeLocaleTag(userSettings.settings?.userLanguage) ?? 'en-US';
+        Future.microtask(() async {
+          var uid = userSettings.userId ?? '';
+          var token = userSettings.idToken ?? '';
+          if (uid.isEmpty || token.isEmpty) {
+            try {
+              final authUser = FirebaseAuth.instance.currentUser;
+              if (authUser != null) {
+                if (uid.isEmpty) uid = authUser.uid;
+                if (token.isEmpty) token = (await authUser.getIdToken()) ?? '';
+                if (uid.isNotEmpty) userSettings.userId = uid;
+                if (token.isNotEmpty) userSettings.idToken = token;
+              }
+            } catch (e) {
+              debugPrint('[TapInterface] _loadMoreWordOptions prefetch auth fallback: $e');
+            }
+          }
+          if (uid.isNotEmpty && token.isNotEmpty) {
+            PictogramService().setUserContext(
+              userId: uid,
+              idToken: token,
+              mascot: userSettings.settings?.mascot,
+            );
+          }
+          try {
+            await PictogramService().prefetchButtonPictograms(
+              words: preloadWords,
+              keywordMap: preloadKeywords,
+              locale: resolvedLocale,
+              maxItems: preloadWords.length,
+            );
+          } catch (e) {
+            debugPrint('[TapInterface] _loadMoreWordOptions prefetch error: $e');
+          }
+          final resolvedUrls = <String, String>{};
+          for (final word in preloadWords) {
+            final url = PictogramService().getCachedImageUrl(word, locale: resolvedLocale, exactOnly: true);
+            if (url != null) resolvedUrls[word] = url;
+          }
+          if (mounted) setState(() { _wordOptionImageUrls = resolvedUrls; _optionsRebuildKey++; });
+
+          var accumulated = <String, String>{ ...resolvedUrls };
+          for (final retryDelaySecs in [5, 10, 20]) {
+            final missing = preloadWords.where((w) => !accumulated.containsKey(w)).toList();
+            if (missing.isEmpty || !mounted) break;
+            await Future.delayed(Duration(seconds: retryDelaySecs));
+            if (!mounted) break;
+            try {
+              await PictogramService().prefetchButtonPictograms(
+                words: missing,
+                keywordMap: preloadKeywords,
+                locale: resolvedLocale,
+                maxItems: missing.length,
+              );
+            } catch (e) {
+              debugPrint('[TapInterface] _loadMoreWordOptions retry prefetch error: $e');
+            }
+            final retryUrls = <String, String>{};
+            for (final word in missing) {
+              final url = PictogramService().getCachedImageUrl(word, locale: resolvedLocale, exactOnly: true);
+              if (url != null) retryUrls[word] = url;
+            }
+            if (retryUrls.isNotEmpty) {
+              accumulated = { ...accumulated, ...retryUrls };
+              if (mounted) setState(() { _wordOptionImageUrls = accumulated; _optionsRebuildKey++; });
+            }
+          }
+          _logConfirmedMissingWordImages(preloadWords, accumulated);
+        });
+      }
+
       if (!newWordOptions.isNotEmpty && isLetterMode) {
         _showStatusToast('No more category words starting with "${normalizedLetter.toUpperCase()}"');
       } else if (!newWordOptions.isNotEmpty) {
@@ -12773,7 +14105,7 @@ VARIETY RULES:
       }
     } catch (e) {
       debugPrint('[TapInterface] ERROR loading different word options: $e');
-      final requiredWordCount = userSettings.settings?.freestyleOptions ?? 29;
+      final requiredWordCount = _tapDynamicWordCount(userSettings.settings);
       final localizedFallback = await _localizeWordsForUserIfNeeded(
         (_getFallbackOptionsForCategory(
               _selectedCategory?.label ?? 'generic',
@@ -12789,6 +14121,7 @@ VARIETY RULES:
       );
       setState(() {
         _wordOptions = localizedFallback;
+        if (_wordOptions.isNotEmpty) _wordOptionsVersion++;
         _isLoadingWordOptions = false;
       });
       _showStatusToast(isLetterMode
@@ -12821,8 +14154,460 @@ VARIETY RULES:
         : Colors.grey[100] ?? Colors.grey;
 
     if (_tapConfig == null) {
-      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+      return Scaffold(
+        backgroundColor: const Color(0xFF002244),
+        body: SafeArea(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 40),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  AnimatedBuilder(
+                    animation: _splashSpinController,
+                    builder: (context, child) => Transform.rotate(
+                      angle: _splashSpinController.value * 2.0 * 3.14159,
+                      child: child,
+                    ),
+                    child: Image.asset(
+                      'assets/speech_bubble_spinner.png',
+                      width: 80,
+                      height: 80,
+                      color: Colors.white,
+                      colorBlendMode: BlendMode.srcIn,
+                    ),
+                  ),
+                  const SizedBox(height: 40),
+                  Stack(
+                    children: [
+                      Text(
+                        'Welcome to Bravo!',
+                        style: TextStyle(
+                          fontSize: 32,
+                          fontWeight: FontWeight.bold,
+                          foreground: Paint()
+                            ..style = PaintingStyle.stroke
+                            ..strokeWidth = 3
+                            ..color = Colors.white,
+                        ),
+                      ),
+                      const Text(
+                        'Welcome to Bravo!',
+                        style: TextStyle(
+                          fontSize: 32,
+                          fontWeight: FontWeight.bold,
+                          color: Color(0xFFFB4F14),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 48),
+                  SizedBox(
+                    width: 260,
+                    child: LinearProgressIndicator(
+                      value: _loadingProgress,
+                      minHeight: 6,
+                      backgroundColor: Colors.white24,
+                      valueColor: const AlwaysStoppedAnimation<Color>(Colors.white),
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                  ),
+                  const SizedBox(height: 20),
+                  Text(
+                    _loadingMessage,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      color: Colors.white70,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    '${(_loadingProgress * 100).toInt()}%',
+                    style: const TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      color: Colors.white54,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
     }
+
+    // ─── Responsive sizing ───────────────────────────────────────────────────
+    // shortestSide < 600 covers all iPhones in portrait and landscape.
+    final bool isCompact = MediaQuery.of(context).size.shortestSide < 600;
+    final double abBarPadV   = isCompact ? 3.0 : 6.0;
+    final double abHomeH     = isCompact ? 40.0 : 52.0;
+    final double abHomeW     = isCompact ? 42.0 : 68.0;
+    final double abHomeIcon  = isCompact ? 24.0 : 38.0;
+    final double abBtnH      = isCompact ? 38.0 : 44.0;
+    final double abBtnW      = isCompact ? 36.0 : 64.0;
+    final double abSpkIcon   = isCompact ? 21.0 : 31.0;
+    final double abActIcon   = isCompact ? 21.0 : 34.0;
+    final double abFieldH    = isCompact ? 34.0 : 44.0;
+    final double abFieldFont = isCompact ? 13.0 : 20.0;
+    final double abVarFont   = isCompact ? 12.0 : 20.0;
+    final double abSecBtnH   = abBtnH;
+
+    // ─── Action bar button widgets (defined once, composed in 1 or 2 rows) ──
+    final bool homeIsShowMeTarget = _isHomeBtnShowMeTarget;
+    final Widget abHome = Tooltip(
+      triggerMode: TooltipTriggerMode.manual,
+      message: 'Home',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _withSensitivity(() {
+          if (_showMeActive && homeIsShowMeTarget) {
+            _advanceShowMe();
+            // Navigate home without resetting speech history or board state.
+            // forceNavigation bypasses the Show Me intercept gate (we already
+            // advanced the action index above).
+            final homeBoardId =
+                (_tapBoards?.boardSettings.homeBoardId ?? '').trim();
+            final homeTarget = homeBoardId.isNotEmpty
+                ? _resolveTargetCategory(homeBoardId)
+                : null;
+            if (homeTarget != null) {
+              _handleCategoryTap(homeTarget, forceNavigation: true);
+            }
+          } else {
+            _resetPage();
+          }
+        }),
+        child: Container(
+          height: abHomeH,
+          width: abHomeW,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                Colors.yellow[600] ?? Colors.yellow.shade600,
+                Colors.yellow[800] ?? Colors.yellow.shade800,
+              ],
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+            ),
+            borderRadius: BorderRadius.circular(6),
+            boxShadow: homeIsShowMeTarget
+                ? [
+                    BoxShadow(
+                      color: _showMeGlowColor,
+                      blurRadius: 16,
+                      spreadRadius: 2,
+                    ),
+                  ]
+                : [
+                    BoxShadow(
+                      color: Colors.yellow.withValues(alpha: 0.6),
+                      offset: const Offset(0, 2),
+                      blurRadius: 6,
+                    ),
+                  ],
+            border: homeIsShowMeTarget
+                ? Border.all(color: _showMeGlowColor, width: 3)
+                : null,
+          ),
+          child: Center(child: Icon(Icons.home, size: abHomeIcon, color: Colors.brown[900])),
+        ),
+      ),
+    );
+
+    final Color speechFieldBorderColor = _showMeAwaitingFinalTap
+        ? _showMeGlowColor
+        : (Colors.green[600] ?? Colors.green.shade600);
+    final Widget abSpeechField = Container(
+      height: abFieldH,
+      decoration: BoxDecoration(
+        border: Border(
+          left: BorderSide(color: speechFieldBorderColor, width: 16),
+          right: BorderSide(color: speechFieldBorderColor, width: 16),
+          top: BorderSide(color: speechFieldBorderColor, width: 3),
+          bottom: BorderSide(color: speechFieldBorderColor, width: 3),
+        ),
+        borderRadius: BorderRadius.circular(8),
+        color: _showMeAwaitingFinalTap
+            ? _showMeGlowColor.withValues(alpha: 0.08)
+            : Colors.grey[50],
+      ),
+      child: AbsorbPointer(
+        child: Center(
+          child: TextField(
+            controller: _speechHistoryController,
+            readOnly: true,
+            showCursor: false,
+            enableInteractiveSelection: false,
+            style: TextStyle(fontSize: abFieldFont, fontWeight: FontWeight.w500),
+            maxLines: 1,
+            decoration: InputDecoration(
+              hintText: 'Build your message here...',
+              hintStyle: TextStyle(fontSize: abFieldFont, color: Colors.grey),
+              border: InputBorder.none,
+              isCollapsed: true,
+              contentPadding: EdgeInsets.symmetric(horizontal: 12),
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final Widget abSpeak = Tooltip(
+      triggerMode: TooltipTriggerMode.manual,
+      message: 'Auto Clean + Speak',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _withSensitivity(_handleAutoCleanSpeakButtonPress),
+        child: Container(
+          height: abBtnH,
+          width: abBtnW,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                Colors.purple[400] ?? Colors.purple.shade400,
+                Colors.purple[600] ?? Colors.purple.shade600,
+              ],
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+            ),
+            borderRadius: BorderRadius.circular(6),
+            boxShadow: [
+              BoxShadow(color: Colors.purple.withValues(alpha: 0.3), offset: const Offset(0, 2), blurRadius: 4),
+            ],
+          ),
+          child: Center(child: Icon(Icons.auto_fix_high, size: abSpkIcon, color: Colors.white)),
+        ),
+      ),
+    );
+
+    final Widget abBackspace = Tooltip(
+      triggerMode: TooltipTriggerMode.manual,
+      message: 'Backspace',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _withSensitivity(_backspaceSpeechHistory),
+        child: Container(
+          height: abBtnH,
+          width: abBtnW,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                Colors.amber[600] ?? Colors.amber.shade600,
+                Colors.amber[800] ?? Colors.amber.shade800,
+              ],
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+            ),
+            borderRadius: BorderRadius.circular(6),
+            boxShadow: [
+              BoxShadow(color: Colors.amber.withValues(alpha: 0.3), offset: const Offset(0, 2), blurRadius: 4),
+            ],
+          ),
+          child: Center(child: Icon(Icons.backspace, size: abActIcon, color: Colors.white)),
+        ),
+      ),
+    );
+
+    final Widget abClear = Tooltip(
+      triggerMode: TooltipTriggerMode.manual,
+      message: 'Clear Text',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _withSensitivity(_clearSpeechText),
+        child: Container(
+          height: abBtnH,
+          width: abBtnW,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                Colors.red[400] ?? Colors.red.shade400,
+                Colors.red[600] ?? Colors.red.shade600,
+              ],
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+            ),
+            borderRadius: BorderRadius.circular(6),
+            boxShadow: [
+              BoxShadow(color: Colors.red.withValues(alpha: 0.3), offset: const Offset(0, 2), blurRadius: 4),
+            ],
+          ),
+          child: Center(child: Icon(Icons.close, size: abActIcon, color: Colors.white)),
+        ),
+      ),
+    );
+
+    final Widget abAudioSurf = Tooltip(
+      triggerMode: TooltipTriggerMode.manual,
+      message: _isAudioSurfingEnabled ? 'Audio Surfing: ON' : 'Audio Surfing: OFF',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _withSensitivity(() {
+          setState(() {
+            _isAudioSurfingEnabled = !_isAudioSurfingEnabled;
+            _audioSurfingPreviewOptionKey = null;
+          });
+          _showStatusToast(_isAudioSurfingEnabled
+              ? 'Audio Surfing enabled. Tap once to preview, tap again to select.'
+              : 'Audio Surfing disabled.');
+        }),
+        child: Container(
+          height: abSecBtnH,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: _isAudioSurfingEnabled
+                  ? [Colors.teal[400] ?? Colors.teal.shade400, Colors.teal[600] ?? Colors.teal.shade600]
+                  : [Colors.grey[400] ?? Colors.grey.shade400, Colors.grey[600] ?? Colors.grey.shade600],
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+            ),
+            borderRadius: BorderRadius.circular(6),
+            boxShadow: [
+              BoxShadow(
+                color: (_isAudioSurfingEnabled ? Colors.teal : Colors.grey).withValues(alpha: 0.3),
+                offset: const Offset(0, 2),
+                blurRadius: 4,
+              ),
+            ],
+          ),
+          child: Center(child: Icon(
+            _isAudioSurfingEnabled ? Icons.surround_sound : Icons.hearing,
+            size: abSpkIcon,
+            color: Colors.white,
+          )),
+        ),
+      ),
+    );
+
+    final Widget abHistory = Tooltip(
+      triggerMode: TooltipTriggerMode.manual,
+      message: 'History',
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: _withSensitivity(_showSpeechHistoryDialog),
+        child: Container(
+          height: abSecBtnH,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [Colors.blue[400] ?? Colors.blue.shade400, Colors.blue[600] ?? Colors.blue.shade600],
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+            ),
+            borderRadius: BorderRadius.circular(6),
+            boxShadow: [
+              BoxShadow(color: Colors.blue.withValues(alpha: 0.3), offset: const Offset(0, 2), blurRadius: 4),
+            ],
+          ),
+          child: Center(child: Icon(Icons.menu_book, size: abActIcon, color: Colors.white)),
+        ),
+      ),
+    );
+
+    final Widget abPastTense = Tooltip(
+      triggerMode: TooltipTriggerMode.manual,
+      message: _variantMode == 'past' ? 'Past: ON (tap to disable)' : 'Past Tense Mode',
+      child: GestureDetector(
+        onTapDown: (_) => _actionBarPointerDownTime = DateTime.now(),
+        onTap: _withSensitivity(() {
+          if (_showMeActive) {
+            if (!_showMeInterceptModifier(_ShowMeActionType.selectPastTense)) return;
+          }
+          final newMode = _variantMode == 'past' ? null : 'past';
+          setState(() => _variantMode = newMode);
+          if (newMode != null) _applyVariantModeToCurrentBoard(newMode);
+        }),
+        child: Container(
+          height: abSecBtnH,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: _variantMode == 'past'
+                  ? [const Color(0xFFea580c), const Color(0xFFc2410c)]
+                  : [const Color(0xFFf97316), const Color(0xFFea580c)],
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+            ),
+            borderRadius: BorderRadius.circular(6),
+            border: _isPastTenseShowMeTarget
+                ? Border.all(color: _showMeGlowColor, width: 2)
+                : null,
+            boxShadow: [
+              BoxShadow(
+                color: _isPastTenseShowMeTarget
+                    ? _showMeGlowColor.withValues(alpha: 0.6)
+                    : const Color(0xFFea580c).withValues(alpha: _variantMode == 'past' ? 0.5 : 0.25),
+                offset: const Offset(0, 2),
+                blurRadius: _isPastTenseShowMeTarget ? 8 : 4,
+              ),
+            ],
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            '-d',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: abVarFont,
+              fontWeight: FontWeight.bold,
+              fontFamily: 'monospace',
+              letterSpacing: -0.5,
+            ),
+          ),
+        ),
+      ),
+    );
+
+    final Widget abPlural = Tooltip(
+      triggerMode: TooltipTriggerMode.manual,
+      message: _variantMode == 'plural' ? 'Plural: ON (tap to disable)' : 'Plural Mode',
+      child: GestureDetector(
+        onTapDown: (_) => _actionBarPointerDownTime = DateTime.now(),
+        onTap: _withSensitivity(() {
+          if (_showMeActive) {
+            if (!_showMeInterceptModifier(_ShowMeActionType.selectPlural)) return;
+          }
+          final newMode = _variantMode == 'plural' ? null : 'plural';
+          setState(() => _variantMode = newMode);
+          if (newMode != null) _applyVariantModeToCurrentBoard(newMode);
+        }),
+        child: Container(
+          height: abSecBtnH,
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: _variantMode == 'plural'
+                  ? [const Color(0xFF2563eb), const Color(0xFF1d4ed8)]
+                  : [const Color(0xFF3b82f6), const Color(0xFF2563eb)],
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+            ),
+            borderRadius: BorderRadius.circular(6),
+            border: _isPluralShowMeTarget
+                ? Border.all(color: _showMeGlowColor, width: 2)
+                : null,
+            boxShadow: [
+              BoxShadow(
+                color: _isPluralShowMeTarget
+                    ? _showMeGlowColor.withValues(alpha: 0.6)
+                    : const Color(0xFF2563eb)
+                          .withValues(alpha: _variantMode == 'plural' ? 0.5 : 0.25),
+                offset: const Offset(0, 2),
+                blurRadius: _isPluralShowMeTarget ? 8 : 4,
+              ),
+            ],
+          ),
+          alignment: Alignment.center,
+          child: Text(
+            '-S',
+            style: TextStyle(
+              color: Colors.white,
+              fontSize: abVarFont,
+              fontWeight: FontWeight.bold,
+              fontFamily: 'monospace',
+              letterSpacing: -0.5,
+            ),
+          ),
+        ),
+      ),
+    );
 
     return Scaffold(
       backgroundColor: backgroundColor,
@@ -12832,491 +14617,58 @@ VARIETY RULES:
           SafeArea(
             child: Column(
               children: [
+                // Small gutter on compact (phone) screens so the action bar
+                // buttons sit away from the iOS top-edge touch dead zone.
+                if (isCompact) const SizedBox(height: 24),
+
                 // --- TOP SECTION: Speech History (Build Space) ---
-                Container(
-                  padding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 6,
+                Listener(
+                  // Wraps the full Container (including padding) so pointer-down
+                  // is recorded even when tapping near the edges of the bar.
+                  behavior: HitTestBehavior.opaque,
+                  onPointerDown: (_) =>
+                      _actionBarPointerDownTime = DateTime.now(),
+                  child: Container(
+                  padding: EdgeInsets.only(
+                    left: 8,
+                    right: 8,
+                    top: isCompact ? 8.0 : 6.0,
+                    bottom: abBarPadV,
                   ),
                   decoration: BoxDecoration(
                     color: Colors.white,
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.grey.withOpacity(0.2),
+                        color: Colors.grey.withValues(alpha: 0.2),
                         offset: const Offset(0, 1),
                         blurRadius: 3,
                       ),
                     ],
                   ),
-                  child: Listener(
-                    // Single pointer-down tracker for the whole action bar.
-                    // _withSensitivity() reads this timestamp to enforce the
-                    // minimum tap hold duration across all action bar buttons.
-                    onPointerDown: (_) =>
-                        _actionBarPointerDownTime = DateTime.now(),
-                    child: Row(
-                    children: [
-                      // Home Button (Icon Only) - Returns to original page
-                      Tooltip(
-                        triggerMode: TooltipTriggerMode.manual,
-                        message: 'Home',
-                        child: Container(
-                          height: 44,
-                          width: 55,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [
-                                Colors.blueGrey[300] ??
-                                    Colors.blueGrey.shade300,
-                                Colors.blueGrey[500] ??
-                                    Colors.blueGrey.shade500,
-                              ],
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                            ),
-                            borderRadius: BorderRadius.circular(6),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.blueGrey.withOpacity(0.25),
-                                offset: const Offset(0, 2),
-                                blurRadius: 4,
-                              ),
-                            ],
-                          ),
-                          child: IconButton(
-                            onPressed: _withSensitivity(_resetPage),
-                            icon: const Icon(
-                              Icons.home,
-                              size: 31,
-                              color: Colors.white,
-                            ),
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(),
-                          ),
-                        ),
-                      ),
-
-                      const SizedBox(width: 8),
-
-                      // Speech History Text Field (serves as build space)
-                      Expanded(
-                        child: Container(
-                          height: 44,
-                          decoration: BoxDecoration(
-                            border: Border.all(
-                              color: Colors.grey[300] ?? Colors.grey.shade300,
-                            ),
-                            borderRadius: BorderRadius.circular(8),
-                            color: Colors.grey[50],
-                          ),
-                          child: TextField(
-                            controller: _speechHistoryController,
-                            style: const TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w500,
-                            ),
-                            maxLines: 1,
-                            decoration: const InputDecoration(
-                              hintText: 'Build your message here...',
-                              hintStyle: TextStyle(
-                                fontSize: 14,
-                                color: Colors.grey,
-                              ),
-                              border: InputBorder.none,
-                              contentPadding: EdgeInsets.symmetric(
-                                horizontal: 12,
-                                vertical: 8,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-
-                      const SizedBox(width: 8),
-
-                      // Speak Button (Icon Only) - Always speaks as-is
-                      Tooltip(
-                        triggerMode: TooltipTriggerMode.manual,
-                        message: 'Speak',
-                        child: Container(
-                          height: 44,
-                          width: 72,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [
-                                Colors.green[400] ?? Colors.green.shade400,
-                                Colors.green[600] ?? Colors.green.shade600,
-                              ],
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                            ),
-                            borderRadius: BorderRadius.circular(6),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.green.withOpacity(0.3),
-                                offset: const Offset(0, 2),
-                                blurRadius: 4,
-                              ),
-                            ],
-                          ),
-                          child: IconButton(
-                            onPressed: _withSensitivity(_handleSpeakButtonPress),
-                            icon: const Icon(
-                              Icons.volume_up,
-                              size: 34,
-                              color: Colors.white,
-                            ),
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(),
-                          ),
-                        ),
-                      ),
-
-                      const SizedBox(width: 4),
-
-                      // Auto Clean + Speak Button (Icon Only) - Always uses LLM cleanup
-                      Tooltip(
-                        triggerMode: TooltipTriggerMode.manual,
-                        message: 'Auto Clean + Speak',
-                        child: Container(
-                          height: 44,
-                          width: 72,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [
-                                Colors.purple[400] ?? Colors.purple.shade400,
-                                Colors.purple[600] ?? Colors.purple.shade600,
-                              ],
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                            ),
-                            borderRadius: BorderRadius.circular(6),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.purple.withOpacity(0.3),
-                                offset: const Offset(0, 2),
-                                blurRadius: 4,
-                              ),
-                            ],
-                          ),
-                          child: IconButton(
-                            onPressed: _withSensitivity(_handleAutoCleanSpeakButtonPress),
-                            icon: const Icon(
-                              Icons.auto_fix_high,
-                              size: 31,
-                              color: Colors.white,
-                            ),
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(),
-                          ),
-                        ),
-                      ),
-
-                      const SizedBox(width: 4),
-
-                      // Backspace Button (Icon Only)
-                      Tooltip(
-                        triggerMode: TooltipTriggerMode.manual,
-                        message: 'Backspace',
-                        child: Container(
-                          height: 44,
-                          width: 55,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [
-                                Colors.amber[600] ?? Colors.amber.shade600,
-                                Colors.amber[800] ?? Colors.amber.shade800,
-                              ],
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                            ),
-                            borderRadius: BorderRadius.circular(6),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.amber.withOpacity(0.3),
-                                offset: const Offset(0, 2),
-                                blurRadius: 4,
-                              ),
-                            ],
-                          ),
-                          child: IconButton(
-                            onPressed: _withSensitivity(_backspaceSpeechHistory),
-                            icon: const Icon(
-                              Icons.backspace,
-                              size: 34,
-                              color: Colors.white,
-                            ),
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(),
-                          ),
-                        ),
-                      ),
-
-                      const SizedBox(width: 4),
-
-                      // Clear Text Button (Icon Only) - NEW
-                      Tooltip(
-                        triggerMode: TooltipTriggerMode.manual,
-                        message: 'Clear Text',
-                        child: Container(
-                          height: 44,
-                          width: 55,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [
-                                Colors.red[400] ?? Colors.red.shade400,
-                                Colors.red[600] ?? Colors.red.shade600,
-                              ],
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                            ),
-                            borderRadius: BorderRadius.circular(6),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.red.withOpacity(0.3),
-                                offset: const Offset(0, 2),
-                                blurRadius: 4,
-                              ),
-                            ],
-                          ),
-                          child: IconButton(
-                            onPressed: _withSensitivity(_clearSpeechText),
-                            icon: const Icon(
-                              Icons.close,
-                              size: 34,
-                              color: Colors.white,
-                            ),
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(),
-                          ),
-                        ),
-                      ),
-
-                      const SizedBox(width: 4),
-
-                      // Audio Surfing Toggle Button (Icon Only)
-                      Tooltip(
-                        triggerMode: TooltipTriggerMode.manual,
-                        message: _isAudioSurfingEnabled
-                            ? 'Audio Surfing: ON'
-                            : 'Audio Surfing: OFF',
-                        child: Container(
-                          height: 44,
-                          width: 55,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: _isAudioSurfingEnabled
-                                  ? [
-                                      Colors.teal[400] ?? Colors.teal.shade400,
-                                      Colors.teal[600] ?? Colors.teal.shade600,
-                                    ]
-                                  : [
-                                      Colors.grey[400] ?? Colors.grey.shade400,
-                                      Colors.grey[600] ?? Colors.grey.shade600,
-                                    ],
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                            ),
-                            borderRadius: BorderRadius.circular(6),
-                            boxShadow: [
-                              BoxShadow(
-                                color:
-                                    (_isAudioSurfingEnabled
-                                            ? Colors.teal
-                                            : Colors.grey)
-                                        .withOpacity(0.3),
-                                offset: const Offset(0, 2),
-                                blurRadius: 4,
-                              ),
-                            ],
-                          ),
-                          child: IconButton(
-                            onPressed: _withSensitivity(() {
-                              setState(() {
-                                _isAudioSurfingEnabled =
-                                    !_isAudioSurfingEnabled;
-                                _audioSurfingPreviewOptionKey = null;
-                              });
-                              _showStatusToast(_isAudioSurfingEnabled
-                                  ? 'Audio Surfing enabled. Tap once to preview, tap again to select.'
-                                  : 'Audio Surfing disabled.');
-                            }),
-                            icon: Icon(
-                              _isAudioSurfingEnabled
-                                  ? Icons.surround_sound
-                                  : Icons.hearing,
-                              size: 31,
-                              color: Colors.white,
-                            ),
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(),
-                          ),
-                        ),
-                      ),
-
-                      const SizedBox(width: 4),
-
-                      // History Button (Icon Only)
-                      Tooltip(
-                        triggerMode: TooltipTriggerMode.manual,
-                        message: 'History',
-                        child: Container(
-                          height: 44,
-                          width: 55,
-                          decoration: BoxDecoration(
-                            gradient: LinearGradient(
-                              colors: [
-                                Colors.blue[400] ?? Colors.blue.shade400,
-                                Colors.blue[600] ?? Colors.blue.shade600,
-                              ],
-                              begin: Alignment.topCenter,
-                              end: Alignment.bottomCenter,
-                            ),
-                            borderRadius: BorderRadius.circular(6),
-                            boxShadow: [
-                              BoxShadow(
-                                color: Colors.blue.withOpacity(0.3),
-                                offset: const Offset(0, 2),
-                                blurRadius: 4,
-                              ),
-                            ],
-                          ),
-                          child: IconButton(
-                            onPressed: _withSensitivity(_showSpeechHistoryDialog),
-                            icon: const Icon(
-                              Icons.menu_book,
-                              size: 34,
-                              color: Colors.white,
-                            ),
-                            padding: EdgeInsets.zero,
-                            constraints: const BoxConstraints(),
-                          ),
-                        ),
-                      ),
-
-                      const SizedBox(width: 4),
-
-                      // Past Tense Toggle
-                      Tooltip(
-                        triggerMode: TooltipTriggerMode.manual,
-                        message: _variantMode == 'past'
-                            ? 'Past: ON (tap to disable)'
-                            : 'Past Tense Mode',
-                        child: GestureDetector(
-                          onTapDown: (_) =>
-                              _actionBarPointerDownTime = DateTime.now(),
-                          onTap: _withSensitivity(() {
-                            final newMode =
-                                _variantMode == 'past' ? null : 'past';
-                            setState(() => _variantMode = newMode);
-                            if (newMode != null) {
-                              _applyVariantModeToCurrentBoard(newMode);
-                            }
-                          }),
-                          child: Container(
-                            height: 44,
-                            width: 55,
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: _variantMode == 'past'
-                                    ? [
-                                        const Color(0xFFea580c),
-                                        const Color(0xFFc2410c),
-                                      ]
-                                    : [
-                                        const Color(0xFFf97316),
-                                        const Color(0xFFea580c),
-                                      ],
-                                begin: Alignment.topCenter,
-                                end: Alignment.bottomCenter,
-                              ),
-                              borderRadius: BorderRadius.circular(6),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: const Color(0xFFea580c)
-                                      .withValues(alpha: _variantMode == 'past' ? 0.5 : 0.25),
-                                  offset: const Offset(0, 2),
-                                  blurRadius: 4,
-                                ),
-                              ],
-                            ),
-                            alignment: Alignment.center,
-                            child: const Text(
-                              '-d',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                                fontFamily: 'monospace',
-                                letterSpacing: -0.5,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-
-                      const SizedBox(width: 4),
-
-                      // Plural Toggle
-                      Tooltip(
-                        triggerMode: TooltipTriggerMode.manual,
-                        message: _variantMode == 'plural'
-                            ? 'Plural: ON (tap to disable)'
-                            : 'Plural Mode',
-                        child: GestureDetector(
-                          onTapDown: (_) =>
-                              _actionBarPointerDownTime = DateTime.now(),
-                          onTap: _withSensitivity(() {
-                            final newMode =
-                                _variantMode == 'plural' ? null : 'plural';
-                            setState(() => _variantMode = newMode);
-                            if (newMode != null) {
-                              _applyVariantModeToCurrentBoard(newMode);
-                            }
-                          }),
-                          child: Container(
-                            height: 44,
-                            width: 55,
-                            decoration: BoxDecoration(
-                              gradient: LinearGradient(
-                                colors: _variantMode == 'plural'
-                                    ? [
-                                        const Color(0xFF2563eb),
-                                        const Color(0xFF1d4ed8),
-                                      ]
-                                    : [
-                                        const Color(0xFF3b82f6),
-                                        const Color(0xFF2563eb),
-                                      ],
-                                begin: Alignment.topCenter,
-                                end: Alignment.bottomCenter,
-                              ),
-                              borderRadius: BorderRadius.circular(6),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: const Color(0xFF2563eb)
-                                      .withValues(alpha: _variantMode == 'plural' ? 0.5 : 0.25),
-                                  offset: const Offset(0, 2),
-                                  blurRadius: 4,
-                                ),
-                              ],
-                            ),
-                            alignment: Alignment.center,
-                            child: const Text(
-                              '-S',
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontSize: 20,
-                                fontWeight: FontWeight.bold,
-                                fontFamily: 'monospace',
-                                letterSpacing: -0.5,
-                              ),
-                            ),
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
+                  child: Row(children: [
+                            abHome,
+                            SizedBox(width: isCompact ? 3 : 8),
+                            Expanded(child: GestureDetector(
+                              onTap: _showMeAwaitingFinalTap
+                                  ? _onShowMeSpeechFieldTap
+                                  : _withSensitivity(_handleSpeakButtonPress),
+                              child: abSpeechField,
+                            )),
+                            SizedBox(width: isCompact ? 2 : 8),
+                            abSpeak,
+                            SizedBox(width: isCompact ? 2 : 4),
+                            abBackspace,
+                            SizedBox(width: isCompact ? 2 : 4),
+                            abClear,
+                            SizedBox(width: isCompact ? 2 : 4),
+                            SizedBox(width: abBtnW, child: abAudioSurf),
+                            SizedBox(width: isCompact ? 2 : 4),
+                            SizedBox(width: abBtnW, child: abHistory),
+                            SizedBox(width: isCompact ? 2 : 4),
+                            SizedBox(width: abBtnW, child: abPastTense),
+                            SizedBox(width: isCompact ? 2 : 4),
+                            SizedBox(width: abBtnW, child: abPlural),
+                          ]),
                   ),
                 ),
 
@@ -13417,6 +14769,22 @@ VARIETY RULES:
                         margin: const EdgeInsets.symmetric(horizontal: 2),
                       ),
                       IconButton(
+                        icon: Icon(
+                          Icons.school,
+                          color: _showMeActive ? Colors.amber[700] : Colors.black87,
+                        ),
+                        tooltip: _showMeActive
+                            ? 'Show Me (active — tap to cancel)'
+                            : 'Show Me',
+                        onPressed: _openShowMeDialog,
+                      ),
+                      Container(
+                        height: 28,
+                        width: 1,
+                        color: Colors.grey[300],
+                        margin: const EdgeInsets.symmetric(horizontal: 2),
+                      ),
+                      IconButton(
                         icon: const Icon(Icons.account_circle, color: Colors.black87),
                         tooltip: 'Switch User Account',
                         onPressed: _switchUserAccount,
@@ -13441,6 +14809,47 @@ VARIETY RULES:
                       ],
                     ],
                   ),
+                ),
+              ),
+            ),
+
+          // --- SHOW ME PROGRESS INDICATOR ---
+          if (_showMeActive)
+            Positioned(
+              top: 8,
+              right: 8,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.amber[700],
+                  borderRadius: BorderRadius.circular(20),
+                  boxShadow: const [
+                    BoxShadow(
+                      color: Colors.black26,
+                      blurRadius: 4,
+                      offset: Offset(0, 2),
+                    ),
+                  ],
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.school, color: Colors.white, size: 16),
+                    const SizedBox(width: 6),
+                    Text(
+                      'Show Me: Step ${_showMeActionIndex + 1} of ${_showMeActions.length}',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 13,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(width: 6),
+                    GestureDetector(
+                      onTap: _cancelShowMe,
+                      child: const Icon(Icons.close, color: Colors.white, size: 16),
+                    ),
+                  ],
                 ),
               ),
             ),
@@ -13485,26 +14894,9 @@ VARIETY RULES:
           Positioned(
             bottom: 16,
             right: 16,
-            child: Material(
-              elevation: 4,
-              borderRadius: BorderRadius.circular(24),
-              color: _isAdminToolbarLocked
-                  ? Colors.white.withValues(alpha: 0.85)
-                  : Colors.orange.shade50,
-              child: InkWell(
-                borderRadius: BorderRadius.circular(24),
-                onTap: _toggleAdminToolbarLock,
-                child: Padding(
-                  padding: const EdgeInsets.all(10),
-                  child: Icon(
-                    _isAdminToolbarLocked ? Icons.lock : Icons.lock_open,
-                    color: _isAdminToolbarLocked
-                        ? Colors.black54
-                        : Colors.orange.shade700,
-                    size: 20,
-                  ),
-                ),
-              ),
+            child: _AdminLockButton(
+              isLocked: _isAdminToolbarLocked,
+              onToggle: _toggleAdminToolbarLock,
             ),
           ),
         ],
@@ -13742,5 +15134,271 @@ VARIETY RULES:
     } catch (e) {
       debugPrint('Error loading favorite: $e');
     }
+  }
+}
+
+/// Lock/unlock button for the admin toolbar.
+/// Requires a 300ms press (High sensitivity) to fire, preventing accidental
+/// taps from triggering the PIN dialog or locking the toolbar.
+class _AdminLockButton extends StatefulWidget {
+  final bool isLocked;
+  final VoidCallback onToggle;
+
+  const _AdminLockButton({
+    required this.isLocked,
+    required this.onToggle,
+  });
+
+  @override
+  State<_AdminLockButton> createState() => _AdminLockButtonState();
+}
+
+// ---------------------------------------------------------------------------
+// Magic rows animation — plays on every dynamic-word refresh
+// ---------------------------------------------------------------------------
+
+class _MagicDynamicGrid extends StatefulWidget {
+  final List<Widget> cells;
+  final double height;
+  final double spacing;
+  final int crossAxisCount;
+  final int contentVersion;
+  final ValueNotifier<bool> loadingNotifier;
+
+  const _MagicDynamicGrid({
+    required this.cells,
+    required this.height,
+    required this.spacing,
+    required this.crossAxisCount,
+    required this.contentVersion,
+    required this.loadingNotifier,
+  });
+
+  @override
+  State<_MagicDynamicGrid> createState() => _MagicDynamicGridState();
+}
+
+class _MagicDynamicGridState extends State<_MagicDynamicGrid>
+    with SingleTickerProviderStateMixin {
+  // Static so it survives remounts caused by parent Column key changes.
+  // There is only ever one _MagicDynamicGrid in the tree at a time.
+  static int _lastAnimatedVersion = -1;
+
+  late final AnimationController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 700),
+      value: 1.0, // fully visible when not animating; _maybeAnimate() resets to 0
+    );
+    widget.loadingNotifier.addListener(_onLoadingChanged);
+    _maybeAnimate();
+  }
+
+  @override
+  void didUpdateWidget(_MagicDynamicGrid old) {
+    super.didUpdateWidget(old);
+    if (widget.loadingNotifier != old.loadingNotifier) {
+      old.loadingNotifier.removeListener(_onLoadingChanged);
+      widget.loadingNotifier.addListener(_onLoadingChanged);
+    }
+    if (widget.contentVersion != old.contentVersion) {
+      _maybeAnimate();
+    }
+  }
+
+  void _onLoadingChanged() {
+    if (mounted) setState(() {});
+  }
+
+  void _maybeAnimate() {
+    if (widget.contentVersion > 0 &&
+        widget.contentVersion != _lastAnimatedVersion) {
+      _lastAnimatedVersion = widget.contentVersion;
+      _controller.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    widget.loadingNotifier.removeListener(_onLoadingChanged);
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final count = widget.cells.length;
+    final animatedCells = List<Widget>.generate(count, (i) {
+      final start = count > 1 ? (i / count) * 0.35 : 0.0;
+      final end = (start + 0.65).clamp(0.0, 1.0);
+      final anim = CurvedAnimation(
+        parent: _controller,
+        curve: Interval(start, end, curve: Curves.easeOutBack),
+      );
+      return AnimatedBuilder(
+        animation: anim,
+        builder: (_, child) {
+          final raw = anim.value; // may overshoot >1 (easeOutBack bounce)
+          final clamped = raw.clamp(0.0, 1.0);
+          // Purple glow fades as the cell settles
+          final glowOpacity = (1.0 - clamped) * 0.55;
+          return Opacity(
+            opacity: clamped,
+            child: Transform.scale(
+              scale: 0.55 + 0.45 * raw, // overshoot gives a satisfying pop
+              child: DecoratedBox(
+                decoration: BoxDecoration(
+                  borderRadius: BorderRadius.circular(8),
+                  boxShadow: glowOpacity > 0.02
+                      ? [
+                          BoxShadow(
+                            color: const Color(0xFFA78BFA)
+                                .withValues(alpha: glowOpacity),
+                            blurRadius: 18,
+                            spreadRadius: 2,
+                          ),
+                        ]
+                      : const [],
+                ),
+                child: child,
+              ),
+            ),
+          );
+        },
+        child: widget.cells[i],
+      );
+    });
+
+    return Stack(
+      children: [
+        SizedBox(
+          height: widget.height,
+          child: GridView.count(
+            physics: const NeverScrollableScrollPhysics(),
+            padding: EdgeInsets.zero,
+            crossAxisCount: widget.crossAxisCount,
+            childAspectRatio: 1.0,
+            crossAxisSpacing: widget.spacing,
+            mainAxisSpacing: widget.spacing,
+            children: animatedCells,
+          ),
+        ),
+        if (widget.loadingNotifier.value)
+          const Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: LinearProgressIndicator(
+              minHeight: 2,
+              backgroundColor: Colors.transparent,
+            ),
+          ),
+        Positioned.fill(
+          child: IgnorePointer(
+            child: AnimatedBuilder(
+              animation: _controller,
+              builder: (_, child) {
+                final v = _controller.value;
+                if (v <= 0.0 || v >= 1.0) return const SizedBox.shrink();
+                return CustomPaint(
+                  painter: _MagicShimmerPainter(progress: v),
+                );
+              },
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _MagicShimmerPainter extends CustomPainter {
+  final double progress;
+  const _MagicShimmerPainter({required this.progress});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    canvas.save();
+    canvas.clipRect(Offset.zero & size);
+    canvas.translate(size.width / 2, size.height / 2);
+    canvas.rotate(0.28); // ~16° diagonal
+    canvas.translate(-size.width / 2, -size.height / 2);
+
+    // Lead sweep — wide, bright
+    const leadWidth = 200.0;
+    final leadX = progress * (size.width + leadWidth * 2) - leadWidth;
+    final leadRect = Rect.fromLTWH(leadX, -size.height, leadWidth, size.height * 3);
+    const leadGradient = LinearGradient(
+      colors: [Color(0x00A78BFA), Color(0x70A78BFA), Color(0x00A78BFA)],
+      stops: [0.0, 0.5, 1.0],
+    );
+    canvas.drawRect(leadRect, Paint()..shader = leadGradient.createShader(leadRect));
+
+    // Trail sweep — narrower, softer, slightly behind
+    const trailWidth = 120.0;
+    final trailX = (progress - 0.12) * (size.width + trailWidth * 2) - trailWidth;
+    final trailRect = Rect.fromLTWH(trailX, -size.height, trailWidth, size.height * 3);
+    const trailGradient = LinearGradient(
+      colors: [Color(0x00A78BFA), Color(0x35A78BFA), Color(0x00A78BFA)],
+      stops: [0.0, 0.5, 1.0],
+    );
+    canvas.drawRect(trailRect, Paint()..shader = trailGradient.createShader(trailRect));
+
+    canvas.restore();
+  }
+
+  @override
+  bool shouldRepaint(_MagicShimmerPainter old) => old.progress != progress;
+}
+
+// ---------------------------------------------------------------------------
+
+class _AdminLockButtonState extends State<_AdminLockButton> {
+  static const int _holdMs = 300; // High sensitivity
+
+  DateTime? _pointerDown;
+
+  void _onPointerDown(PointerDownEvent _) {
+    _pointerDown = DateTime.now();
+  }
+
+  void _onPointerUp(PointerUpEvent _) {
+    final down = _pointerDown;
+    if (down == null) return;
+    final heldMs = DateTime.now().difference(down).inMilliseconds;
+    _pointerDown = null;
+    if (heldMs >= _holdMs) {
+      HapticFeedback.mediumImpact();
+      widget.onToggle();
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Listener(
+      onPointerDown: _onPointerDown,
+      onPointerUp: _onPointerUp,
+      child: Material(
+        elevation: 4,
+        borderRadius: BorderRadius.circular(24),
+        color: widget.isLocked
+            ? Colors.white.withValues(alpha: 0.85)
+            : Colors.orange.shade50,
+        child: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Icon(
+            widget.isLocked ? Icons.lock : Icons.lock_open,
+            color: widget.isLocked
+                ? Colors.black54
+                : Colors.orange.shade700,
+            size: 20,
+          ),
+        ),
+      ),
+    );
   }
 }

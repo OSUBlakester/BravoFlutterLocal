@@ -24,7 +24,8 @@ class TapInterfaceAdminPage extends StatefulWidget {
 }
 
 class _TapInterfaceAdminPageState extends State<TapInterfaceAdminPage> {
-  static const int _boardRows = 7;
+  // Grid dimensions derived from user settings at runtime — see _gridRows/_gridCols getters
+  static const int _boardRows = 7; // fallback/max capacity
   static const int _boardCols = 12;
   static const List<MapEntry<String, String>> _backgroundColorOptions = [
     MapEntry('#FFFFFF', 'White'),
@@ -53,6 +54,7 @@ class _TapInterfaceAdminPageState extends State<TapInterfaceAdminPage> {
   Map<String, dynamic>? _currentBoard;
   bool _showMigrationBoardsOnly = false;
   int? _moveSourceIndex;
+  int _adminGridPage = 0;
 
   final TextEditingController _boardLabelController = TextEditingController();
   final TextEditingController _llmPromptController = TextEditingController();
@@ -111,7 +113,6 @@ class _TapInterfaceAdminPageState extends State<TapInterfaceAdminPage> {
     _promptTopicController.dispose();
     _promptExamplesController.dispose();
     _promptExclusionsController.dispose();
-
     _menuLabelController.dispose();
     _menuSpeechController.dispose();
     _menuImageController.dispose();
@@ -129,22 +130,27 @@ class _TapInterfaceAdminPageState extends State<TapInterfaceAdminPage> {
         'X-User-ID': widget.aacUserId,
       };
 
+  // Grid dimensions derived from user profile settings — matching tap_interface_page.dart conventions:
+  //   tapWordsRows = TOTAL word rows (static + dynamic)
+  //   tapDynamicRows = how many of those are AI-generated (bottom rows)
+  //   static rows = tapWordsRows - tapDynamicRows
+  UserSettings? get _userSettings =>
+      Provider.of<UserSettingsProvider>(context, listen: false).settings;
+
+  int get _gridRows => _userSettings?.tapWordsRows ?? _boardRows;
+  int get _gridCols => _userSettings?.gridColumns ?? _boardCols;
+
+  // Profile-level dynamic rows — this is what the tap interface actually uses for rendering.
+  // The board's own dynamic_rows field is a server-side override; the visualization always
+  // reflects the profile setting so the admin matches what users see.
+  int get _profileDynamicRows => _userSettings?.tapDynamicRows ?? 0;
+
   String _normalizeHex(String value, {required String fallback}) {
     final trimmed = value.trim().toUpperCase();
     if (RegExp(r'^#[0-9A-F]{6}$').hasMatch(trimmed)) {
       return trimmed;
     }
     return fallback;
-  }
-
-  Color _hexColor(String? value, {required Color fallback}) {
-    final normalized = _normalizeHex(value ?? '', fallback: '');
-    if (normalized.isEmpty) return fallback;
-    try {
-      return Color(int.parse(normalized.replaceFirst('#', '0xFF')));
-    } catch (_) {
-      return fallback;
-    }
   }
 
   bool _isTruthy(dynamic value) {
@@ -364,6 +370,7 @@ class _TapInterfaceAdminPageState extends State<TapInterfaceAdminPage> {
           } else {
             _selectedBoardId = null;
             _currentBoard = null;
+            _adminGridPage = 0;
           }
         }
 
@@ -411,23 +418,35 @@ class _TapInterfaceAdminPageState extends State<TapInterfaceAdminPage> {
   }
 
   bool _isBoardReadOnly(Map<String, dynamic>? board) {
-    if (board == null) return false;
-    final source = _asString(board['source']).toLowerCase();
-    final boardType = _asString(board['board_type']).toLowerCase();
-    return source == 'legacy_category' || boardType == 'system';
+    return false;
   }
 
   List<Map<String, dynamic>> get _editableBoards {
-    final filtered = _boards.where((b) => !_isBoardReadOnly(b)).toList();
-    if (!_showMigrationBoardsOnly) return filtered;
-
-    return filtered.where((b) {
-      final createdDuringMigration = _isTruthy(b['created_during_migration']);
-      final buttons = (b['buttons'] as List<dynamic>? ?? <dynamic>[])
-          .whereType<Map<String, dynamic>>()
-          .toList();
-      return createdDuringMigration && buttons.isEmpty;
+    // Filter out non-configurable special-function boards (spell, games, numbers)
+    var filtered = _boards.where((b) {
+      final specialFn = _asString(b['special_function']).toLowerCase();
+      final id = _asString(b['id']).toLowerCase();
+      final lbl = _asString(b['label']).toLowerCase();
+      if (specialFn == 'spell' || specialFn == 'games' || specialFn == 'numbers') return false;
+      if (id.contains('spell') || id.contains('games') || id.contains('numbers')) return false;
+      if (lbl == 'spell' || lbl == 'games' || lbl == 'numbers') return false;
+      return true;
     }).toList();
+
+    if (_showMigrationBoardsOnly) {
+      filtered = filtered.where((b) {
+        final createdDuringMigration = _isTruthy(b['created_during_migration']);
+        final buttons = (b['buttons'] as List<dynamic>? ?? <dynamic>[])
+            .whereType<Map<String, dynamic>>()
+            .toList();
+        return createdDuringMigration && buttons.isEmpty;
+      }).toList();
+    }
+
+    // Sort alphabetically by label
+    filtered.sort((a, b) =>
+        _asString(a['label']).toLowerCase().compareTo(_asString(b['label']).toLowerCase()));
+    return filtered;
   }
 
   void _bindBoardFromSelection() {
@@ -439,6 +458,7 @@ class _TapInterfaceAdminPageState extends State<TapInterfaceAdminPage> {
     if (board.isEmpty) return;
 
     _currentBoard = _deepCloneMap(board);
+    _adminGridPage = 0;
     _boardLabelController.text = _asString(_currentBoard!['label']);
     _boardType = _asString(_currentBoard!['board_type'], fallback: 'ai').toLowerCase();
     if (_boardType != 'ai' && _boardType != 'static' && _boardType != 'system') {
@@ -449,7 +469,6 @@ class _TapInterfaceAdminPageState extends State<TapInterfaceAdminPage> {
     _promptTopicController.text = _asString(_currentBoard!['prompt_topic']);
     _promptExamplesController.text = _asString(_currentBoard!['prompt_examples']);
     _promptExclusionsController.text = _asString(_currentBoard!['prompt_exclusions']);
-
     _setAsHomeBoard = _selectedBoardId == _asString(_boardSettings['home_board_id']);
   }
 
@@ -471,6 +490,33 @@ class _TapInterfaceAdminPageState extends State<TapInterfaceAdminPage> {
       }
     }
     return null;
+  }
+
+  /// Buttons sorted by pool order (pool_index if set, else row * _boardCols + col).
+  /// Mirrors the sort the tap interface uses for its "More Options" pagination.
+  List<Map<String, dynamic>> _sortedPoolButtons() {
+    final buttons = _currentBoardButtons()
+        .where((b) => _asString(b['label']).isNotEmpty)
+        .toList();
+    final hasPools = buttons.any((b) => b['pool_index'] != null);
+    if (hasPools) {
+      buttons.sort((a, b) {
+        final ai = a['pool_index'] != null
+            ? _asInt(a['pool_index'], fallback: 0)
+            : _asInt(a['row'], fallback: 0) * _boardCols + _asInt(a['col'], fallback: 0);
+        final bi = b['pool_index'] != null
+            ? _asInt(b['pool_index'], fallback: 0)
+            : _asInt(b['row'], fallback: 0) * _boardCols + _asInt(b['col'], fallback: 0);
+        return ai.compareTo(bi);
+      });
+    } else {
+      buttons.sort((a, b) {
+        final ai = _asInt(a['row'], fallback: 0) * _boardCols + _asInt(a['col'], fallback: 0);
+        final bi = _asInt(b['row'], fallback: 0) * _boardCols + _asInt(b['col'], fallback: 0);
+        return ai.compareTo(bi);
+      });
+    }
+    return buttons;
   }
 
   void _setButtonAt(int row, int col, Map<String, dynamic> buttonData) {
@@ -570,10 +616,12 @@ class _TapInterfaceAdminPageState extends State<TapInterfaceAdminPage> {
       'prompt_topic': _boardType == 'ai' ? _nullIfEmpty(_promptTopicController.text) : null,
       'prompt_examples': _boardType == 'ai' ? _nullIfEmpty(_promptExamplesController.text) : null,
       'prompt_exclusions': _boardType == 'ai' ? _nullIfEmpty(_promptExclusionsController.text) : null,
+      'dynamic_rows': _currentBoard?['dynamic_rows'],
       'static_options': _currentBoard!['static_options'],
       'special_function': _currentBoard!['special_function'],
       'default_columns': _asInt(_currentBoard!['default_columns'], fallback: _boardCols),
       'max_rows': _asInt(_currentBoard!['max_rows'], fallback: _boardRows),
+      'is_customized': true,
       'buttons': _boardType == 'ai' ? <Map<String, dynamic>>[] : _currentBoardButtons(),
       'set_as_home': _setAsHomeBoard,
       'created_during_migration': _isTruthy(_currentBoard!['created_during_migration']) && _currentBoardButtons().isEmpty,
@@ -632,6 +680,7 @@ class _TapInterfaceAdminPageState extends State<TapInterfaceAdminPage> {
     if (boardId.isEmpty) {
       setState(() {
         _currentBoard = null;
+        _adminGridPage = 0;
       });
       return;
     }
@@ -670,6 +719,7 @@ class _TapInterfaceAdminPageState extends State<TapInterfaceAdminPage> {
       setState(() {
         _currentBoard = null;
         _selectedBoardId = null;
+        _adminGridPage = 0;
       });
 
       await _loadBoards();
@@ -690,6 +740,7 @@ class _TapInterfaceAdminPageState extends State<TapInterfaceAdminPage> {
 
   Future<void> _createNewBoardDraft() async {
     setState(() {
+      _adminGridPage = 0;
       _currentBoard = {
         'id': '',
         'label': 'New Board',
@@ -701,6 +752,7 @@ class _TapInterfaceAdminPageState extends State<TapInterfaceAdminPage> {
         'prompt_topic': null,
         'prompt_examples': null,
         'prompt_exclusions': null,
+        'dynamic_rows': null,
         'static_options': null,
         'special_function': null,
         'default_columns': _boardCols,
@@ -730,9 +782,17 @@ class _TapInterfaceAdminPageState extends State<TapInterfaceAdminPage> {
     final existing = _findButtonAt(row, col);
     final labelController = TextEditingController(text: _asString(existing?['label']));
     final speechController = TextEditingController(text: _asString(existing?['speech_text']));
+    final pastTenseController = TextEditingController(text: _asString(existing?['past_tense']));
+    final pluralController = TextEditingController(text: _asString(existing?['plural']));
     final imageController = TextEditingController(text: _asString(existing?['image_url']));
     final customAudioController = TextEditingController(text: _asString(existing?['custom_audio_file']));
+    final buttonLlmPromptController = TextEditingController(text: _asString(existing?['llm_prompt']));
+    final poolIndexController = TextEditingController(
+      text: existing?['pool_index'] != null ? _asString(existing!['pool_index']) : '',
+    );
     String selectedBackgroundColor = _normalizeHex(_asString(existing?['background_color']), fallback: '#FFFFFF');
+    String buttonType = _asString(existing?['button_type'], fallback: 'static');
+    if (buttonType != 'static' && buttonType != 'dynamic') buttonType = 'static';
 
     String afterSelection = _asString(existing?['after_selection'], fallback: 'do_nothing');
     if (afterSelection.isEmpty) afterSelection = 'do_nothing';
@@ -753,16 +813,70 @@ class _TapInterfaceAdminPageState extends State<TapInterfaceAdminPage> {
                   child: Column(
                     mainAxisSize: MainAxisSize.min,
                     children: [
-                      TextField(
-                        controller: labelController,
-                        decoration: const InputDecoration(labelText: 'Button Label'),
+                      DropdownButtonFormField<String>(
+                        value: buttonType,
+                        items: const [
+                          DropdownMenuItem(value: 'static', child: Text('Static (fixed content)')),
+                          DropdownMenuItem(value: 'dynamic', child: Text('Dynamic (AI-generated)')),
+                        ],
+                        onChanged: (v) {
+                          setDialogState(() {
+                            buttonType = v ?? 'static';
+                          });
+                        },
+                        decoration: const InputDecoration(labelText: 'Button Type'),
                       ),
                       const SizedBox(height: 8),
-                      TextField(
-                        controller: speechController,
-                        decoration: const InputDecoration(labelText: 'Speech Text'),
-                      ),
-                      const SizedBox(height: 8),
+                      if (buttonType == 'dynamic') ...[
+                        TextField(
+                          controller: buttonLlmPromptController,
+                          maxLines: 3,
+                          decoration: const InputDecoration(
+                            labelText: 'AI Prompt',
+                            hintText: 'Describe what AI should generate for this button',
+                            border: OutlineInputBorder(),
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                      ],
+                      if (buttonType == 'static') ...[
+                        TextField(
+                          controller: labelController,
+                          decoration: const InputDecoration(labelText: 'Button Label'),
+                        ),
+                        const SizedBox(height: 8),
+                        TextField(
+                          controller: speechController,
+                          decoration: const InputDecoration(
+                            labelText: 'Announcement (spoken aloud on selection)',
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextField(
+                                controller: pastTenseController,
+                                decoration: const InputDecoration(
+                                  labelText: 'Past Tense (optional)',
+                                  hintText: 'e.g. wanted',
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: TextField(
+                                controller: pluralController,
+                                decoration: const InputDecoration(
+                                  labelText: 'Plural (optional)',
+                                  hintText: 'e.g. friends',
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                      ],
                       TextField(
                         controller: imageController,
                         decoration: const InputDecoration(labelText: 'Image URL'),
@@ -803,6 +917,7 @@ class _TapInterfaceAdminPageState extends State<TapInterfaceAdminPage> {
                         items: const [
                           DropdownMenuItem(value: 'do_nothing', child: Text('Do nothing')),
                           DropdownMenuItem(value: 'navigate', child: Text('Navigate to board')),
+                          DropdownMenuItem(value: 'navigate_home', child: Text('Navigate to home board')),
                           DropdownMenuItem(value: 'use_ai', child: Text('Use AI')),
                         ],
                         onChanged: (v) {
@@ -861,6 +976,15 @@ class _TapInterfaceAdminPageState extends State<TapInterfaceAdminPage> {
                         decoration: const InputDecoration(labelText: 'Background Color'),
                       ),
                       const SizedBox(height: 8),
+                      TextField(
+                        controller: poolIndexController,
+                        keyboardType: TextInputType.number,
+                        decoration: const InputDecoration(
+                          labelText: 'Pool Order (optional)',
+                          hintText: 'Controls pagination order in static pool',
+                        ),
+                      ),
+                      const SizedBox(height: 8),
                       CheckboxListTile(
                         value: hidden,
                         onChanged: (v) {
@@ -888,27 +1012,39 @@ class _TapInterfaceAdminPageState extends State<TapInterfaceAdminPage> {
                 ),
                 ElevatedButton(
                   onPressed: () {
+                    final isDynamic = buttonType == 'dynamic';
                     final label = labelController.text.trim();
-                    if (label.isEmpty) {
+                    if (!isDynamic && label.isEmpty) {
                       Navigator.pop(context, <String, dynamic>{'clear': true});
                       return;
                     }
-
+                    if (isDynamic && buttonLlmPromptController.text.trim().isEmpty) {
+                      return; // require prompt for dynamic buttons
+                    }
                     Navigator.pop(context, <String, dynamic>{
-                      'id': _asString(existing?['id'], fallback: 'btn_${row}_${col}_${DateTime.now().millisecondsSinceEpoch}'),
-                      'label': label,
+                      'id': _asString(existing?['id'], fallback: isDynamic
+                          ? 'btn_pool_${DateTime.now().millisecondsSinceEpoch}_$row$col'
+                          : 'btn_${row}_${col}_${DateTime.now().millisecondsSinceEpoch}'),
+                      'button_type': buttonType,
+                      'llm_prompt': isDynamic ? _nullIfEmpty(buttonLlmPromptController.text) : null,
+                      'label': isDynamic ? '' : label,
                       'row': row,
                       'col': col,
-                      'speech_text': _nullIfEmpty(speechController.text),
+                      'speech_text': isDynamic ? null : _nullIfEmpty(speechController.text),
+                      'past_tense': isDynamic ? null : _nullIfEmpty(pastTenseController.text),
+                      'plural': isDynamic ? null : _nullIfEmpty(pluralController.text),
                       'image_url': _nullIfEmpty(imageController.text),
                       'custom_audio_file': _nullIfEmpty(customAudioController.text),
-                      'action_type': _nullIfEmpty(_asString(existing?['action_type'])) ?? 'announce',
+                      'action_type': afterSelection == 'navigate' || afterSelection == 'navigate_home'
+                          ? 'navigate'
+                          : 'announce',
                       'after_selection': afterSelection,
                       'target_board_id': afterSelection == 'navigate' ? targetBoardId : null,
                       'temporary_navigation': afterSelection == 'navigate' ? temporaryNavigation : false,
                       'background_color': selectedBackgroundColor,
                       'text_color': _normalizeHex(_asString(existing?['text_color']), fallback: '#000000'),
                       'hidden': hidden,
+                      'pool_index': int.tryParse(poolIndexController.text.trim()),
                       'modifier_trigger_id': existing?['modifier_trigger_id'],
                       'modifier_variants': existing?['modifier_variants'] ?? <String, dynamic>{},
                     });
@@ -924,8 +1060,12 @@ class _TapInterfaceAdminPageState extends State<TapInterfaceAdminPage> {
 
     labelController.dispose();
     speechController.dispose();
+    pastTenseController.dispose();
+    pluralController.dispose();
     imageController.dispose();
     customAudioController.dispose();
+    buttonLlmPromptController.dispose();
+    poolIndexController.dispose();
 
     if (result == null) return;
 
@@ -1541,6 +1681,25 @@ class _TapInterfaceAdminPageState extends State<TapInterfaceAdminPage> {
     );
   }
 
+  Widget _buildLegendChip(String label, Color borderColor, Color bgColor) {
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        Container(
+          width: 12,
+          height: 12,
+          decoration: BoxDecoration(
+            color: bgColor,
+            border: Border.all(color: borderColor, width: 1.5),
+            borderRadius: BorderRadius.circular(3),
+          ),
+        ),
+        const SizedBox(width: 4),
+        Text(label, style: const TextStyle(fontSize: 11, color: Colors.black54)),
+      ],
+    );
+  }
+
   Widget _buildBoardBuilderSection() {
     final migrationIncompleteCount = _boards.where((b) {
       final created = _isTruthy(b['created_during_migration']);
@@ -1577,10 +1736,19 @@ class _TapInterfaceAdminPageState extends State<TapInterfaceAdminPage> {
                               .map((b) {
                                 final id = _asString(b['id']);
                                 final label = _asString(b['label'], fallback: id);
-                                final boardType = _asString(b['board_type']);
+                                final homeBoardId = _asString(_boardSettings['home_board_id']);
+                                final tags = <String>[];
+                                if (id == homeBoardId) tags.add('home');
+                                final createdDuringMigration = _isTruthy(b['created_during_migration']);
+                                final buttons = (b['buttons'] as List<dynamic>? ?? <dynamic>[])
+                                    .whereType<Map<String, dynamic>>()
+                                    .toList();
+                                if (createdDuringMigration && buttons.isEmpty) tags.add('needs config');
+                                if (_isBoardReadOnly(b)) tags.add('read-only');
+                                final tagStr = tags.isEmpty ? '' : ' [${tags.join(', ')}]';
                                 return DropdownMenuItem(
                                   value: id,
-                                  child: Text('$label [$id] ($boardType)'),
+                                  child: Text('$label$tagStr'),
                                 );
                               })
                               .toList(),
@@ -1607,6 +1775,7 @@ class _TapInterfaceAdminPageState extends State<TapInterfaceAdminPage> {
                                       !_editableBoards.any((b) => _asString(b['id']) == _selectedBoardId)) {
                                     _selectedBoardId = null;
                                     _currentBoard = null;
+                                    _adminGridPage = 0;
                                   }
                                 });
                               }
@@ -1680,29 +1849,6 @@ class _TapInterfaceAdminPageState extends State<TapInterfaceAdminPage> {
                               isDense: true,
                             ),
                             enabled: !_isBoardReadOnly(_currentBoard),
-                          ),
-                        ),
-                        SizedBox(
-                          width: 240,
-                          child: DropdownButtonFormField<String>(
-                            value: _boardType,
-                            decoration: const InputDecoration(
-                              labelText: 'Board Mode',
-                              border: OutlineInputBorder(),
-                              isDense: true,
-                            ),
-                            items: const [
-                              DropdownMenuItem(value: 'ai', child: Text('AI-defined Board')),
-                              DropdownMenuItem(value: 'static', child: Text('Static Board')),
-                              DropdownMenuItem(value: 'system', child: Text('System Board')),
-                            ],
-                            onChanged: _isBoardReadOnly(_currentBoard)
-                                ? null
-                                : (value) {
-                                    setState(() {
-                                      _boardType = value ?? 'ai';
-                                    });
-                                  },
                           ),
                         ),
                       ],
@@ -1795,6 +1941,17 @@ class _TapInterfaceAdminPageState extends State<TapInterfaceAdminPage> {
                           icon: const Icon(Icons.auto_awesome),
                           label: const Text('AI Build Options'),
                         ),
+                        OutlinedButton.icon(
+                          onPressed: (_currentBoard == null || _isBoardReadOnly(_currentBoard) || _loading)
+                              ? null
+                              : _openConfigureDynamicRowsDialog,
+                          icon: const Icon(Icons.tune),
+                          label: const Text('Configure Dynamic Rows'),
+                          style: OutlinedButton.styleFrom(
+                            foregroundColor: const Color(0xFF0D9488),
+                            side: const BorderSide(color: Color(0xFF0D9488)),
+                          ),
+                        ),
                       ],
                     ),
                   ],
@@ -1809,121 +1966,255 @@ class _TapInterfaceAdminPageState extends State<TapInterfaceAdminPage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      const Text('Board Buttons (7 x 12)', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+                      const Text('Board Buttons', style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
                       const SizedBox(height: 6),
-                      const Text('Tap cell to edit. Long-press a cell to start move/swap mode.'),
+                      const Text('Tap cell to edit. Long-press to start move/swap mode.'),
                       const SizedBox(height: 8),
-                      SizedBox(
-                        height: 540,
-                        child: GridView.builder(
-                          itemCount: _boardRows * _boardCols,
-                          gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: _boardCols,
-                            crossAxisSpacing: 4,
-                            mainAxisSpacing: 4,
-                          ),
-                          itemBuilder: (context, index) {
-                            final row = index ~/ _boardCols;
-                            final col = index % _boardCols;
-                            final button = _findButtonAt(row, col);
-                            final hasContent = button != null && _asString(button['label']).isNotEmpty;
-
-                            final isSourceMove = _moveSourceIndex == index;
-                            final isMoveActive = _moveSourceIndex != null;
-
-                            final label = hasContent ? _asString(button['label']) : 'Undefined';
-                            final bgColor = hasContent
-                                ? _hexColor(
-                                _asString(button['background_color']),
-                                    fallback: Colors.white,
-                                  )
-                                : Colors.grey.shade100;
-                            final fgColor = hasContent
-                                ? _hexColor(
-                                _asString(button['text_color']),
-                                    fallback: Colors.black,
-                                  )
-                                : Colors.grey.shade600;
-                            final isNav = hasContent &&
-                              (_asString(button['after_selection']) == 'navigate' ||
-                                    _asString(button['action_type']) == 'navigate');
-                            final isAi = hasContent && _asString(button['after_selection']) == 'use_ai';
-
-                            return InkWell(
-                              onTap: () async {
-                                if (_isBoardReadOnly(_currentBoard)) return;
-                                if (_moveSourceIndex != null) {
-                                  if (_moveSourceIndex == index) {
-                                    setState(() {
-                                      _moveSourceIndex = null;
-                                    });
-                                    return;
-                                  }
-                                  _swapButtonsByIndex(_moveSourceIndex!, index);
-                                  setState(() {
-                                    _moveSourceIndex = null;
-                                  });
-                                  return;
-                                }
-                                await _openButtonEditor(row, col);
-                              },
-                              onLongPress: () {
-                                if (_isBoardReadOnly(_currentBoard)) return;
-                                setState(() {
-                                  _moveSourceIndex = isSourceMove ? null : index;
-                                });
-                              },
-                              child: Container(
-                                decoration: BoxDecoration(
-                                  color: isSourceMove
-                                      ? Colors.orange.shade100
-                                      : isMoveActive
-                                          ? bgColor.withOpacity(0.8)
-                                          : bgColor,
-                                  borderRadius: BorderRadius.circular(6),
-                                  border: Border.all(
-                                    color: isSourceMove
-                                        ? Colors.orange
-                                        : isNav
-                                            ? Colors.amber.shade700
-                                            : Colors.grey.shade400,
-                                    width: isSourceMove ? 2 : 1,
+                      Wrap(
+                        spacing: 16,
+                        runSpacing: 4,
+                        children: [
+                          _buildLegendChip('AI/LLM button', const Color(0xFF7C3AED), const Color(0xFFEDE9FE)),
+                          _buildLegendChip('Dynamic AI row', const Color(0xFF0D9488), const Color(0xFFF0FDFA)),
+                          _buildLegendChip('Navigate', const Color(0xFFD97706), const Color(0xFFFEF3C7)),
+                          _buildLegendChip('Speech', const Color(0xFF059669), const Color(0xFFD1FAE5)),
+                          _buildLegendChip('Empty', Colors.grey.shade400, Colors.grey.shade50),
+                          _buildLegendChip('Beyond profile rows', Colors.grey.shade300, Colors.grey.shade100),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      Builder(
+                        builder: (context) {
+                          final gridCols = _gridCols;
+                          final profileRows = _gridRows;
+                          final boardDynRaw = _currentBoard?['dynamic_rows'];
+                          final dynRows = boardDynRaw != null
+                              ? _asInt(boardDynRaw, fallback: _profileDynamicRows)
+                              : _profileDynamicRows;
+                          final staticRows = (profileRows - dynRows).clamp(0, profileRows);
+                          final slotsPerPage = staticRows * gridCols;
+                          final sortedPool = _sortedPoolButtons();
+                          final totalPages = (slotsPerPage > 0 && sortedPool.isNotEmpty)
+                              ? ((sortedPool.length + slotsPerPage - 1) ~/ slotsPerPage)
+                              : 1;
+                          final page = _adminGridPage.clamp(0, totalPages - 1);
+                          const cellSize = 68.0;
+                          final totalHeight = _boardRows * cellSize + (_boardRows - 1) * 4;
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Text(
+                                    'Page ${page + 1} of $totalPages',
+                                    style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
                                   ),
-                                ),
-                                padding: const EdgeInsets.all(4),
-                                child: Stack(
-                                  children: [
-                                    Center(
-                                      child: Text(
-                                        label,
-                                        style: TextStyle(
-                                          fontSize: 10,
-                                          fontWeight: FontWeight.w600,
-                                          color: fgColor,
-                                        ),
-                                        textAlign: TextAlign.center,
-                                        maxLines: 3,
-                                        overflow: TextOverflow.ellipsis,
-                                      ),
+                                  const SizedBox(width: 12),
+                                  OutlinedButton(
+                                    onPressed: page > 0
+                                        ? () => setState(() => _adminGridPage = page - 1)
+                                        : null,
+                                    style: OutlinedButton.styleFrom(
+                                      minimumSize: const Size(36, 30),
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                                     ),
-                                    if (isNav)
-                                      const Positioned(
-                                        top: 2,
-                                        right: 2,
-                                        child: Icon(Icons.arrow_right_alt, size: 12),
+                                    child: const Text('← Prev'),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  OutlinedButton(
+                                    onPressed: page < totalPages - 1
+                                        ? () => setState(() => _adminGridPage = page + 1)
+                                        : null,
+                                    style: OutlinedButton.styleFrom(
+                                      minimumSize: const Size(36, 30),
+                                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                                    ),
+                                    child: const Text('Next →'),
+                                  ),
+                                  const SizedBox(width: 12),
+                                  Text(
+                                    '(${sortedPool.length} buttons, $slotsPerPage/page)',
+                                    style: TextStyle(fontSize: 11, color: Colors.grey.shade600),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 8),
+                              SizedBox(
+                                height: totalHeight,
+                                child: GridView.builder(
+                                  physics: const NeverScrollableScrollPhysics(),
+                                  itemCount: _boardRows * gridCols,
+                                  gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                                    crossAxisCount: gridCols,
+                                    crossAxisSpacing: 4,
+                                    mainAxisSpacing: 4,
+                                    mainAxisExtent: 68.0,
+                                  ),
+                                  itemBuilder: (context, index) {
+                                    final row = index ~/ gridCols;
+                                    final col = index % gridCols;
+
+                                    final isStaticRow = row < staticRows;
+                                    final isDynamicSlot = row >= staticRows && row < profileRows;
+                                    final isOutOfRange = row >= profileRows;
+
+                                    if (isDynamicSlot) {
+                                      return Container(
+                                        decoration: BoxDecoration(
+                                          color: const Color(0xFFF0FDFA),
+                                          borderRadius: BorderRadius.circular(6),
+                                          border: Border.all(color: const Color(0xFF0D9488), width: 1.5),
+                                        ),
+                                        padding: const EdgeInsets.all(4),
+                                        child: const Center(
+                                          child: Text(
+                                            '✦ Dynamic\nAI Row',
+                                            style: TextStyle(
+                                              fontSize: 8,
+                                              color: Color(0xFF0F766E),
+                                              fontWeight: FontWeight.w600,
+                                            ),
+                                            textAlign: TextAlign.center,
+                                          ),
+                                        ),
+                                      );
+                                    }
+
+                                    if (isOutOfRange) {
+                                      return Container(
+                                        decoration: BoxDecoration(
+                                          color: Colors.grey.shade100,
+                                          borderRadius: BorderRadius.circular(6),
+                                          border: Border.all(color: Colors.grey.shade300),
+                                        ),
+                                      );
+                                    }
+
+                                    // Static row: look up button by sorted pool position
+                                    final poolPos = isStaticRow
+                                        ? page * slotsPerPage + row * gridCols + col
+                                        : -1;
+                                    final button = (isStaticRow && poolPos < sortedPool.length)
+                                        ? sortedPool[poolPos]
+                                        : null;
+                                    final hasContent = button != null && _asString(button['label']).isNotEmpty;
+                                    final label = hasContent ? _asString(button['label']) : '';
+                                    final btnRow = button != null
+                                        ? _asInt(button['row'], fallback: poolPos ~/ _boardCols)
+                                        : (poolPos >= 0 ? poolPos ~/ _boardCols : row);
+                                    final btnCol = button != null
+                                        ? _asInt(button['col'], fallback: poolPos % _boardCols)
+                                        : (poolPos >= 0 ? poolPos % _boardCols : col);
+
+                                    final isSourceMove = _moveSourceIndex == index;
+                                    final isMoveActive = _moveSourceIndex != null;
+
+                                    final afterSel = _asString(button?['after_selection']);
+                                    final actionType = _asString(button?['action_type']);
+                                    final customAudioUrl = _asString(button?['custom_audio_file']);
+                                    final tempNavValue = button?['temporary_navigation'];
+                                    final isNavHome = hasContent && afterSel == 'navigate_home';
+                                    final isNav = hasContent && !isNavHome &&
+                                        (afterSel == 'navigate' || actionType == 'navigate');
+                                    final isAi = hasContent && afterSel == 'use_ai';
+                                    final hasAudio = hasContent && customAudioUrl.isNotEmpty;
+                                    final isTempNav = hasContent && _isTruthy(tempNavValue);
+                                    final isSpeech = hasContent && !isNav && !isNavHome && !isAi;
+
+                                    final Color bgColor;
+                                    final Color borderColor;
+                                    final Color fgColor;
+                                    if (isSourceMove) {
+                                      bgColor = Colors.orange.shade100;
+                                      borderColor = Colors.orange;
+                                      fgColor = Colors.black;
+                                    } else if (isAi) {
+                                      bgColor = const Color(0xFFEDE9FE);
+                                      borderColor = const Color(0xFF7C3AED);
+                                      fgColor = const Color(0xFF4C1D95);
+                                    } else if (isNav || isNavHome) {
+                                      bgColor = const Color(0xFFFEF3C7);
+                                      borderColor = const Color(0xFFD97706);
+                                      fgColor = const Color(0xFF78350F);
+                                    } else if (isSpeech) {
+                                      bgColor = const Color(0xFFD1FAE5);
+                                      borderColor = const Color(0xFF059669);
+                                      fgColor = Colors.black;
+                                    } else {
+                                      bgColor = Colors.grey.shade50;
+                                      borderColor = Colors.grey.shade300;
+                                      fgColor = Colors.grey.shade400;
+                                    }
+
+                                    return InkWell(
+                                      onTap: () async {
+                                        if (_isBoardReadOnly(_currentBoard)) return;
+                                        if (_moveSourceIndex != null) {
+                                          if (_moveSourceIndex == index) {
+                                            setState(() => _moveSourceIndex = null);
+                                            return;
+                                          }
+                                          _swapButtonsByIndex(_moveSourceIndex!, index);
+                                          setState(() => _moveSourceIndex = null);
+                                          return;
+                                        }
+                                        await _openButtonEditor(btnRow, btnCol);
+                                      },
+                                      onLongPress: () {
+                                        if (_isBoardReadOnly(_currentBoard)) return;
+                                        setState(() {
+                                          _moveSourceIndex = isSourceMove ? null : index;
+                                        });
+                                      },
+                                      child: Container(
+                                        decoration: BoxDecoration(
+                                          color: isMoveActive && !isSourceMove
+                                              ? bgColor.withValues(alpha: 0.8)
+                                              : bgColor,
+                                          borderRadius: BorderRadius.circular(6),
+                                          border: Border.all(color: borderColor, width: isSourceMove ? 2 : 1),
+                                        ),
+                                        padding: const EdgeInsets.all(4),
+                                        child: Stack(
+                                          children: [
+                                            Center(
+                                              child: Text(
+                                                label.isEmpty ? '' : label,
+                                                style: TextStyle(
+                                                  fontSize: 10,
+                                                  fontWeight: FontWeight.w600,
+                                                  color: fgColor,
+                                                ),
+                                                textAlign: TextAlign.center,
+                                                maxLines: 3,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ),
+                                            if (isNavHome)
+                                              const Positioned(top: 1, right: 1,
+                                                child: Text('⌂', style: TextStyle(fontSize: 10, color: Color(0xFFD97706))))
+                                            else if (isTempNav)
+                                              const Positioned(top: 1, right: 1,
+                                                child: Text('↩', style: TextStyle(fontSize: 10, color: Color(0xFFD97706))))
+                                            else if (isNav)
+                                              const Positioned(top: 1, right: 1,
+                                                child: Text('→', style: TextStyle(fontSize: 10, color: Color(0xFFD97706))))
+                                            else if (isAi)
+                                              const Positioned(top: 1, right: 1,
+                                                child: Text('✦', style: TextStyle(fontSize: 10, color: Color(0xFF7C3AED)))),
+                                            if (hasAudio)
+                                              const Positioned(bottom: 1, right: 1,
+                                                child: Text('♪', style: TextStyle(fontSize: 9, color: Colors.blue))),
+                                          ],
+                                        ),
                                       ),
-                                    if (isAi)
-                                      const Positioned(
-                                        top: 2,
-                                        right: 2,
-                                        child: Icon(Icons.auto_awesome, size: 12),
-                                      ),
-                                  ],
+                                    );
+                                  },
                                 ),
                               ),
-                            );
-                          },
-                        ),
+                            ],
+                          );
+                        },
                       ),
                     ],
                   ),
@@ -1933,6 +2224,301 @@ class _TapInterfaceAdminPageState extends State<TapInterfaceAdminPage> {
         ],
       ),
     );
+  }
+
+  Future<void> _openConfigureDynamicRowsDialog() async {
+    if (_currentBoard == null) return;
+
+    final promptController = TextEditingController(text: _asString(_currentBoard!['llm_prompt']));
+    final examplesController = TextEditingController(text: _asString(_currentBoard!['prompt_examples']));
+    final exclusionsController = TextEditingController(text: _asString(_currentBoard!['prompt_exclusions']));
+    final rowCountController = TextEditingController();
+
+    // Seed row count from board's explicit value, else profile default
+    final boardDynRaw = _currentBoard?['dynamic_rows'];
+    final currentDynRows = boardDynRaw != null
+        ? _asInt(boardDynRaw, fallback: _profileDynamicRows)
+        : _profileDynamicRows;
+    rowCountController.text = currentDynRows.toString();
+
+    int step = 1;
+
+    final result = await showDialog<Map<String, dynamic>>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dialogContext) => StatefulBuilder(
+        builder: (dialogContext, setDialogState) => AlertDialog(
+          title: const Text('Configure Dynamic Rows'),
+          content: SizedBox(
+            width: 460,
+            child: step == 1
+                ? Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Step 1 of 2',
+                          style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.indigo.shade600)),
+                      const SizedBox(height: 4),
+                      const Text('AI Prompt for Dynamic Rows',
+                          style: TextStyle(fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 4),
+                      const Text(
+                          'Specify what kind of words or phrases the AI should generate for the dynamic rows at the bottom of this board.',
+                          style: TextStyle(fontSize: 12, color: Colors.black54)),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: promptController,
+                        maxLines: 3,
+                        decoration: const InputDecoration(
+                          hintText:
+                              'e.g. Generate action words and phrases for common activities...',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Row(
+                        children: [
+                          Expanded(
+                            child: TextField(
+                              controller: examplesController,
+                              decoration: const InputDecoration(
+                                labelText: 'Examples (comma-separated)',
+                                hintText: 'e.g. Hello, Goodbye, Thank you',
+                                border: OutlineInputBorder(),
+                                isDense: true,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextField(
+                              controller: exclusionsController,
+                              decoration: const InputDecoration(
+                                labelText: 'Exclusions (comma-separated)',
+                                hintText: 'e.g. words to avoid',
+                                border: OutlineInputBorder(),
+                                isDense: true,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  )
+                : Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Step 2 of 2',
+                          style: TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w600,
+                              color: Colors.indigo.shade600)),
+                      const SizedBox(height: 4),
+                      const Text('Number of Dynamic Rows',
+                          style: TextStyle(fontWeight: FontWeight.w600)),
+                      const SizedBox(height: 4),
+                      Text(
+                          'Set the number of dynamic rows (0 to $_boardRows). Enter 0 to disable dynamic rows.',
+                          style: const TextStyle(fontSize: 12, color: Colors.black54)),
+                      const SizedBox(height: 8),
+                      TextField(
+                        controller: rowCountController,
+                        keyboardType: TextInputType.number,
+                        decoration: InputDecoration(
+                          hintText: 'e.g. 1',
+                          border: const OutlineInputBorder(),
+                          suffixText: 'max $_boardRows',
+                        ),
+                      ),
+                    ],
+                  ),
+          ),
+          actions: step == 1
+              ? [
+                  TextButton(
+                    onPressed: () => Navigator.pop(dialogContext),
+                    child: const Text('Cancel'),
+                  ),
+                  ElevatedButton(
+                    onPressed: () => setDialogState(() => step = 2),
+                    child: const Text('Next →'),
+                  ),
+                ]
+              : [
+                  TextButton(
+                    onPressed: () => setDialogState(() => step = 1),
+                    child: const Text('← Back'),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(dialogContext),
+                    child: const Text('Cancel'),
+                  ),
+                  ElevatedButton(
+                    onPressed: () {
+                      final val = int.tryParse(rowCountController.text.trim());
+                      if (val == null || val < 0 || val > _boardRows) {
+                        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+                          content: Text('Enter a number between 0 and $_boardRows'),
+                        ));
+                        return;
+                      }
+                      Navigator.pop(dialogContext, {
+                        'dynamic_rows': val,
+                        'llm_prompt': promptController.text.trim().isEmpty
+                            ? null
+                            : promptController.text.trim(),
+                        'prompt_examples': examplesController.text.trim().isEmpty
+                            ? null
+                            : examplesController.text.trim(),
+                        'prompt_exclusions': exclusionsController.text.trim().isEmpty
+                            ? null
+                            : exclusionsController.text.trim(),
+                        'old_dynamic_rows': currentDynRows,
+                      });
+                    },
+                    child: const Text('Apply & Save'),
+                  ),
+                ],
+        ),
+      ),
+    );
+
+    promptController.dispose();
+    examplesController.dispose();
+    exclusionsController.dispose();
+    rowCountController.dispose();
+
+    if (result == null || !mounted) return;
+
+    final newVal = result['dynamic_rows'] as int;
+    final oldVal = result['old_dynamic_rows'] as int;
+
+    setState(() {
+      _currentBoard!['dynamic_rows'] = newVal;
+      _currentBoard!['llm_prompt'] = result['llm_prompt'];
+      _currentBoard!['prompt_examples'] = result['prompt_examples'];
+      _currentBoard!['prompt_exclusions'] = result['prompt_exclusions'];
+    });
+
+    // Keep board details controllers in sync
+    _llmPromptController.text = _asString(_currentBoard!['llm_prompt']);
+    _promptExamplesController.text = _asString(_currentBoard!['prompt_examples']);
+    _promptExclusionsController.text = _asString(_currentBoard!['prompt_exclusions']);
+
+    // If reducing dynamic rows, offer to fill vacated rows with static pool words
+    bool fillStatic = false;
+    if (newVal < oldVal && mounted) {
+      fillStatic = await showDialog<bool>(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              title: const Text('Fill Vacated Rows?'),
+              content: const Text(
+                  'You reduced the number of dynamic rows. Fill the newly available static rows with default vocabulary from the static pool?'),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx, false),
+                  child: const Text('No, leave blank'),
+                ),
+                ElevatedButton(
+                  onPressed: () => Navigator.pop(ctx, true),
+                  child: const Text('Yes, fill them'),
+                ),
+              ],
+            ),
+          ) ??
+          false;
+    }
+
+    if (fillStatic && mounted) {
+      await _fillVacatedStaticRows(oldVal, newVal);
+    }
+
+    if (!mounted) return;
+    await _saveCurrentBoard();
+
+    // Sync profile's tapDynamicRows so the tap interface reflects the change.
+    // updateSettings notifies listeners (grid rebuilds) and saves to the server.
+    if (mounted) {
+      await Provider.of<UserSettingsProvider>(context, listen: false)
+          .updateSettings((s) => s.tapDynamicRows = newVal);
+      setState(() {}); // ensure admin grid re-reads the updated value
+    }
+  }
+
+  Future<void> _fillVacatedStaticRows(int oldDynRows, int newDynRows) async {
+    if (_currentBoard == null) return;
+    try {
+      final label = Uri.encodeComponent(_asString(_currentBoard!['label']));
+      final response = await http.get(
+        Uri.parse('$_apiBaseUrl/api/tap-interface/static-pool?label=$label'),
+        headers: _headers,
+      );
+      if (response.statusCode != 200) return;
+
+      final data = json.decode(response.body) as Map<String, dynamic>;
+      final pool = (data['pool'] as List<dynamic>? ?? [])
+          .map((e) => e.toString().trim())
+          .where((s) => s.isNotEmpty)
+          .toList();
+      if (pool.isEmpty) return;
+
+      final buttons = (_currentBoard!['buttons'] as List<dynamic>? ?? [])
+          .whereType<Map<String, dynamic>>()
+          .toList();
+      final existingLabels = buttons
+          .map((b) => _asString(b['label']).toLowerCase())
+          .where((l) => l.isNotEmpty)
+          .toSet();
+
+      final gridCols = _gridCols;
+      int poolIdx = 0;
+      final newButtons = List<Map<String, dynamic>>.from(buttons);
+
+      for (int r = _boardRows - oldDynRows; r < _boardRows - newDynRows; r++) {
+        for (int c = 0; c < gridCols; c++) {
+          final hasBtn = newButtons.any(
+              (b) => _asInt(b['row'], fallback: -1) == r && _asInt(b['col'], fallback: -1) == c);
+          if (!hasBtn) {
+            String? word;
+            while (poolIdx < pool.length) {
+              final candidate = pool[poolIdx++];
+              if (!existingLabels.contains(candidate.toLowerCase())) {
+                word = candidate;
+                existingLabels.add(candidate.toLowerCase());
+                break;
+              }
+            }
+            if (word != null) {
+              newButtons.add({
+                'id': 'btn_${r}_${c}_${DateTime.now().millisecondsSinceEpoch}',
+                'label': word,
+                'row': r,
+                'col': c,
+                'speech_text': word,
+                'after_selection': 'do_nothing',
+                'action_type': 'announce',
+                'target_board_id': null,
+                'temporary_navigation': false,
+                'custom_audio_file': null,
+                'background_color': '#FFFFFF',
+                'text_color': '#000000',
+                'hidden': false,
+              });
+            }
+          }
+        }
+      }
+
+      setState(() {
+        _currentBoard!['buttons'] = newButtons;
+      });
+    } catch (e) {
+      debugPrint('_fillVacatedStaticRows: $e');
+    }
   }
 
   Future<List<Map<String, dynamic>>?> _openAiBulkDialog() async {
